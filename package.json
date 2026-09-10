@@ -1,0 +1,51 @@
+{
+  "name": "dsh-folder-path",
+  "version": "0.1.0",
+  "description": "DSH 插件：粘贴（复制来的）文件夹时不再尝试上传，而是把它的完整路径作为文本插入输入框。Paste a copied folder and get its full path as text instead of a failed upload.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "files": [
+    "lib/index.js",
+    "lib/client.js",
+    "client",
+    "scripts",
+    "cordis.patch.yml",
+    "README.md",
+    "README_EN.md"
+  ],
+  "scripts": {
+    "build": "node scripts/build-client.mjs",
+    "prepare": "node scripts/build-client.mjs",
+    "test": "node --check lib/index.js && node --check lib/client.js && node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "dsh-plugin",
+    "client-plugin",
+    "paste",
+    "folder",
+    "clipboard"
+  ],
+  "license": "MIT"
+}
