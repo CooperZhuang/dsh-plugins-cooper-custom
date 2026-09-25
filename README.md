@@ -54,10 +54,14 @@ original halves (not a single line had to be renamed). Every externally visible 
 - footer entry `sidebar.footer.action` id `dsh-session-move:open`;
 - header trash icon `dsh-session-admin:delete-current` (an icon plus two confirmations; the
   switch is `headerDeleteButton`, default on);
-- settings section id changed from `session-admin` to `session-toolbox`.
+- settings section id changed from `session-admin` to `session-toolbox` (it stays: that page
+  is the cleanup panel, not a config menu).
 
-The **two config cards became one**: the `plugins.row.config` key is now
-`dsh-session-toolbox#session-toolbox` and carries all seven volatile knobs (4 delete, 3 move).
+The **two config cards became one**, and since 2026-09-25 it lives on the Plugins page:
+slot `plugins.bundle.config`, key = the package name `dsh-session-toolbox`, rendered on this
+bundle's own page between its description and its rows. It carries all seven volatile knobs
+(4 delete, 3 move). The `plugins.row.config` registration (key
+`dsh-session-toolbox#session-toolbox`) was removed with it, so the same form exists once.
 
 ## Safety defaults (unchanged)
 
