@@ -197,6 +197,33 @@ test('isTrustedRequest 只放行 loopback 与白名单 authority', () => {
   assert.equal(isTrustedRequest({ socket: { remoteAddress: '::1' }, headers: {} }, []), true)
   assert.equal(isTrustedRequest({ socket: { remoteAddress: '198.51.100.9' }, headers: { host: 'box:3080' } }, []), false)
   assert.equal(isTrustedRequest({ socket: { remoteAddress: '198.51.100.9' }, headers: { host: 'box:3080' } }, ['box:3080']), true)
+
+  // 2026-09-25 与 dsh-session-admin 的栅栏对齐后新增的约束：跨站 / 跨源一律拒绝。
+  // 恶意页面从任意站点 POST 到 loopback 时 remoteAddress 同样是 127.0.0.1，只看它拦不住。
+  const loop = { socket: { remoteAddress: '127.0.0.1' }, headers: { host: '127.0.0.1:3080' } }
+  assert.equal(
+    isTrustedRequest({ ...loop, headers: { ...loop.headers, 'sec-fetch-site': 'cross-site' } }, []),
+    false,
+    'sec-fetch-site: cross-site 必须拒绝',
+  )
+  assert.equal(
+    isTrustedRequest({ ...loop, headers: { ...loop.headers, origin: 'http://evil.example' } }, []),
+    false,
+    '跨源 Origin 必须拒绝',
+  )
+  assert.equal(
+    isTrustedRequest({ ...loop, headers: { ...loop.headers, origin: 'http://127.0.0.1:3080' } }, []),
+    true,
+    '同源 Origin 仍放行',
+  )
+  assert.equal(
+    isTrustedRequest(
+      { socket: { remoteAddress: '28.0.0.1' }, headers: { host: '28.0.0.1:3080', origin: 'http://28.0.0.1:3080' } },
+      ['28.0.0.1:3080'],
+    ),
+    true,
+    '白名单 authority + 同源 Origin 仍放行（LAN 访问不能被这次收紧误伤）',
+  )
 })
 
 test('apply 注册两条路由与两个工具，且工具 schema 是真 JSON Schema', () => {
