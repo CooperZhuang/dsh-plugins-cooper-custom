@@ -51,11 +51,13 @@ DeepSeek Harness (DSH) 的**会话工具箱**：把原先两个独立插件合�
 - 左栏入口：`sidebar.footer.action` id `dsh-session-move:open`；
 - 标题栏垃圾桶：`dsh-session-admin:delete-current`（图标形态 + 两步确认，开关是
   `headerDeleteButton`，默认开）；
-- 设置页 section：id 从 `session-admin` 改成 `session-toolbox`（标签「会话工具」）。
+- 设置页 section：id 从 `session-admin` 改成 `session-toolbox`（标签「会话工具」）。**保留**，
+  因为那一页是清理面板，不是配置菜单。
 
-**两张配置卡片合并成一张**：`plugins.row.config` 的 key 从
-`dsh-session-admin#session-admin` + `dsh-session-move#session-move` 变成
-`dsh-session-toolbox#session-toolbox`，7 个 volatile 旋钮全在这一张卡上（删除 4 + 搬迁 3）。
+**两张配置卡片合并成一张**，并且 2026-09-25 起挂在**插件页**：槽 `plugins.bundle.config`、
+key = 包名 `dsh-session-toolbox`，渲染在本组合包页面的「描述与行之间」，7 个 volatile
+旋钮全在这一张卡上（删除 4 + 搬迁 3）。原来那处 `plugins.row.config`
+（key `dsh-session-toolbox#session-toolbox`）随之摘掉——同一份表单只留一处。
 
 ## 安全默认（一字未变）
 

@@ -74,7 +74,7 @@ function loadBundle() {
 
 /** 记录注册动作的假客户端 ctx（与源仓库同形，另存下槽位组件）。 */
 function fakeClientCtx({ betterSidebar } = {}) {
-  const state = { registered: [], injected: [], effects: [] }
+  const state = { registered: [], injected: [], effects: [], configFormIds: [], mutations: [] }
   const tabs = {
     register: (definition) => (state.registered.push({ surface: 'sidebarRightTabs', definition }), () => {}),
   }
@@ -89,6 +89,23 @@ function fakeClientCtx({ betterSidebar } = {}) {
       return { dispose() {} }
     },
   }
+  // 共享配置表单：与 `ConfigFormController` 同形（`getSnapshot` / `subscribe` / `mutate`）。
+  // 卡片自己 `ctx.configForms.get('session-toolbox')` 取它，注册项的 `inject` 再把它
+  // 转成卡片认识的 `{ state, mutate }`。
+  const configForm = {
+    getSnapshot: () => ({ status: 'ready', value: {}, user: {}, revision: 4, writable: true }),
+    subscribe: () => () => {},
+    mutate: (ops, revision) => {
+      state.mutations.push({ ops, revision })
+      return Promise.resolve()
+    },
+  }
+  const configForms = {
+    get(entryId) {
+      state.configFormIds.push(entryId)
+      return configForm
+    },
+  }
   const injectedStub = {
     get(name) {
       if (name === 'sidebarRightTabs') return tabs
@@ -99,6 +116,7 @@ function fakeClientCtx({ betterSidebar } = {}) {
   }
   const ctx = {
     slots,
+    configForms,
     inject(_services, callback) {
       callback(injectedStub)
       return undefined
@@ -136,17 +154,20 @@ async function mount({ betterSidebar } = {}) {
 const paneTabKeys = (state) =>
   state.registered.filter((entry) => entry.options?.name === 'sidebar.right.pane.tab').map((entry) => entry.options.key)
 
-test('两半的右栏页签、左栏入口与设置 section 都注册上（原生路径）', async () => {
+test('两半的右栏页签、左栏入口、设置页 section 与插件页配置槽都注册上（原生路径）', async () => {
   fetched = []
   configReply = { headerDeleteButton: true }
   const { plugin, state } = await mount()
-  assert.deepEqual(plugin.inject, ['slots', 'sessions'], 'inject 是两半的并集')
+  assert.deepEqual(plugin.inject, ['slots', 'sessions', 'configForms'], 'inject 是两半的并集（+ 配置卡片要的 configForms）')
 
   const surfaces = state.registered.map((entry) => entry.surface ?? entry.definition?.kind)
   assert.ok(surfaces.includes('sidebar.footer.action'), `missing footer entry: ${surfaces.join(',')}`)
   assert.ok(surfaces.includes('sidebar.right.pane.tab'), `missing pane body: ${surfaces.join(',')}`)
   assert.ok(surfaces.includes('sidebar.right.pane.tab.title'), `missing pane title: ${surfaces.join(',')}`)
+  // 设置页那一项是**清理面板页**（不是配置菜单），因此保留。
   assert.ok(surfaces.includes('settings.section'), `missing settings section: ${surfaces.join(',')}`)
+  // 配置卡片在插件页的组合包页面槽里。
+  assert.ok(surfaces.includes('plugins.bundle.config'), `missing bundle config: ${surfaces.join(',')}`)
 
   // 两条原生页签：kind/id 与合并前逐字一致（浏览器半边按 kind 打开页签）。
   const definitions = state.registered.filter((entry) => entry.surface === 'sidebarRightTabs').map((entry) => entry.definition)
@@ -221,26 +242,40 @@ test('数据面：两个半边各打各的前缀', async () => {
   )
 })
 
-test('合并后的配置卡片：只注册一张，键是 dsh-session-toolbox#session-toolbox，7 个旋钮都在', async () => {
+test('合并后的配置卡片：只注册一张（插件页 plugins.bundle.config，key = 包名），7 个旋钮都在', async () => {
   fetched = []
   configReply = { headerDeleteButton: true }
   const { state } = await mount()
 
-  const cards = state.registered.filter((entry) => entry.surface === 'plugins.row.config')
-  assert.equal(cards.length, 1, '两半的卡片必须合并成一张')
-  assert.equal(cards[0].options.key, 'dsh-session-toolbox#session-toolbox')
+  // 配置的**唯一**注册处：插件页本组合包页面的配置槽，key 是包的 package name。
+  // 原来那处 `plugins.row.config`（key `dsh-session-toolbox#session-toolbox`）已摘掉。
+  const cards = state.registered.filter((entry) => entry.surface === 'plugins.bundle.config')
+  assert.equal(cards.length, 1, '两半的卡片必须合并成一张，且只注册一处')
+  assert.equal(cards[0].options.key, 'dsh-session-toolbox')
+  assert.equal(
+    state.registered.filter((entry) => entry.surface === 'plugins.row.config').length,
+    0,
+    '同一份表单不该在插件页出现两次：row.config 那处已摘',
+  )
 
-  // summary 视图给插件页那一行当简介。
+  // 这个槽不传共享表单，注册项的 `inject` 自己把它取出来喂给卡片。
+  assert.deepEqual(state.configFormIds, ['session-toolbox'], '卡片读的是本行 entry 的共享表单')
+  const injected = cards[0].options.inject()
+  assert.deepEqual(injected.form.state, {
+    status: 'ready', value: {}, user: {}, revision: 4, writable: true,
+  })
+  await injected.form.mutate([{ op: 'set', path: ['maxSessions'], value: 5 }], 4)
+  assert.deepEqual(state.mutations, [
+    { ops: [{ op: 'set', path: ['maxSessions'], value: 5 }], revision: 4 },
+  ])
+
+  // summary 分支是合并时留下的（这个槽只以 view:'page' 渲染，用不到它），仍在。
   const summary = cards[0].component({ view: 'summary' })
   const summaryText = flatten(summary).map((node) => (Array.isArray(node.children) ? node.children.join('') : '')).join(' ')
   assert.match(summaryText, /会话工具箱/)
 
-  // 表单视图：页面把共享表单的 `{ state, mutate }` 传进来。
-  const tree = flatten(
-    cards[0].component({
-      form: { state: { value: {}, user: {}, revision: 1, writable: true }, mutate: async () => {} },
-    }),
-  )
+  // 表单视图：注册项的 `inject` 给的同一份 `{ state, mutate }` 喂给卡片。
+  const tree = flatten(cards[0].component(injected))
   const labels = tree.filter((node) => node.type === 'span' && node.props?.style?.fontWeight === 500).map((node) => node.children.join(''))
   assert.deepEqual(labels, [
     '标题栏删除图标',
