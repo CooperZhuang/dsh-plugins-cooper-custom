@@ -116,7 +116,7 @@ test('a same-origin request passes the origin gate', async () => {
 })
 
 test('a non-loopback peer is refused before the clipboard is touched', async () => {
-  const result = await call({ remoteAddress: '192.168.1.24', body: JSON.stringify({ names: ['x'] }) })
+  const result = await call({ remoteAddress: '198.51.100.24', body: JSON.stringify({ names: ['x'] }) })
   assert.equal(result.status, 403)
   assert.equal(result.body.reason, 'remote-not-supported')
 })
@@ -124,7 +124,7 @@ test('a non-loopback peer is refused before the clipboard is touched', async () 
 test('a non-loopback peer is served when allowNonLoopback is set', async () => {
   const route = mountRoutes({ allowNonLoopback: true }).find((entry) => entry.path === ROUTE_PATH)
   const response = makeResponse()
-  await route.handler(makeRequest({ remoteAddress: '192.168.1.24', body: '{}' }), response)
+  await route.handler(makeRequest({ remoteAddress: '198.51.100.24', body: '{}' }), response)
   assert.notEqual(response.state.status, 403)
 })
 
