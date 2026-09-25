@@ -1,0 +1,32 @@
+{
+  "name": "dsh-session-store",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Shared session-store knowledge for DSH session plugins: project-directory key codec, jsonl.zstd frame primitives, workspace-registry and running-session queries, and the shared host/HTTP plumbing. Zero @deepseek-ai/* runtime dependencies.",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "session",
+    "session-store"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
