@@ -32,8 +32,14 @@ PNPM="/Users/cooper/Library/Application Support/DSH Desktop Beta/runtime-command
   "dsh-rtk-slim@file:/Users/cooper/Documents/Code/dsh-rtk-slim"
 ```
 
-再把 `dsh-rtk-slim` 追加到该 profile `package.json` 的 `dsh.profile.bundles`，然后重启宿主一次
-（宿主半边改动走的是 Node ESM 缓存，不能热重载）。日志看 `~/.dsh/logs/dsh-rtk-slim.log`。
+再把 `dsh-rtk-slim` 追加到该 profile `package.json` 的 `dsh.profile.bundles`，然后**重启宿主一次**。
+
+> **实测（Desktop Beta 2.0.17）**：新增 bundle **不会**热挂载。两条路径都试过且都无效——
+> ① 改 `dsh.profile.bundles`（等 21 s）；② 往 profile 的 `cordis.patch.yml` 追加 `insert`（等 6 s）：
+> 命令输出始终原样返回。同期已排除解析层问题（两个 YAML 均可解析、`.package-map.json` 与
+> `pnpm-lock.yaml` 均已登记、`import('dsh-rtk-slim')` 在 profile 下可加载、宿主进程 PATH 里
+> `rtk` 可解析）。**装/卸插件请预留一次重启**；重启后 profile 侧配置即生效。
+
 
 ## 配置（全部有默认值）
 

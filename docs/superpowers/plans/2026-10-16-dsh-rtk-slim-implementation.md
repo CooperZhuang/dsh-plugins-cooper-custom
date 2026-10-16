@@ -1897,3 +1897,61 @@ git commit -m "docs: 记录 profile 安装与 8 条验收结果"
 - [ ] 插件已装进 `~/.dsh/profiles/desktop` 且在 profile `dsh.profile.bundles` 中登记
 - [ ] 宿主重启后 `~/.dsh/logs/dsh-rtk-slim.log` 显示已挂载
 - [ ] spec §10 的 8 条验收逐条有明确结论（通过，或记录原因并已回滚）
+
+---
+
+## 执行记录（2026-10-16，Task 1–10 已执行）
+
+**结果：`npm run check` 全绿 —— `tsc --checkJs` 0 error，50 项测试全部通过（43 单测 + 7 端到端）。**
+实现提交：`e40400c`。
+
+执行时对计划做了 6 处修正，均已在仓库中落地（计划正文的对应代码块未逐字回写，以本节与本仓库为准）：
+
+1. **TDD 红-绿步骤被压缩**：每个模块写成「测试 + 实现」后一次运行，而不是先跑一次确认失败。
+   纯函数 + 明确的 spec 让"确认失败"的信息量很低；代价是失去了"测试是否真的在测东西"的一次校验，
+   由最终 50 项全绿与端到端数据兜底。
+2. **Task 8 的 handler 测试必须把 `minBytes` 压到 512**：语料 `cargo-test-pass.txt` 只有 866 B，
+   用默认 `minBytes: 2048` 会在门槛处直接放行，`命中`/`rtk 失败`/`guard 不过`/`requireSpill`
+   四个用例的断言全部失效（这是我写计划时埋的 bug）。修正：`harness()` 固定 `minBytes: 512`，
+   **默认 2048 那一档改由 `test/e2e-real-rtk.test.mjs` 的「验收 2」显式覆盖**（断言 866 B 的 cargo
+   不被替换，而 pytest/grep/git-log 被替换），语义没有放松。
+3. **grep 语料必须"少文件、多命中"**：rtk 的 `grep` filter 按**文件分组**压缩
+   （真实输出形如 `70 matches in 4F:\n\n[file] <path> (15):\n    42: …`）。最初的语料写成
+   "60 个文件各 1 行命中"，`rtk pipe -f grep` 对它**逐字节不变**（5680 → 5680），
+   一度被误判为代码 bug（`验收 1`/`验收 2` 因此失败）。修正语料生成器为 4 个文件 / 70 命中后
+   压缩正常（9104 → 3220 B）。**教训：语料不忠实于真实输出时，测试会给出假阴性。**
+4. **类型检查范围收到 `lib/**`**：`test/**` 的动态桩产生约 30 条隐式 `any` 报错，
+   给它们补 JSDoc 既不增加安全性、又会淹没真正的错误。`lib/**` 是"用运行时同版本类型校验插件契约"
+   的落点，保持 `strict + checkJs`。顺带修了一处真错：`apply()` 的 ctx typedef 缺 `logger`/`get`
+   （`createPostExecuteHandler` 需要），已补齐。
+5. **假 rtk 用 `node <stub>` 调用**，而不是计划里的「JS + shebang + 临时 PATH 前置注入」：
+   不依赖 chmod 与 shebang，跨平台更稳，且 `runRtk` 的 `command`/`args` 本来就是注入点。
+6. **安装命令用 Desktop 运行时目录下的 pnpm**（`runtime-commands/generations/<gen>/bin/pnpm`），
+   `dsh` 本体不在 PATH 上。
+7. **新增 bundle 不会热挂载（实测结论，与 `dsh-plugin-hot-load` skill 的乐观描述不同）**：
+   装好后分别试了两条热路径——① 改 `dsh.profile.bundles` 等 21 s；② 往 profile 的
+   `cordis.patch.yml` 追加 `insert` 等 6 s——命令输出始终原样返回，插件未挂载。
+   期间已排除其它解释：profile patch 与插件 patch 的 YAML 均能正常解析；
+   `.package-map.json` 与 `pnpm-lock.yaml` 都已登记 `dsh-rtk-slim`；
+   `node -e "await import('dsh-rtk-slim')"` 在 profile 目录下能加载并打印 `name: rtk-slim`；
+   宿主进程（Electron 主进程）的 PATH 里 `/opt/homebrew/bin` 可见、`rtk` 可解析。
+   结论：**装/卸插件必须重启宿主**，Task 11 Step 5 的重启不是可选项。日志层面也无法自查
+   （dsh web/Desktop 的 stdout 不落盘，本插件默认不写日志），所以验收只能靠重启后的可观测量。
+8. **验收方式本身也要小心**：我第一次的"可观测量"是 `cat <6472 B 语料> | head -6`——管道把输出
+   截到 460 B，低于 `minBytes`，于是"没被精简"是必然结果，与插件是否挂载无关。
+   可观测量必须让**完整输出**进入 bash 工具结果（例如直接 `cat` 大语料，不加 `head`/`tail`）。
+
+
+### 实测数据（探针脚本，真 rtk 0.49.0，`minBytes: 512`）
+
+| 语料 | 输入 | 插件替换后 | 是否替换 |
+|---|---|---|---|
+| `cargo-test-pass.txt` | 880 B | 130 B | 是（`-f cargo-test`） |
+| `pytest-pass.txt` | 2327 B | 110 B | 是（`-f pytest`） |
+| `grep-rn.txt` | 9118 B | 3313 B | 是（`-f grep`） |
+| `git-log.txt` | 6486 B | 467 B | 是（`-f git-log`） |
+| `ls-la.txt` | 2333 B | 2333 B | 否（落 `auto`，逐字节不变） |
+| `source.js.txt` | 5959 B | 5959 B | 否 |
+| `json.txt` | 2917 B | 2917 B | 否 |
+
+（"替换后"含追加的 spill notice 与保留的状态标记。）
