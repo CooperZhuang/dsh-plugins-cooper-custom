@@ -135,6 +135,7 @@ JSDoc 的 `import type`（运行时擦除）。
 | `lib/guards.js` | 不变式 I1/I2/I3 + 严格变小（纯函数） | `FAILURE_PATTERNS`、`collectFailureLines(text)`、`checkInvariants({ raw, condensed }) → GuardResult` |
 | `lib/rtk.js` | 调用 rtk（spawn / 超时 / 整组击杀 / 输出上限 / 取消） | `runRtk({ command, args, input, timeoutMs, signal, maxOutputBytes }) → Promise<RunResult>`（`signal` 接到 `spawn` 的 `signal`，并同时驱动整组击杀） |
 | `lib/spill.js` | 与 `ctx.spillStore` 集成 + notice 文案 | `saveFullText(ctx, exec, text) → Promise<Ref \| undefined>`、`formatCondenseNotice({ beforeBytes, afterBytes, ref }) → string` |
+| `lib/log.js` | 启动留痕（`$DSH_HOME/logs/dsh-rtk-slim.log`），是"是否挂载"的唯一可查证据 | `defaultLogPath() → string`、`logStartup(line, path?) → boolean` |
 | `lib/index.js` | 插件装配与 handler | `name`、`inject`、`Config`、`apply(ctx, config)`、`createPostExecuteHandler(ctx, config, deps?)` |
 
 **两个独立的失败枚举**（不要混用）：
@@ -397,6 +398,11 @@ stub rtk 二进制位于 `test/bin/rtk`（JS + shebang），通过临时 PATH �
 
 ## 14. 修订记录
 
+- **v5（实现期修正）**：§4 模块表新增 `lib/log.js`。动机是实测发现宿主**不把 stdout 落盘**，
+  于是"插件到底挂载没有、生效配置是什么"在重启后无法回答——本插件因此自己在 `apply()` 里往
+  `$DSH_HOME/logs/dsh-rtk-slim.log` 追加一行 `mounted pid=… command=… minBytes=…`（与本地
+  `dsh-solpi-action-fusion` 的日志路径约定一致，`DSH_HOME` 已在宿主环境中实测存在）。
+  `enabled:false` 也留痕，用于区分"没挂上"与"挂了但停用"。日志写失败静默忽略，绝不拖垮加载。
 - **v4（实现期修正）**：§4.1 的标记词汇表补上 `[status: …]`——`job_output` 的状态行由
   `dsh-tool-jobs` 的 `statusLine()` 渲染为 `[status: running]` / `[status: exited, code 0]`，
   v3 漏了它。漏掉的后果是真实的：后台正文若命中某个带 `-f` 的家族，rtk 会把状态行当正文压掉，
