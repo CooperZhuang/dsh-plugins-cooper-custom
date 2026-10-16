@@ -1956,6 +1956,23 @@ git commit -m "docs: 记录 profile 安装与 8 条验收结果"
     `$DSH_HOME/logs/dsh-rtk-slim.log` 追加一行 `mounted pid=… command=… tools=… minBytes=…`。
     路径约定与本地 `dsh-solpi-action-fusion` 一致；`DSH_HOME` 已在宿主进程环境中实测存在
     （`ps eww` 可见）；`enabled:false` 也留痕以区分"没挂上"与"挂了但停用"；写失败静默。
+12. **"确认宿主加载"的取证方法（本轮新增，全部实测）**：
+    - 宿主日志其实**落盘**在 `~/Library/Application Support/DSH Desktop Beta/logs/host/dsh-YYYY-MM-DD.log`
+      （纯文本 `[I]/[W]/[E]` 行 + `host.tools`/`host.session` 的 JSONL 行）。用它能读到
+      `[hmr] config reload … failed` 这类只有宿主才知道的事——本次据此排除了"我的改动触发了重组"
+      （12:29/12:31 两次改动没有任何 hmr 日志），也解释了 `duplicate loader entry id "memories"`
+      是 11:49–11:52 外部编辑中间态的**瞬时**错误（当前组合已干净，`id: memories` 只插一次）。
+    - **不重启验证组合**：Desktop profile 被 app 独占（`--dump-config` 报
+      `profile "desktop" is managed exclusively by the Electron application`），但把 profile
+      **复制成另一个名字**就能用同一套逻辑 dump：`cp -Rc … desktop → rtkcheck` 后
+      `dsh --profile rtkcheck --dump-config | grep -A3 rtk-slim` 能直接看到
+      `- id: rtk-slim / name: dsh-rtk-slim / config: enabled: true`。
+    - **隔离实例确认挂载**：`DSH_HOME=/tmp/rtk-verify` + `--from-default-profile headless` 起一个
+      一次性真实宿主（headless 模板自带 bash / job_output / spill-local / spill-policy），装上插件后
+      启动 → 隔离 home 的 `logs/dsh-rtk-slim.log` 出现
+      `mounted pid=88042 enabled=true command=rtk tools=bash,job_output minBytes=2048 …`。
+      **这就是"确认宿主加载"的证据**（LLM 路径因隔离 home 无凭据而 `MISSING_CREDENTIAL`，
+      但挂载发生在凭据解析之前）。验完删除临时 profile 与临时 home，用户环境只剩"装了插件"这一处改动。
 
 
 ### 实测数据（探针脚本，真 rtk 0.49.0，`minBytes: 512`）
