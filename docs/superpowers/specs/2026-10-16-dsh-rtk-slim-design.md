@@ -397,6 +397,10 @@ stub rtk 二进制位于 `test/bin/rtk`（JS + shebang），通过临时 PATH �
 
 ## 14. 修订记录
 
+- **v4（实现期修正）**：§4.1 的标记词汇表补上 `[status: …]`——`job_output` 的状态行由
+  `dsh-tool-jobs` 的 `statusLine()` 渲染为 `[status: running]` / `[status: exited, code 0]`，
+  v3 漏了它。漏掉的后果是真实的：后台正文若命中某个带 `-f` 的家族，rtk 会把状态行当正文压掉，
+  而 I2 只看失败信号、拦不住。已同步修正 `lib/markers.js` 的 `MARKER` 正则并新增端到端验收 8。
 - **v3（评审第 2 轮后，结论 Approved）**：吸收 5 条 advisory —— ① §3.1/§12 把 `job_output` 定稿的
   实际行为改成"精简结果被保留、仅可能被 `outputLimitBytes` 截尾"（实测 `applyFinalContent` 与
   `boundSingleText` 语义）；② §11 修正必须走 pnpm 的理由（锁文件 + `.package-map.json` 一致性，

@@ -1940,6 +1940,16 @@ git commit -m "docs: 记录 profile 安装与 8 条验收结果"
 8. **验收方式本身也要小心**：我第一次的"可观测量"是 `cat <6472 B 语料> | head -6`——管道把输出
    截到 460 B，低于 `minBytes`，于是"没被精简"是必然结果，与插件是否挂载无关。
    可观测量必须让**完整输出**进入 bash 工具结果（例如直接 `cat` 大语料，不加 `head`/`tail`）。
+9. **补上漏掉的 `[status: …]` 标记（真 bug）**：`dsh-tool-jobs` 的 `statusLine()` 渲染的是
+   `[status: running]` / `[status: exited, code 0]`，而计划与 spec 的标记词汇表都漏了它。
+   后果：`job_output` 的正文若命中某个带 `-f` 的家族（例如后台跑的是 git log），rtk 会把状态行
+   当正文压掉，而 I2 只看失败信号、拦不住。已把 `status: [^\]]*` 加进 `MARKER` 正则，
+   并新增**验收 8**（`test/e2e-real-rtk.test.mjs`）：后台输出被压缩 + `[status: …]` 逐字保留 +
+   spill 指针可读回原文。测试数 50 → 51。
+10. **`file:` 依赖是快照拷贝，改完源码必须重新同步**：安装副本与仓库**不共享 inode**，
+    `pnpm install` / `pnpm add`（含 `--force`）都报 `Already up to date` 而不刷新；
+    只有 `pnpm remove` + `pnpm add` 才会真正重拷。因此"改仓库 → 重启"这条链会加载到**旧代码**，
+    是很容易踩的坑。已写进 README，并用 `diff -r lib <profile>/node_modules/dsh-rtk-slim/lib` 复核。
 
 
 ### 实测数据（探针脚本，真 rtk 0.49.0，`minBytes: 512`）
