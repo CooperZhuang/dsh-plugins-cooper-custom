@@ -14,15 +14,35 @@ DSH 宿主半边插件：把 `bash` / `job_output` 的超大输出交给 [rtk](h
 - 每次替换都把**全文**经官方 `ctx.spillStore` 落盘，并在文本末尾附一行
   `(rtk condensed A → B bytes. Full formatted result stored at: <path>. …)`。
 
-## 实测效果（本机 rtk 0.49.0，语料见 `test/fixtures/`）
+## 实测效果
 
-| 输入 | 原始 | 插件输出的正文 | 说明 |
+**语料级（`test/fixtures/`，真 rtk，`minBytes: 512`）与 GUI 内实测（2026-10-16 重启宿主后，默认 `minBytes: 2048`）的数字一致：**
+
+| 输入 | 原始 | 精简后正文 | filter |
 |---|---|---|---|
-| cargo test（40 用例） | 866 B | 约 38 B | `-f cargo-test` |
-| pytest（30 用例） | 2313 B | 约 17 B | `-f pytest` |
-| `grep -rn`（70 命中 / 4 文件） | 9104 B | 约 3220 B | `-f grep`（rtk 按文件分组） |
-| `git log --oneline`（74 提交） | 6472 B | 约 373 B | `-f git-log`，rtk 自动省略中段 |
-| `ls -la` / 源码 / JSON | — | 逐字节不变 | 落 `auto`，rtk 认不出即透传 |
+| `git log --oneline`（74 提交） | 6472 B | **373 B** | `-f git-log` |
+| pytest（30 用例） | 2313 B | **26 B** | `-f pytest` |
+| pytest（120 用例，后台 job） | 8915 B | **27 B** | `-f pytest` |
+| cargo test 失败（200 用例） | 3566 B | **99 B** | `-f cargo-test`（失败行保留） |
+| `grep -rn`（70 命中 / 4 文件） | 9104 B | **3218 B** | `-f grep`（rtk 按文件分组） |
+| cargo test 通过（40 用例） | 866 B | 原样 | 低于 `minBytes` 门槛 |
+| `ls -la` | 2319 B | 逐字节不变 | 落 `auto` 透传 |
+
+### GUI 内验收（spec §10 逐条，2026-10-16 重启后实测）
+
+| # | 判据 | 结果 |
+|---|---|---|
+| 1 | 四类语料都被压缩 | ✅ 数字见上表 |
+| 2 | 默认配置下 pytest / grep / git-log 替换，866 B 的 cargo 不替换 | ✅ |
+| 3 | 失败行在压缩后逐字仍在 | ✅ `test result: FAILED. 199 passed; 1 failed; …` 原样 |
+| 4 | `[exit code: N]` 等状态标记逐字保留 | ✅ `[exit code: 7]` 原样（timeout 标记由自动化测试覆盖） |
+| 5 | 每次替换都带 spill 指针，且取回全文逐字节相同 | ✅ md5 与原文一致（6472 B 逐字节相同） |
+| 6 | rtk 不可用时输出与未装插件完全一致 | ✅ 临时改名 `rtk` 后 74 行原样；宿主日志留一条 `rtk:spawn` 告警 |
+| 7 | 内容型输出逐字节不变 | ✅ `ls -la` 原样（源码 / JSON 由自动化测试覆盖） |
+| 8 | `job_output` 后台路径被压缩且状态行保留 | ✅ 8915 → 27 B，`[status: completed, exit code: 0]` 逐字保留 |
+
+> 注：本机 `rtk` 现已报 **1.0.1**（早先实测为 0.49.0），两者产出的精简数字完全一致，插件不依赖特定 rtk 版本。
+
 
 ## 安装
 
