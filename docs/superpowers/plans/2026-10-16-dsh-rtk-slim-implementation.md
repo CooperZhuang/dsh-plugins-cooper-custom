@@ -1975,7 +1975,15 @@ git commit -m "docs: 记录 profile 安装与 8 条验收结果"
       但挂载发生在凭据解析之前）。验完删除临时 profile 与临时 home，用户环境只剩"装了插件"这一处改动。
 
 
-### 实测数据（探针脚本，真 rtk 0.49.0，`minBytes: 512`）
+### 实测数据（探针脚本，真 rtk，`minBytes: 512`）
+
+> **Task 11 收尾（2026-10-16 用户重启宿主后）**：插件在真实 GUI 宿主里挂载成功
+> （`~/.dsh/logs/dsh-rtk-slim.log` 里 `mounted pid=4717 enabled=true command=rtk tools=bash,job_output minBytes=2048 …`），
+> spec §10 的 8 条验收**逐条在 GUI 内验证通过**，数字与本表一致：git-log 6472→373 B、
+> pytest 2313→26 B、grep 9104→3218 B、失败 cargo 3566→99 B（失败行保留）、`[exit code: 7]` 保留、
+> spill 的 md5 与原文一致、rtk 缺失时 74 行原样且宿主日志留一条 `rtk:spawn` 告警、
+> `job_output` 8915→27 B 且 `[status: completed, exit code: 0]` 逐字保留。完整表见 README「GUI 内验收」。
+> 两条子项（timeout 标记、源码/JSON 不变）由自动化测试覆盖。
 
 | 语料 | 输入 | 插件替换后 | 是否替换 |
 |---|---|---|---|
