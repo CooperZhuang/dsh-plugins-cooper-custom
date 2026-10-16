@@ -40,6 +40,19 @@ PNPM="/Users/cooper/Library/Application Support/DSH Desktop Beta/runtime-command
 > `pnpm-lock.yaml` 均已登记、`import('dsh-rtk-slim')` 在 profile 下可加载、宿主进程 PATH 里
 > `rtk` 可解析）。**装/卸插件请预留一次重启**；重启后 profile 侧配置即生效。
 
+> **改了源码之后必须重新同步安装副本**：profile 里的 `file:` 依赖是**快照拷贝**（不是符号链接，
+> 也不与仓库共享 inode），此时 `pnpm install` 与 `pnpm add`（含 `--force`）都会报
+> `Already up to date` 而**不会**刷新。正确做法是先删后加（注意 `pnpm remove` 不接受
+> `--ignore-scripts`，会报 `Unknown option`）：
+>
+> ```sh
+> "$PNPM" --dir ~/.dsh/profiles/desktop remove dsh-rtk-slim
+> "$PNPM" --dir ~/.dsh/profiles/desktop add --ignore-scripts \
+>   "dsh-rtk-slim@file:/Users/cooper/Documents/Code/dsh-rtk-slim"
+> ```
+>
+> 复核一致性：`diff -r lib ~/.dsh/profiles/desktop/node_modules/dsh-rtk-slim/lib`。
+
 
 ## 配置（全部有默认值）
 
