@@ -85,6 +85,46 @@ tail -n 3 ~/.dsh/logs/dsh-rtk-slim.log
 
 把 `requireSpill` 设为 `false` 即可放宽成「压缩但不落盘」。
 
+## 排错与验证（实测，2026-10-16）
+
+**宿主日志在这里**——`dsh-plugin-hot-load` skill 说"dsh web 的 stdout 不落盘"，但 Desktop 会把宿主日志写到：
+
+```sh
+tail -50 ~/Library/Application\ Support/DSH\ Desktop\ Beta/logs/host/dsh-$(date +%F).log
+```
+
+- 纯文本行（`[I]/[W]/[E]`）记 hmr 配置重载、包解析失败等；JSONL 行记 `host.tools` / `host.session` 事件。
+- 实测样例：`[W] [hmr] config reload at …/package.json failed` → `duplicate loader entry id "memories" in the composed profile`。
+  profile 处于**编辑中间态**时会这样（本次实测发生在 11:49–11:52 的外部改动期间），编辑落定后自愈——
+  用下面的 dump 技巧确认即可，不要据此判定插件坏了。
+
+**不重启也能验证"下次启动会不会挂上"**。Desktop profile 被 app 独占（`--dump-config` 会被拒绝：
+`profile "desktop" is managed exclusively by the Electron application`），但**复制一份**就能用同一套组合逻辑验证：
+
+```sh
+cp -Rc ~/.dsh/profiles/desktop ~/.dsh/profiles/rtkcheck   # APFS clone，秒级
+cd "/Applications/DSH Desktop Beta.app/Contents/Resources/app"
+node node_modules/@deepseek-ai/dsh/lib/bin.js --profile rtkcheck --dump-config | grep -A3 rtk-slim
+rm -rf ~/.dsh/profiles/rtkcheck                            # 验完删掉
+```
+
+**想在一个真实但一次性、隔离的宿主里验证挂载**（不碰你自己的会话/记忆/凭据）：
+
+```sh
+export DSH_HOME=/tmp/rtk-verify
+node …/dsh/lib/bin.js --profile rtkcheck --from-default-profile headless --dump-config
+"$PNPM" --dir $DSH_HOME/profiles/rtkcheck add --ignore-scripts "dsh-rtk-slim@file:/Users/cooper/Documents/Code/dsh-rtk-slim"
+# 在该 profile 的 dsh.profile.bundles 里加上 dsh-rtk-slim，然后启动一次：
+node …/dsh/lib/bin.js --profile rtkcheck headless "<任意任务>"
+cat $DSH_HOME/logs/dsh-rtk-slim.log     # 出现 mounted 行 = 真实宿主加载成功
+```
+
+headless 模板自带的 base bundle 已含 `bash` / `job_output` / `spill-local` / `spill-policy`，所以插件全路径可用；
+没有凭据时 LLM 调用会以 `MISSING_CREDENTIAL` 失败，但**插件挂载已经发生**——启动日志就是证据。
+
+> 注意：每次 `pnpm add` 这个 `file:` 包都会触碰仓库内所有文件（store 拷贝），
+> 因此编辑前若刚跑过 `pnpm add`，编辑器/工具会认为文件"已变更"，重读一次即可。
+
 ## 开发
 
 ```sh
