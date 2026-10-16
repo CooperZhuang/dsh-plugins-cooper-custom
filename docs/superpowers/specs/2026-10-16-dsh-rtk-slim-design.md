@@ -1,9 +1,14 @@
-# dsh-rtk-slim 设计（2026-10-16）
+# dsh-rtk-slim 设计（2026-10-16，v2）
 
 一个 DeepSeek Harness（DSH）宿主半边插件：把超大的命令输出交给 `rtk`（Rust Token Killer）精简后
 再交给模型，并且**任何一次精简都可追溯、任何一次失败都静默降级**。
 
 本仓库同时是本设计的实现仓库。仓库路径：`~/Documents/Code/dsh-rtk-slim`。
+
+> v2 修订（评审第 1 轮）：改正 §3/§4/§6/§7 的内容契约——hook 载荷 `result.content` 是
+> `ContentBlock[]` 而非字符串，新增 `lib/content.js` 明确「提取/回填」边界与非单文本块的 bail 规则；
+> 拆分 `RunResult` 与 `GuardResult` 两个 reason 枚举；统一字节单位；消除 §9 默认 `minBytes` 与
+> §10 验收的冲突；收紧 pytest 嗅探正则并补负例；补上依赖面的实测约束。
 
 ---
 
@@ -45,6 +50,7 @@
 3. 每一次精简都**可追溯**：全文落盘 + 在模型可见文本里给出一行定位提示。
 4. 失败面收敛：rtk 缺失、超时、非零退出、输出无变化、任何异常 → 保留原文，绝不把成功调用变成 `isError`。
 5. 只依赖 0.2.1-alpha.2 里**已实测存在**的 API；开发期类型与测试跑在同一版本上。
+6. 运行时**零** `@deepseek-ai/dsh-*` 导入（见 §11），使 DSH 未来改 API 的最坏后果是"不压缩"而非"加载失败"。
 
 **非目标**
 
@@ -59,15 +65,16 @@
 ## 3. 架构与数据流
 
 ```
-bash / job_output 工具产出结果
+bash / job_output 工具产出结果（result.content: ContentBlock[]）
         │
         ▼
 tools/post-execute waterfall（官方扩展点，已实测存在于 dsh-tools@0.2.1-alpha.2）
-        │  本插件登记为「最内层」→ 拿到的一定是原始文本
+        │  本插件登记为「最内层」→ 拿到的一定是原始结果
         ▼
-[1] 门槛：工具名 / 非失败 / 纯文本 / 字节数 ≥ minBytes
+[1] 门槛：工具名命中 / result 非失败 / content 恰为一个 text block
+        且该文本的 UTF-8 字节数 ≥ minBytes 且 ≤ maxInputBytes
         ▼
-[2] 拆出末尾状态标记（逐字保留）
+[2] 提取文本 → 拆出末尾状态标记（逐字保留）
         ▼
 [3] 家族嗅探 → 决定 rtk 参数（匹配则 -f <filter>，否则裸 pipe）
         ▼
@@ -77,16 +84,38 @@ tools/post-execute waterfall（官方扩展点，已实测存在于 dsh-tools@0.
         ▼
 [6] 全文落盘（ctx.spillStore）→ 拿 locator；落盘失败 → 回退原文
         ▼
-[7] 替换 content：精简正文 + notice + 原状态标记
+[7] 回填为单个 text block：精简正文 + notice + 原状态标记
 ```
 
 **与 `dsh-spill-policy` 的共存顺序（关键）**：`spill-policy` 与 `spill-local` 已由 base bundle 挂载
 （`dsh-base/cordis.patch.yml` 的 `id: spill-policy` / `id: spill-local`）。本插件**不使用**
-`{ prepend: true }` 登记，因此处在 waterfall 最内层，看到的是原始文本；`spill-policy` 在外层，
-若精简后的文本仍超过它的 token 上限，它再按自己的策略落盘。两层各管一段，不互相吞噬。
+`{ prepend: true }` 登记，因此处在 waterfall 最内层，看到的是原始结果；`spill-policy` 在外层
+（它用 `prepend: true`），若精简后的文本仍超过它的 token 上限，它再按自己的策略落盘。两层各管一段，
+不互相吞噬。依据：cordis 源码 `listeners run outermost-first`（`cordis/lib/index.js:308`）与
+`register()` 的 `options.prepend ? "unshift" : "push"`（同文件 :336）。
 
-**升级路径**：若某次调用 `decision.content` 已被更内层监听者替换（例如未来有插件先动手），
-本插件读 `decision.content ?? result.content`，对已变小的文本自然不再触发压缩，行为仍然正确。
+**升级路径**：若某次调用 `decision.content` 已被更内层监听者替换（未来若有插件先动手），
+本插件读 `decision.content ?? result.content`（`??` 是必须的：accept 决策可以不带 `content`），
+随后**先做文本提取**再判断；已变小的文本自然不再触发压缩，行为仍然正确。
+
+### 3.1 内容契约（`ContentBlock[]`，不是字符串）
+
+`tools/post-execute` 给出的是 `result.content: ContentBlock[]`（`@deepseek-ai/dsh-llm` 的块数组），
+本插件全程按块处理，边界只有两个函数（`lib/content.js`）：
+
+- **提取**：`singleText(content) → string | undefined`。仅当 `content.length === 1 && content[0].type === 'text'`
+  时返回 `content[0].text`；否则返回 `undefined`（**bail，原样放行**）。
+  与 `dsh-tool-jobs` 自己的 `rawSingleText()` 约定一致；不合并多块，避免改变块结构。
+- **回填**：`textBlock(text) → [{ type: 'text', text }]`。替换时整体替换为**单个** text block。
+
+**所有字节数一律用 `Buffer.byteLength(x, 'utf8')`** 计算（`minBytes`、`maxInputBytes`、
+`maxOutputBytes`、notice 里的 before/after、I3 的比值都是字节，不是 `String.length`）。
+
+**bail 的下游后果（已核实，属可接受行为）**：`dsh-tool-jobs` 的 definition-owned
+`finalizeContent` 在 post-execute **之后**运行（`dsh-tools` 的 `applyFinalContent`），
+它对非"单文本块"内容返回 `undefined` 并保留既有结果。因此当 content 不是单文本块时，
+本插件即使替换也会被静默丢弃——fail-open 安全，只是 `job_output` 的 `maxBytes` 适配会一并跳过。
+这也是选择"非单文本块直接 bail"而不是"合并多块"的原因：不去和 definition-owned 的定稿逻辑抢所有权。
 
 ---
 
@@ -94,18 +123,32 @@ tools/post-execute waterfall（官方扩展点，已实测存在于 dsh-tools@0.
 
 纯 ESM JavaScript（`lib/*.js` 即源码，无构建步骤），JSDoc + `tsc --checkJs` 做类型检查。
 `apply()` 只做装配，handler 通过工厂函数导出以便无 cordis 单测。
+**运行时只 import `@deepseek-ai/schemastery`**；`ctx` 由宿主注入，其余 `@deepseek-ai/*` 仅用于
+JSDoc 的 `import type`（运行时擦除）。
 
 | 模块 | 职责 | 导出 |
 |---|---|---|
+| `lib/content.js` | 内容块 ↔ 文本的边界（纯函数） | `singleText(content) → string \| undefined`、`textBlock(text) → ContentBlock[]` |
 | `lib/markers.js` | 末尾状态标记的拆分与还原（纯函数） | `splitTailMarkers(text) → { body, tail }`、`joinTailMarkers(body, tail) → string` |
 | `lib/sniff.js` | 家族嗅探 → rtk 参数（纯函数） | `FAMILIES`、`chooseFilter(text) → { family, filter \| undefined }` |
-| `lib/guards.js` | 不变式 I1/I2/I3（纯函数） | `FAILURE_PATTERNS`、`collectFailureLines(text)`、`checkInvariants(input) → { ok: true } \| { ok: false, reason }` |
-| `lib/rtk.js` | 调用 rtk（spawn / 超时 / 整组击杀 / 输出上限） | `runRtk({ command, args, input, timeoutMs, signal, maxOutputBytes }) → Promise<Result>` |
-| `lib/spill.js` | 与 `ctx.spillStore` 集成 + notice 文案 | `saveFullText(ctx, exec, text, label) → Promise<Ref \| undefined>`、`formatCondenseNotice({ beforeBytes, afterBytes, ref }) → string` |
+| `lib/guards.js` | 不变式 I1/I2/I3（纯函数） | `FAILURE_PATTERNS`、`collectFailureLines(text)`、`checkInvariants({ raw, condensed, minRatioBytes }) → GuardResult` |
+| `lib/rtk.js` | 调用 rtk（spawn / 超时 / 整组击杀 / 输出上限） | `runRtk({ command, args, input, timeoutMs, signal, maxOutputBytes }) → Promise<RunResult>` |
+| `lib/spill.js` | 与 `ctx.spillStore` 集成 + notice 文案 | `saveFullText(ctx, exec, text) → Promise<Ref \| undefined>`、`formatCondenseNotice({ beforeBytes, afterBytes, ref }) → string` |
 | `lib/index.js` | 插件装配与 handler | `name`、`inject`、`Config`、`apply(ctx, config)`、`createPostExecuteHandler(ctx, config, deps?)` |
 
-`Result`：`{ ok: true, text }` 或 `{ ok: false, reason: 'spawn' | 'exit' | 'timeout' | 'aborted' | 'empty' | 'too-large' }`。
-`Ref`：`{ locator, retrievalHint }`（由 `spillStore.saveText()` 返回，原样使用）。
+**两个独立的失败枚举**（不要混用）：
+
+```js
+// lib/rtk.js —— 调用 rtk 本身的失败
+type RunResult = { ok: true, text: string }
+               | { ok: false, reason: 'spawn' | 'exit' | 'timeout' | 'aborted' | 'too-large' }
+
+// lib/guards.js —— 结果体检不通过（输入输出都已是「文本」）
+type GuardResult = { ok: true }
+                 | { ok: false, reason: 'empty' | 'unchanged' | 'failures' | 'ratio' }
+```
+
+`Ref`：`{ locator, bytes, retrievalHint }`（原样取自 `spillStore.saveText()`）。
 
 ### 4.1 状态标记的真实词汇（来自 `dsh-tool-bash` 的 `renderResult`，非二手文档）
 
@@ -126,22 +169,26 @@ tools/post-execute waterfall（官方扩展点，已实测存在于 dsh-tools@0.
 
 | id | 判据（正则，作用于正文） | rtk 参数 | 依据 |
 |---|---|---|---|
-| `cargo-test` | `/^running \d+ tests?$/m` **且** `/^test result:/m` | `pipe -f cargo-test` | 双条件避免误判普通文本 |
-| `pytest` | `/^=+ .*test session starts.* =+$/m` 或（`/^\S+::\S+/m` 且 `/PASSED\|FAILED/`） | `pipe -f pytest` | |
+| `cargo-test` | `/^running \d+ tests?$/m` **且** `/^test result:/m` | `pipe -f cargo-test` | 双条件同时命中才算，避免单凭一句普通文本误判 |
+| `pytest` | `/^=+ .*test session starts.* =+$/m` **或** `/^\S+::\S+ (PASSED\|FAILED\|ERROR)/m` | `pipe -f pytest` | 必须带结果词，避免任何含 `::` 的输出被误判 |
 | `git-log` | ≥5 行匹配 `/^[0-9a-f]{7,40} \S/`，或 `/^commit [0-9a-f]{40}$/m` | `pipe -f git-log` | 裸 pipe 认不出，本插件的主要增量收益 |
 | `grep` | ≥5 行匹配 `/^[^\s:]+:\d+:/` | `pipe -f grep` | 裸 pipe 也能认，但显式更稳 |
 | `find` | ≥10 行匹配 `/^[^\s]+$/` 且多数行含 `/` 且无冒号 | `pipe -f find` | 保守阈值，避免吃掉 `ls` 输出 |
 | `auto` | 以上皆不命中 | `pipe`（无 `-f`） | 实测认不出即逐字节透传 |
 
-阈值行数（≥5 / ≥10）与正则都写在 `FAMILIES` 里，配置项 `filters` 可增删/覆盖；
-单测必须包含**负例**：`ls -la`、源码文件、JSON、无结构文本必须落到 `auto`。
+阈值行数（≥5 / ≥10）与正则都写在 `FAMILIES` 里，配置项 `filters` 可增删/覆盖。
+**单测必须包含负例**：`ls -la`、源码文件、JSON、无结构文本必须落到 `auto`；
+只有 `running 40 tests` 而无 `test result:` 的文本不得匹配 `cargo-test`；
+含 `::` 但无结果词的文本不得匹配 `pytest`。
 
 ---
 
 ## 6. 不变式（任一不过 → 整条回退原文）
 
+输入 `raw` 与 `condensed` 都是**已提取的字符串**（§3.1）；所有长度比较用 UTF-8 字节数。
+
 **I1 标记保全**：`splitTailMarkers` 拆出的 `tail` 必须与原文中的对应片段逐字节一致，并被原样回填到
-精简结果末尾。实现上由「先拆后拼」结构性保证，不靠字符串搜索。
+精简结果末尾。实现上由「先拆后拼」结构性保证，不靠字符串搜索；`condensed` 内部不参与 I1 判定。
 
 **I2 失败证据保全**：从原文收集失败信号行（trim + 去重）：
 
@@ -160,11 +207,12 @@ tools/post-execute waterfall（官方扩展点，已实测存在于 dsh-tools@0.
 **关键**：模式只覆盖"失败信号"，不含 `failed` 这种普通词——否则通过的测试输出里 `0 failed` 会让
 不变式恒假，把主收益全部回退掉（这是设计里特意避开的陷阱，单测必须覆盖"全通过的 cargo/pytest 不影响压缩"）。
 
-**I3 压缩比合理性**：若 `condensed.length < 2% × raw.length` 且 `raw.length ≥ 32 KiB`，
-则要求精简文本含 rtk 的省略标记（`[+N lines omitted]` 形如 `/\[\+\d+ lines? omitted\]/`）或
-含 spill notice；否则回退（防某个 filter 返回残桩）。
+**I3 压缩比合理性**：若 `bytes(condensed) < 2% × bytes(raw)` 且 `bytes(raw) ≥ 32 KiB`，
+则要求精简文本含 rtk 的省略标记（形如 `/\[\+\d+ lines? omitted\]/`）或含 spill notice；
+否则 → `{ ok:false, reason:'ratio' }` → 回退（防某个 filter 返回残桩）。
 
-**共同前置**：`ok`、`text` 非空、且 `text.trim() !== raw.trim()`（输出无变化视为未压缩，直接用原文）。
+**共同前置**：`condensed` 非空（否则 `reason:'empty'`）、且 `trim` 后与 `raw` 不同
+（输出无变化视为未压缩，`reason:'unchanged'`，直接用原文）。
 
 ---
 
@@ -177,10 +225,14 @@ const ref = await ctx.get('spillStore').saveText({
   owner: { sessionId: exec.agent?.session.header.id },
   source: { kind: 'tool', toolName: exec.name, callId: exec.callId, label: 'result' },
   suggestedName: `${exec.name}.txt`,
-  content: rawText,                       // 完整原文（含被拆出的标记之前的部分）
+  content: rawText,                       // 完整原文（已提取的字符串）
 });
-// ref = { locator, retrievalHint: 'Use read with offset/limit, or grep this path to search within it.' }
+// ref = { locator, bytes, retrievalHint: 'Use read with offset/limit, or grep this path to search within it.' }
 ```
+
+**本地后端的真实契约**（已核对 `dsh-spill-local` 的 `LocalSpillStore.saveText`）：只读
+`owner.sessionId`、`suggestedName`、`content`；返回 `{ locator, bytes, retrievalHint }`。
+`source` 字段本地后端不使用，但官方 spill-policy 同样传它，因此照传以保持同构（未来换后端时可能需要）。
 
 模型可见文本末尾追加与 spill-policy 同款措辞的 notice：
 
@@ -200,29 +252,32 @@ const ref = await ctx.get('spillStore').saveText({
 
 | 情形 | 行为 |
 |---|---|
-| `rtk` 不在 PATH / spawn 失败 | 原文照旧；`warn` 一次 |
-| rtk 非零退出 | 原文照旧；`warn` 一次 |
-| rtk 超时（默认 10s）或调用方取消（`exec.signal`） | `process.kill(-pid, 'SIGKILL')` 整组击杀；原文照旧；`warn` 一次 |
-| 输出为空 / 与输入相同 | 视为未压缩，原文照旧 |
-| 输入超过 `maxInputBytes`（默认 4 MiB） | 不调 rtk，原文照旧 |
-| I1/I2/I3 不过 | 原文照旧（`warn` 一次，带 reason） |
-| 落盘失败且 `requireSpill` | 原文照旧 |
+| content 不是单个 text block | bail，原样放行（不 warn，见 §3.1） |
+| `rtk` 不在 PATH / spawn 失败 | 原文照旧；`warn` 一次 `rtk:spawn` |
+| rtk 非零退出 | 原文照旧；`warn` 一次 `rtk:exit` |
+| rtk 超时（默认 10s）或调用方取消（`exec.signal`） | `process.kill(-pid, 'SIGKILL')` 整组击杀；原文照旧；`warn` 一次 `rtk:timeout` / `rtk:aborted` |
+| 输出超过 `maxOutputBytes` | 原文照旧；`warn` 一次 `rtk:too-large` |
+| 输出为空 / 与输入相同 | 原文照旧；`warn` 一次 `guard:empty` / `guard:unchanged` |
+| 输入超过 `maxInputBytes` | 不调 rtk，原文照旧（静默，属预期） |
+| I2 / I3 不过 | 原文照旧；`warn` 一次 `guard:failures` / `guard:ratio` |
+| 落盘失败且 `requireSpill` | 原文照旧；`warn` 一次 `spill:failed` |
 | 任何未预期异常 | 捕获后原文照旧；**绝不**抛给 waterfall、**绝不**置 `isError`、**绝不**替换 `value` |
 
-`warn` 去重按 reason 各一次（进程级 Set），避免刷日志。
+`warn` 去重按「命名空间:reason」各一次（进程级 Set），避免刷日志。
 
 ---
 
 ## 9. 配置
 
-`schemastery` 定义的 `Config`，全部有默认值，零配置可用：
+`schemastery` 定义的 `Config`，全部有默认值，零配置可用。**所有 size 字段单位都是字节**
+（实现用 `Buffer.byteLength(…, 'utf8')`）：
 
 | 字段 | 类型 | 默认 | 说明 |
 |---|---|---|---|
 | `enabled` | boolean | `true` | `false` 时完全不注册监听器 |
 | `command` | string | `'rtk'` | rtk 可执行文件；裸名走 PATH |
 | `tools` | string[] | `['bash', 'job_output']` | 需要过滤的工具名 |
-| `minBytes` | number | `2048` | 低于此字节数直接放行 |
+| `minBytes` | number | `2048` | 正文低于此字节数直接放行。取舍：低于此值的一大半是无结构小输出，压缩收益小于一次 spawn 的成本（实测 cargo 语料仅 866 B，属此列） |
 | `maxInputBytes` | number | `4194304` | 超过则不调 rtk |
 | `timeoutMs` | number | `10000` | rtk 超时 |
 | `maxOutputBytes` | number | `8388608` | 捕获 stdout 上限 |
@@ -238,33 +293,48 @@ const ref = await ctx.get('spillStore').saveText({
 
 **单测（`node:test`，纯函数，无需 cordis）**
 
-- `markers`：各类标记末尾拆分/回填逐字节一致；正文中形似标记的行不被拆；无标记时 `tail === ''`。
+- `content`：单 text block 提取成功；多块 / 含 image 块 / 空数组 → `undefined`（bail）；
+  `textBlock()` 回填形状正确。
+- `markers`：各类标记末尾拆分/回填逐字节一致；正文中形似标记的行不被拆；无标记时 `tail === ''`；
+  含 `renderPromoted` 的"后台指引段落"也能整体拆出。
 - `sniff`：正例 4 个（本机真实语料）+ **负例 4 个**（`ls -la`、源码、JSON、无结构文本必须 `auto`）；
-  边界（3 行 grep 不触发、`find` 阈值不误吃 `ls`）。
+  边界：只有 `running 40 tests` 而无 `test result:` 不匹配 cargo-test；含 `::` 无结果词不匹配 pytest；
+  3 行 grep 不触发；`find` 阈值不误吃 `ls`。
 - `guards`：**全通过的 cargo/pytest 必须仍然允许压缩**（I2 恒真陷阱的回归测试）；
-  失败运行丢失败行必须回退；I3 的两个分支；空输出/未变化。
-- `rtk`：stub 可执行文件覆盖 —— 正常、非零退出、超时（挂起）、超大输出截断、取消（AbortSignal）。
+  失败运行丢失败行必须回退；I3 的两个分支；空输出/未变化；字节单位用多字节 UTF-8 文本验证。
+- `rtk`：stub 可执行文件覆盖 —— 正常、非零退出、超时（挂起）、超限输出、取消（AbortSignal）。
 - `spill`：注入假 `ctx.get('spillStore')`，覆盖成功、抛错、`spillStore` 缺失、会话 id 缺失。
 
 **端到端（真 rtk 0.49.0）**：用本机已固定的 8 份语料断言压缩结果与回退行为；
 stub rtk 二进制位于 `test/bin/rtk`（JS + shebang），通过临时 PATH 前置注入。
 
-**验收标准（可执行、可复现）**
+**验收标准（可执行、可复现；标注各自使用的 `minBytes`）**
 
-1. cargo test 语料：866 B → 约 38 B；pytest：2364 B → 约 17 B；grep：4729 B → 约 2425 B；
-   git log：6202 B → 显著变小（走 `-f git-log`）。
-2. 构造含 `test result: FAILED` 的 cargo 输出与含 `FAILED` 的 pytest 输出，压缩后失败行**逐字仍在**。
-3. 非零退出命令的 `[exit code: 1]` 与超时命令的 `[timed out after …]` 在替换后逐字仍在。
-4. 每一次替换都带 spill 指针；`read` 该 `locator` 取回的内容与原文**逐字节相同**。
-5. 把 `command` 指向不存在的可执行文件后重跑：模型看到的输出与未装插件时**完全一致**。
-6. `ls -la` / 源码 / JSON 三类输出**逐字节不变**（不发生替换）。
+1. **rtk 基线**（模块级语料测试，`minBytes: 512`）：cargo test 866 B → 约 38 B；
+   pytest 2364 B → 约 17 B；grep 4729 B → 约 2425 B；git log 6202 B → 显著变小（走 `-f git-log`）。
+2. **默认配置**（`minBytes: 2048`，不改任何配置）：pytest / grep / git log 三份语料必须被压缩并替换；
+   866 B 的 cargo 语料**必须不被替换**（低于门槛，属预期行为）。
+3. 构造含 `test result: FAILED` 的 cargo 输出与含 `FAILED` 的 pytest 输出，压缩后失败行**逐字仍在**。
+4. 非零退出命令的 `[exit code: 1]` 与超时命令的 `[timed out after …]` 在替换后逐字仍在。
+5. 每一次替换都带 spill 指针；`read` 该 `locator` 取回的内容与原文**逐字节相同**。
+6. 把 `command` 指向不存在的可执行文件后重跑：模型看到的输出与未装插件时**完全一致**。
+7. `ls -la` / 源码 / JSON 三类输出**逐字节不变**（不发生替换）。
 
 ---
 
 ## 11. 安装与激活
 
 1. 仓库即包：`package.json` 的 `main` 指向 `lib/index.js`，`dsh.bundle.patch` 指向 `cordis.patch.yml`。
-2. 以 pnpm `file:` 依赖装进 profile（Desktop 的 profile 解析器会 canonicalize 路径，
+2. **依赖面（实测约束，务必照此写 `package.json`）**：
+   - `dependencies`：仅 `@deepseek-ai/schemastery`（profile 已 hoist 3.18.4，与宿主 3.18.5-alpha.1
+     通过 profile 里 hoist 的 `@standard-schema/spec` 互通；`dsh-memories` 走的同一条路）。
+   - **不声明 `@deepseek-ai/cordis` 为 peer/dependency**（host 为 `4.0.5-alpha.1`，运行时由宿主注入；
+     profile 里没有任何 cordis 拷贝，`dsh-memories` 也只把它放 devDeps）。
+   - `devDependencies`：`@deepseek-ai/cordis@4.0.5-alpha.1`（类型检查用）、
+     `@deepseek-ai/dsh-tools@0.2.1-alpha.2`、`@deepseek-ai/dsh-llm@0.2.1-alpha.2`（**精确钉到运行时同版本**，
+     npm 的 alpha 通道存在这些版本且带 `.d.ts`）、`typescript`（`--checkJs`）。
+   - 运行时**零** `@deepseek-ai/dsh-*` 导入；类型只走 JSDoc `import type`（运行时擦除）。
+3. 以 pnpm `file:` 依赖装进 profile（Desktop 的 profile 解析器会 canonicalize 路径，
    必须走 pnpm 而不是在 `node_modules` 手放符号链接）：
 
    ```sh
@@ -274,15 +344,11 @@ stub rtk 二进制位于 `test/bin/rtk`（JS + shebang），通过临时 PATH �
      "dsh-rtk-slim@file:/Users/cooper/Documents/Code/dsh-rtk-slim"
    ```
 
-3. `~/.dsh/profiles/desktop/package.json` 的 `dsh.profile.bundles` 追加 `dsh-rtk-slim`
+4. `~/.dsh/profiles/desktop/package.json` 的 `dsh.profile.bundles` 追加 `dsh-rtk-slim`
    （bundle 自带的 `cordis.patch.yml` 负责 insert；按 profile 既有注释，**改 bundles 是热生效的**）。
-4. 宿主半边代码默认**需重启** DSH Desktop 一次（Node ESM 缓存）；之后按 `~/.dsh/logs/dsh-rtk-slim.log`
+5. 宿主半边代码默认**需重启** DSH Desktop 一次（Node ESM 缓存）；之后按 `~/.dsh/logs/dsh-rtk-slim.log`
    确认 `mounted`。
-5. 验收：在本 GUI 里跑第 10 节的 6 条验收标准。
-
-peer 声明照本地惯例（`dsh-memories` 同款）：`@deepseek-ai/dsh-tools` / `dsh-llm` / `cordis` / `schemastery`
-用 `^0.2.0-rc.1` 系列；**devDependencies 精确钉 `@deepseek-ai/dsh-tools@0.2.1-alpha.2`**（npm alpha 通道
-存在该版本且带 `.d.ts`），使类型检查与集成测试跑在与运行时相同的版本上。
+6. 验收：在本 GUI 里跑第 10 节的 7 条验收标准。
 
 ---
 
@@ -291,11 +357,12 @@ peer 声明照本地惯例（`dsh-memories` 同款）：`@deepseek-ai/dsh-tools`
 | 风险 | 对策 |
 |---|---|
 | rtk 升级改变 filter 语义（如 `git-log` 截断比例变化） | 固定语料回归测试；rtk 升级后重跑 e2e |
-| DSH 后续版本改变 `tools/post-execute` 形状 | devDep 钉版本 + handler 只读 `decision.content ?? result.content`，形状变化时自然退化为"不压缩" |
+| DSH 后续版本改变 `tools/post-execute` 形状或 `ContentBlock` 形状 | devDep 钉版本 + `singleText()` 只认"单 text block"，形状变化时自然退化为"不压缩"；运行时零 dsh-* 导入，不会加载失败 |
 | 家族误判导致内容被删 | 负例单测强制 `auto`；I2/I3 双保险；最坏情况仍可回退原文 |
 | `-f git-log` 的截断是设计内损失（71 行 → 4 行） | 由 spill 指针兜底，随时可取回全文 |
 | `spillStore` 在别的部署里不存在 | `requireSpill` 回退原文；文档写明如何放宽到"压缩但不落盘" |
 | PTC（`run_code`）子调度 | 与前台同一处理：替换的只是模型可见副本，`value` 不动，程序侧不受影响 |
+| `job_output` 的 definition-owned 定稿吞掉替换 | 已核实为 fail-open 静默 no-op；若实测发现 `job_output` 全被丢弃，则把 `tools` 默认缩到 `['bash']` 并在 README 说明 |
 
 ---
 
@@ -305,3 +372,15 @@ peer 声明照本地惯例（`dsh-memories` 同款）：`@deepseek-ai/dsh-tools`
 - **多 filter 级联**：实测不匹配的 `-f` 会破坏内容，级联不可用。
 - **只做提示词约定**（让我自觉写 `rtk git log`）：无自动收益，作为补充手段保留，不作为插件方案。
 - **`-f` 全量强制**：会重现 `dsh-rtk-filter` 最危险的失败模式。
+- **合并多个 text block 后压缩**：会与 definition-owned 的 `finalizeContent` 抢所有权（§3.1），
+  收益极小，改为"非单文本块直接 bail"。
+
+---
+
+## 14. 修订记录
+
+- **v2（评审第 1 轮后）**：修正内容契约（`ContentBlock[]`，新增 `lib/content.js` 与 §3.1）；
+  明确非单文本块的 bail 规则及其下游后果；拆分 `RunResult` / `GuardResult` 枚举并给 warn 加命名空间；
+  统一字节单位；消除 §9 默认 `minBytes` 与 §10 验收的冲突（验收拆分"rtk 基线"与"默认配置"两组）；
+  收紧 pytest 嗅探正则并补负例；补 §11 依赖面实测约束与运行时零 dsh-* 导入约束；
+  补 §12 两条风险（块形状变化、jobs 定稿吞替换）。
