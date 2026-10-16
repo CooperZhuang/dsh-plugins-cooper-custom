@@ -1950,6 +1950,12 @@ git commit -m "docs: 记录 profile 安装与 8 条验收结果"
     `pnpm install` / `pnpm add`（含 `--force`）都报 `Already up to date` 而不刷新；
     只有 `pnpm remove` + `pnpm add` 才会真正重拷。因此"改仓库 → 重启"这条链会加载到**旧代码**，
     是很容易踩的坑。已写进 README，并用 `diff -r lib <profile>/node_modules/dsh-rtk-slim/lib` 复核。
+11. **新增 `lib/log.js`：启动留痕（计划外补充，验收所需）**：宿主不把 stdout 落盘，
+    于是"插件是否挂载、生效配置是什么"在重启后**无法回答**——这会让 Task 11 的验收退化成
+    猜谜（"输出没变"既可能是没挂载，也可能是挂了但被闸门拦下）。因此插件在 `apply()` 里往
+    `$DSH_HOME/logs/dsh-rtk-slim.log` 追加一行 `mounted pid=… command=… tools=… minBytes=…`。
+    路径约定与本地 `dsh-solpi-action-fusion` 一致；`DSH_HOME` 已在宿主进程环境中实测存在
+    （`ps eww` 可见）；`enabled:false` 也留痕以区分"没挂上"与"挂了但停用"；写失败静默。
 
 
 ### 实测数据（探针脚本，真 rtk 0.49.0，`minBytes: 512`）

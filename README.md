@@ -54,6 +54,18 @@ PNPM="/Users/cooper/Library/Application Support/DSH Desktop Beta/runtime-command
 > 复核一致性：`diff -r lib ~/.dsh/profiles/desktop/node_modules/dsh-rtk-slim/lib`。
 
 
+## 如何确认已激活
+
+宿主不把 stdout 落盘，所以插件自己在挂载时写一行启动记录（这是唯一能回答"到底挂上没、生效配置是什么"的证据）：
+
+```sh
+tail -n 3 ~/.dsh/logs/dsh-rtk-slim.log
+# 2026-10-16T04:35:12.345Z mounted pid=14813 enabled=true command=rtk tools=bash,job_output minBytes=2048 timeoutMs=10000 spill=true requireSpill=true notice=true ultraCompact=false filters={}
+```
+
+- 有 `mounted` 行 → 宿主确实加载了（`enabled=false` 也会留痕，便于区分"没挂上"与"挂了但被停用"）。
+- 想快速停用而不卸载：在 profile 的 `cordis.patch.yml` 里给 `rtk-slim` 行加 `config: { enabled: false }`（同样需要重启宿主）。
+
 ## 配置（全部有默认值）
 
 | 字段 | 默认 | 说明 |
