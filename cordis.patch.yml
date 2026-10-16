@@ -1,0 +1,17 @@
+# The dsh-rtk-slim bundle patch: one row inserting the rtk output condenser over
+# the profile root. Address it by id (`rtk-slim`) from the profile's own patch
+# layer; the last write wins.
+#
+# Every behavioural knob lives on this row as a live config field (see the
+# plugin's Config schema). This row carries deployment facts only.
+- insert:
+    - id: rtk-slim
+      name: dsh-rtk-slim
+      config:
+        # command: rtk            # bare name resolves through PATH
+        # tools: ['bash', 'job_output']
+        # minBytes: 2048
+        # spill: true
+        # requireSpill: true
+        # notice: true
+        enabled: true

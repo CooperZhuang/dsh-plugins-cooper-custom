@@ -1262,8 +1262,7 @@ test('命中：替换为 单个 text block（精简正文 + notice + 原标记�
 test('低门槛/高门槛：低于 minBytes 或高于 maxInputBytes 直接放行', async () => {
   const h = harness()
   const small = await h.handler(h.exec, h.result('tiny [exit code: 1]'), h.next)
-  assert.equal(small.content, undefined ?? small.content) // accept 且未带 content
-  assert.equal(small.content, undefined)
+  assert.equal(small.content, undefined) // accept 但没带 content => 未替换
   const h2 = harness({ maxInputBytes: 640 })
   const wide = await h2.handler(h2.exec, h2.result(`${fixture('cargo-test-pass.txt')}[exit code: 1]`), h2.next)
   assert.equal(wide.content, undefined)
