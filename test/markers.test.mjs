@@ -11,6 +11,8 @@ const cases = [
   'out\n[sandbox: file access denied under workspace-write mode]',
   'out\n[sandbox: file access denied under read-only mode]\n[sandbox: escalation available — retry this exact command once with sandbox_permissions (the narrowest wider mode that suffices) + justification; the approval prompt asks the user]',
   'out\n[still running after 15000ms; moved to background job job-1]\nThe command keeps running in the background. You will be notified when it finishes; read newer output with job_output, stop it with job_kill.',
+  'out\n[status: running]',
+  'out\n[status: exited, code 0]',
   '[exit code: 1]',
   'no markers at all',
   'out with\n\nblank line before marker\n[exit code: 3]',

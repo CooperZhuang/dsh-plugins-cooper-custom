@@ -154,11 +154,12 @@ type GuardResult = { ok: true }
 ### 4.1 状态标记的真实词汇（来自 `dsh-tool-bash` 的 `renderResult`，非二手文档）
 
 `[exit code: N]`（**仅当 exitCode ≠ 0**）、`[timed out after Nms]`、`[stopped: …]`、
+`[status: …]`（**`job_output` 自己的状态行**，形如 `[status: running]` / `[status: exited, code 0]`）、
 `[killed by signal: …]`、`[sandbox: …]`（沙箱拒绝）+ 可选的同轮升级提示行、
 `[still running after Nms; moved to background job <id>]` 及其后两行后台指引。
 
 `splitTailMarkers` 的规则：从末尾向上，连续吃掉匹配
-`/^\[(exit code: -?\d+|timed out after \d+ms|stopped: [^\]]*|killed by signal: [^\]]*|sandbox: [^\]]*|still running after \d+ms; moved to background job [^\]]+)\]$/`
+`/^\[(exit code: -?\d+|timed out after \d+ms|stopped: [^\]]*|status: [^\]]*|killed by signal: [^\]]*|sandbox: [^\]]*|still running after \d+ms; moved to background job [^\]]+)\]$/`
 的行，以及其后可能存在的后台指引段落（`The command keeps running in the background.` 起始的那段）。
 被拆出的部分**逐字**回填，长度与字节数完全不变。正文里恰好形似标记的行**不拆**（只在末尾连续区段内生效）。
 `[stderr]` 是行内小节标题（冒号后无内容匹配），**留在正文**，不当作标记。
