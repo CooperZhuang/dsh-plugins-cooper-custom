@@ -34,10 +34,12 @@ function realHarness(overrides = {}) {
     },
   )
   const exec = { name: 'bash', callId: 'call-1', agent: { session: { header: { id: 's1' } } } }
-  const run = async (text) => {
-    const decision = await handler(exec, { content: [{ type: 'text', text }], isError: false }, async () => ({
-      kind: 'accept',
-    }))
+  const run = async (text, toolName = 'bash') => {
+    const decision = await handler(
+      { ...exec, name: toolName },
+      { content: [{ type: 'text', text }], isError: false },
+      async () => ({ kind: 'accept' }),
+    )
     const blocks = decision.content
     return { replaced: blocks !== undefined, text: blocks === undefined ? text : blocks.map((b) => b.text).join('') }
   }
@@ -107,6 +109,19 @@ test('验收 6：rtk 不可用时输出与未装插件完全一致', { skip: !ha
   const out = await h.run(raw)
   assert.equal(out.replaced, false)
   assert.equal(out.text, raw)
+})
+
+test('验收 8（job_output 路径）：后台输出被压缩，且 [status: …] 状态行逐字保留', { skip: !hasRtk }, async () => {
+  const h = realHarness({ minBytes: 512 })
+  // job_output renders "<body>\n[status: <status>, <detail>]" and the body can be
+  // any tool output, so it is the one path where a sniffed -f filter could eat
+  // the harness's own status line.
+  const raw = `${fixture('git-log.txt')}[status: exited, code 0]`
+  const out = await h.run(raw, 'job_output')
+  assert.equal(out.replaced, true)
+  assert.ok(out.text.endsWith('[status: exited, code 0]'), `状态行丢失: …${out.text.slice(-60)}`)
+  assert.ok(out.text.includes('Full formatted result stored at:'))
+  assert.equal(h.spool[0], raw)
 })
 
 test('验收 7：内容型输出（ls / 源码 / JSON）逐字节不变', { skip: !hasRtk }, async () => {
