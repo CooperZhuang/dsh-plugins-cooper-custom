@@ -26,9 +26,29 @@ dsh plugin --profile web add C:\CodeRepository\dsh-folder-path    # from a check
 # dsh plugin --profile web add dsh-folder-path                    # once published
 ```
 
-Then **restart `dsh web` and refresh the page** (a new bundle row is not hot-loaded).
+Then refresh the page. Since Desktop Beta 2.0.18-beta.1 (core 0.2.1-rc.2) a newly added bundle row
+is usually hot-mounted, so the host needs no restart; **earlier versions require restarting
+`dsh web`**. Restarting once is always safe when in doubt.
 
 Check it mounted: `dsh --profile web --dump-config` should show a `# == dsh-folder-path` layer.
+
+## Compatibility
+
+Checked item by item against **DSH 0.2.1-rc.2** (npm `@deepseek-ai/dsh` 0.2.1-rc.2): installing,
+composing, the host route and the browser half all work as before. The plugin touches exactly this
+much of the kernel:
+
+| Kernel interface | Used for |
+|---|---|
+| the `webServer` service: `ctx.inject(['webServer'])` + `ctx.webServer.register({ kind: 'exact', … })` | the host half registers its exact route |
+| `ctx.effect` / `ctx.logger` | mounting and cleaning up the route, warning on a failed clipboard probe |
+| the plugin entry's `name` / `apply(ctx, config)` shape | how the host half is loaded |
+| `package.json`'s `dsh.bundle.patch` and `dsh.client.platform` | the bundle patch layer and the browser half's module registration |
+| `exports['./client']` + `window.__ModuleLoader__.load({ id, factory })` | how the browser half is loaded |
+
+The plugin involves **no subagents**, so the kernel 0.2.1-rc.2 subagent convention
+(`startActivation({provider, request})`, Agent Presets) changes nothing for it. `test/manifest.test.js`
+and `test/client.test.js` pin the list above in the test suite.
 
 ## Use
 
@@ -95,7 +115,8 @@ or this package's own `cordis.patch.yml`, which `dsh plugin add` wires in):
 
 ```sh
 npm run build   # client/index.js -> lib/client.js (wraps the browser half as a __ModuleLoader__ bundle)
-npm test        # syntax checks + host route behaviour tests (node --test, no DSH server needed)
+npm test        # syntax checks + host route / browser-half contract / manifest contract tests
+                # (node --test, no DSH server needed)
 ```
 
 Browser-side debugging hooks (devtools console):
@@ -105,8 +126,13 @@ await __dshFolderPath.probe(['folder-name'])   // ask the host directly
 __dshFolderPath.insert(document.querySelector('[contenteditable]'), 'text')
 ```
 
-After changing the browser half: `npm run build`, then **restart `dsh web`** and refresh
-(the bundle is snapshotted when the host publishes it, so a plain refresh serves the same revision).
+After changing the **browser half**: `npm run build`, then refresh the page — **no host restart
+needed**. `dsh-client-hmr` polls every client bundle every 500 ms, recomputes the revision after a
+rebuild and pushes it to the page. Only **adding** a client module needs a restart (the startup scan
+decides which client modules exist).
+
+After changing the **host half**: you must **restart `dsh web`** (the host goes through Node's ESM
+cache, so the running copy of the code does not change with it).
 
 ## Credits
 

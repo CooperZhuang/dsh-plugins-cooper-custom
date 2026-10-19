@@ -8,7 +8,6 @@ DSH（DeepSeek Harness）Web 插件：在输入框里 **Ctrl+V 粘贴一个从�
 - 普通文本、图片、真实文件的粘贴**完全不受影响**（插件只在粘贴载荷里出现目录时才接管）
 
 ## 它解决的是什么问题
-## 它解决的是什么问题
 
 浏览器是沙盒：网页 JavaScript 拿不到本地文件的磁盘路径。把一个文件夹粘进网页时，
 浏览器交出的是一个 `size: 0`、`type: ''` 的 `File`——字节不可读，因此 DSH 原版的上传链路必然失败；
@@ -24,9 +23,26 @@ dsh plugin --profile web add C:\CodeRepository\dsh-folder-path    # 本地路径
 # dsh plugin --profile web add dsh-folder-path                    # 未来的 npm 版本
 ```
 
-安装后**重启 `dsh web` 并刷新页面**（新增 bundle 行不会被热加载）。
+安装后刷新页面即可。Desktop Beta 2.0.18-beta.1（内核 0.2.1-rc.2）起新增的 bundle 行通常能热挂载，
+宿主不必重启；**更早的版本必须重启 `dsh web`**，不确定时重启一次总是安全的。
 
 验证是否挂上：`dsh --profile web --dump-config` 里应出现 `# == dsh-folder-path` 层。
+
+## 兼容性
+
+已在 **DSH 0.2.1-rc.2**（npm `@deepseek-ai/dsh` 0.2.1-rc.2）上逐项核对过：安装、组合、宿主路由与浏览器半边都照旧可用。
+本插件只用到内核的这几处：
+
+| 内核接口 | 用途 |
+|---|---|
+| `webServer` 服务：`ctx.inject(['webServer'])` + `ctx.webServer.register({ kind: 'exact', … })` | 宿主半注册那条精确路由 |
+| `ctx.effect` / `ctx.logger` | 路由的挂载与清理、剪贴板探测失败时的告警 |
+| 插件入口的 `name` / `apply(ctx, config)` 形状 | 宿主半的加载方式 |
+| `package.json` 的 `dsh.bundle.patch` 与 `dsh.client.platform` | bundle 补丁层与浏览器半的模块登记 |
+| `exports['./client']` + `window.__ModuleLoader__.load({ id, factory })` | 浏览器半的加载方式 |
+
+插件**不涉及子代理**，所以内核 0.2.1-rc.2 的子代理约定（`startActivation({provider, request})`、Agent Preset）
+不改变它的任何行为。`test/manifest.test.js` 与 `test/client.test.js` 把上面这份清单钉在测试里。
 
 ## 使用
 
@@ -84,7 +100,7 @@ dsh plugin --profile web add C:\CodeRepository\dsh-folder-path    # 本地路径
 
 ```sh
 npm run build   # client/index.js -> lib/client.js（把浏览器半边包成 __ModuleLoader__ bundle）
-npm test        # 语法检查 + 宿主路由行为测试（node --test，无需 DSH 服务器）
+npm test        # 语法检查 + 宿主路由 / 浏览器半契约 / 清单契约测试（node --test，无需 DSH 服务器）
 ```
 
 浏览器侧调试钩子（devtools 控制台）：
@@ -94,8 +110,11 @@ await __dshFolderPath.probe(['文件夹名'])   // 直接问宿主要路径
 __dshFolderPath.insert(document.querySelector('[contenteditable]'), '文本')   // 直接试插入
 ```
 
-改客户端半边后：`npm run build`，然后**重启 `dsh web`** 并刷新页面
-（bundle 在宿主发布时被快照，重载页面只会取到同一个 revision）。
+改**浏览器半边**后：`npm run build`，然后刷新页面即可，**不必重启宿主**——
+`dsh-client-hmr` 每 500 ms 轮询各客户端产物，重建后重算 revision 并推给页面。
+只有**新增**客户端模块才需要重启宿主（启动时的扫描决定「有哪些客户端模块」）。
+
+改**宿主半边**后：必须**重启 `dsh web`**（宿主走 Node 的 ESM 缓存，运行中的那份代码不会跟着变）。
 
 ## 致谢
 
