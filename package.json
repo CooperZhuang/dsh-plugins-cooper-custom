@@ -33,6 +33,9 @@
   "engines": {
     "node": ">=20"
   },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.5"
+  },
   "keywords": [
     "dsh",
     "dsh-plugin",

@@ -38,6 +38,35 @@ authenticated URL；直接开 `http://127.0.0.1:19387/` 得到的是
 
 显式钉住端口就按端口走：`-Port 3080` 即使在装了桌面版的机器上也保持 `dsh web` 的行为。
 
+## 内核版本（DSH 0.2.1-rc.2）
+
+本插件**不引用任何内核包**，只用内核提供的一小组服务，所以换内核不需要改代码——
+但用到的每一个符号都对着 0.2.1-rc.2 核过一遍：
+
+| 用到的符号 | 来自 | 0.2.1-rc.2 现状 |
+|---|---|---|
+| `z.object` / `.default()` | `@deepseek-ai/schemastery` | 不变（内核自己用 `~3.18.5`） |
+| `webServer.register({kind:'exact', path, handler})` | `@deepseek-ai/dsh-host-webserver` | 不变 |
+| `ctx.inject(['webServer'])` / `ctx.effect()` | `@deepseek-ai/cordis` 4.0.5 | 不变 |
+| `ctx.workspaces.create({path})` | `@deepseek-ai/dsh-api-workspace-controller` | 不变 |
+| `ctx.sessions.create({workspaceId})` | `@deepseek-ai/dsh-api-session-controller` | 不变（只多了一个可选的 `agentPreset`） |
+| `ctx.uiWorkspace.openWorkspace/openSession` | `@deepseek-ai/dsh-client-ui-workspace` | 不变（`openWorkspace` 多了一个可选参数） |
+| `window.__ModuleLoader__.load({id, factory})` | `@deepseek-ai/dsh-client-modules` | 不变 |
+| 补丁行 `insert: [{id, name, config}]` | `@deepseek-ai/cordis-plugin-include` | 不变 |
+
+两件和 0.2.1-rc.2 有关、但**不影响功能**的事：
+
+- **webserver 不再接受通配地址**（`0.0.0.0` / `::` 加载即报错）。本插件自己的路由只服务
+  回环，这条检查照旧；本仓库里那些"Web profile 绑 0.0.0.0"的说法已经改成"可以钉到
+  某个具体接口地址"。
+- **子代理约定变了**（`start(name, request)` → `startActivation({provider, request})`，
+  `toolFilter` / `persona` 被删）。本插件**不派生任何子代理**，所以不涉及。
+
+唯一的依赖改动：`lib/index.js` 一直在 import `@deepseek-ai/schemastery`，但 `package.json`
+从来没声明过它——本仓库自己的 `npm test` 因此连 `lib/index.js` 都 import 不进来。
+现在按同族仓库（`dsh-rtk-slim` / `dsh-memories`）的写法显式声明
+`"@deepseek-ai/schemastery": "^3.18.5"`，与内核 0.2.1-rc.2 带的 `~3.18.5` 对齐。
+
 ## 安装
 
 ### 1. 插件（宿主 + 浏览器两半边）
@@ -225,8 +254,9 @@ bundle 自带的 `cordis.patch.yml` 是默认值；profile 的 `cordis.patch.yml
 这条路由的作用是**让浏览器把任意本地目录当成工作区打开**，而工作区里会跑命令，
 所以它等同于一个代码执行入口：
 
-- **只接受回环来源**。本机桌面版的 webserver 配置仍然继承着 `host: 0.0.0.0`
-  （见 profile 的 `webserver` 行），所以这条检查不是多余的——局域网上的机器不能驱动这台机器。
+- **只接受回环来源**。内核 0.2.1 起 webserver **不再接受通配地址**（`0.0.0.0` / `::`
+  在加载时直接报错），但仍然可以钉到某个**具体接口地址**（比如本机的局域网 IP），
+  那依旧是网络可达的——所以这条回环检查照旧不能省：局域网上的机器不能驱动这台机器。
   `allowNonLoopback` 默认 `false`。
 - **带 `Origin` 的请求必须同源**。另一个网页即使能连到端口，也不能在背后点火。
 - 启动器（wscript / PowerShell）不带 `Origin`，只靠回环这一条通过。
