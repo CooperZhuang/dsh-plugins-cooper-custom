@@ -1,5 +1,10 @@
 # dsh-rtk-slim Implementation Plan
 
+> **后续修订（2026-10-20）**：本计划描述的是 2026-10-16 的实施（依赖
+> `@deepseek-ai/schemastery@^3.18.4`、`dsh-llm`/`dsh-tools` `0.2.1-alpha.2`）。
+> 插件此后已对齐 **内核 0.2.1-rc.2**，当前依赖版本与核对结论见
+> `README.md` 的「适配的内核版本」。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 实现一个 DSH 宿主半边插件 `dsh-rtk-slim`：把 `bash` / `job_output` 的超大输出交给 `rtk` 精简，且每次精简都可追溯（全文经官方 `spillStore` 落盘）、任何失败都保留原文。

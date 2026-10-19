@@ -43,6 +43,35 @@ DSH 宿主半边插件：把 `bash` / `job_output` 的超大输出交给 [rtk](h
 
 > 注：本机 `rtk` 现已报 **1.0.1**（早先实测为 0.49.0），两者产出的精简数字完全一致，插件不依赖特定 rtk 版本。
 
+## 适配的内核版本
+
+已对齐 **DSH 内核 0.2.1-rc.2**（npm 上 `@deepseek-ai/dsh-llm` / `@deepseek-ai/dsh-tools` 的 latest）。
+
+| 依赖 | 版本 |
+|---|---|
+| `@deepseek-ai/dsh-llm`（dev） | `^0.2.1-rc.2` |
+| `@deepseek-ai/dsh-tools`（dev） | `^0.2.1-rc.2` |
+| `@deepseek-ai/schemastery` | `^3.18.5` |
+| `typescript`（dev） | `^7.0.2` |
+| `@types/node`（dev） | `^26.6.5` |
+
+本插件碰到的内核面只有三处，0.2.1-rc.2 下逐条核对过，**无漂移**：
+
+- `tools/post-execute` waterfall（`dsh-tools`）：`exec` / `result` / `next()` 签名、`PostToolDecision`
+  的两种 `accept` 形态（`content` 与 `value`）以及 `additionalContexts` 透传，均未变；
+  `next()` 的兜底仍是 `{kind:'accept'}`（不带 `content`），所以本插件拿到的仍是**原始**文本。
+- `ctx.get('spillStore')`（`dsh-spill`）：`saveText({owner, source, suggestedName, content})` →
+  `{locator, bytes, retrievalHint}`，未变。归属仍取 `exec.agent.session.header.id`——与
+  `dsh-spill-policy@0.2.1-rc.2` 的读法一致。
+- 插件契约：`export const name / inject / Config / apply`（cordis 4.0.5 的 object plugin）、
+  `dsh.bundle.patch` 清单字段、`cordis.patch.yml` 的 `insert` 行格式，均未变。
+
+0.2.1-rc.2 改了子代理约定（服务上 `startActivation({provider, request})`、请求里去掉
+`toolFilter` / `persona`、子代理工具集只来自点名的 Agent Preset）——**本插件不涉及子代理**，不受影响。
+
+类型检查用 **npm 上的内核包**（`0.2.1-rc.2`，带 `.d.ts`）。**不要**把 `node_modules/@deepseek-ai`
+指向 Electron 应用内那份：应用包一个 `.d.ts` 都没有，会让全仓报 TS7016。
+
 
 ## 安装
 
@@ -153,6 +182,8 @@ npm run check                          # tsc --checkJs（仅 lib/）+ node --tes
 node test/fixtures/make-fixtures.mjs   # 重新生成语料（确定性）
 ```
 
+- 仓库**不跟踪** `package-lock.json`（已进 `.gitignore`）：旧锁文件会让 `npm install` 按旧树解析并
+  报 ERESOLVE。每次安装都按 `package.json` 重新解析；升级内核版本时先 `rm -rf node_modules` 再装。
 - 类型检查只覆盖 `lib/**`：那是「用运行时同版本类型校验插件契约」的落点。测试文件是动态桩，
   给它们加 JSDoc 注解既不增加安全性也会淹没真正的错误；测试的正确性由实跑 50 项保证。
 - `lib/` 对 `@deepseek-ai/dsh-*` 的**运行时导入为 0**（只用 JSDoc `import type`）。所以 DSH 将来改 API，
