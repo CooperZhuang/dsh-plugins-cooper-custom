@@ -32,9 +32,6 @@
     # a {{cwd}} suffix makes every run fail with "unknown prompt variable".
     personaSuffix: ""
 
-- id: dsh-purge
-  inject: [systemPrompt, tools]
-
 - insert:
     - id: dsh-purge
       name: 'dsh-purge'
