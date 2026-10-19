@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { createVolatile, updateVolatile } from '@deepseek-ai/cosmokit'
 import { MemoryStore, formatEntry, parseEntry, projectSlug, slugify } from '../storage.js'
@@ -244,13 +244,16 @@ test('upsert creates, then updates in place on the same title', async () => {
 test('project and global scopes stay isolated and both survive a restart', async () => {
   const { store, dir } = await tempStore()
   try {
-    const root = 'C:\\Code\\alpha'
+    // The store resolves a project root to an absolute path, so the root here
+    // has to be the resolved one: on Windows the literal already is absolute,
+    // on POSIX it is resolved against the working directory.
+    const root = resolve('C:\\Code\\alpha')
     await store.upsert({ scope: 'global', title: 'Global fact', body: 'Applies everywhere.', tags: [] }, undefined, 'tool', 1)
     await store.upsert({ scope: 'project', title: 'Project fact', body: 'Only for alpha.', tags: [] }, root, 'tool', 2)
     const reopened = new MemoryStore(dir)
     assert.deepEqual((await reopened.list('global', undefined, { fresh: true })).map((entry) => entry.title), ['Global fact'])
     assert.deepEqual((await reopened.list('project', root, { fresh: true })).map((entry) => entry.title), ['Project fact'])
-    assert.deepEqual(await reopened.list('project', 'C:\\Code\\beta', { fresh: true }), [])
+    assert.deepEqual(await reopened.list('project', resolve('C:\\Code\\beta'), { fresh: true }), [])
     const descriptor = await reopened.readProjectDescriptor(projectSlug(root))
     assert.equal(descriptor?.root, root)
   } finally {
@@ -762,8 +765,11 @@ test('summary renders both scopes and stays inside its byte budget', () => {
 })
 
 test('entry config resolves paths, clamps tunables, and reads live references', () => {
-  const resolved = resolveConfig({ dshHome: 'C:\\home', maxSummaryBytes: -5, autoExtractIdleMs: 10, extractProvider: 'p', extractModel: 'm' })
-  assert.equal(resolved.memoriesDir, 'C:\\home/memories')
+  // A Windows home on Windows and a POSIX home elsewhere: the plugin resolves
+  // the home against the platform, so the expectation has to as well.
+  const home = process.platform === 'win32' ? 'C:\\home' : '/home'
+  const resolved = resolveConfig({ dshHome: home, maxSummaryBytes: -5, autoExtractIdleMs: 10, extractProvider: 'p', extractModel: 'm' })
+  assert.equal(resolved.memoriesDir, `${home}/memories`)
   assert.equal(resolved.tunables.maxSummaryBytes, 0)
   assert.equal(resolved.tunables.autoExtractIdleMs, 1000)
   assert.equal(resolved.tunables.extractProvider, 'p')

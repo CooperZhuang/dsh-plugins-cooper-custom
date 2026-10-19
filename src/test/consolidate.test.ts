@@ -25,10 +25,12 @@ import {
   readPendingPlan,
   renderConsolidationInput,
   runConsolidation,
+  runConsolidationDirect,
   writePendingPlan,
 } from '../consolidate.js'
 import type { ConsolidationPlan, ConsolidationTarget, SubagentSeam } from '../consolidate.js'
 import type { MemoryDraft, MemoryEntry, MemoryScope } from '../types.js'
+import type { LlmRuntime } from '@deepseek-ai/dsh-llm'
 
 /** Build one entry. */
 function entry(partial: Partial<MemoryEntry> & Pick<MemoryEntry, 'id' | 'title' | 'body'>): MemoryEntry {
@@ -43,6 +45,19 @@ function seam(reply: string, seen: { request?: unknown } = {}): SubagentSeam {
       return { result: Promise.resolve({ output: [{ type: 'text', text: reply }], structured: undefined, stopReason: { kind: 'completed' } }) }
     },
   }
+}
+
+/** A stub LLM runtime replaying one text answer. */
+function llm(reply: string, seen: { options?: unknown } = {}): LlmRuntime {
+  return {
+    stream: (options: unknown) => {
+      seen.options = options
+      return (async function* () {
+        yield { type: 'text-delta', index: 0, text: reply }
+        yield { type: 'finish', reason: 'stop' }
+      })()
+    },
+  } as unknown as LlmRuntime
 }
 
 /** An in-memory store target that can be made to fail on demand. */
@@ -129,6 +144,84 @@ test('the consolidation child is denied every write and network tool', async () 
   assert.equal(request.maxDepth, 1, 'the child runs, but cannot delegate further')
   assert.ok(request.outputSchema !== undefined, 'the child must answer through the JSON schema')
   assert.deepEqual([...CONSOLIDATE_DENY_TOOLS].length, request.toolFilter.deny.length)
+})
+
+test('the 0.2.1-rc.2 seam runs the child under a tool-free preset', async () => {
+  // The kernel of 0.2.1-rc.2 takes the child's tool set from the preset it
+  // names; `toolFilter` and `persona` are gone from the start request, and the
+  // model-facing subagent tool rejects both outright.
+  const seen: { spec?: unknown } = {}
+  const reply = '{"memories":[{"id":null,"scope":"global","title":"t","body":"b"}],"retire":[],"notes":"n"}'
+  const modern: SubagentSeam = {
+    startActivation: async (spec) => {
+      seen.spec = spec
+      return { result: Promise.resolve({ output: [{ type: 'text', text: reply }], structured: undefined, stopReason: { kind: 'completed' } }) }
+    },
+  }
+  const plan = await runConsolidation(modern, {
+    parent: {} as never,
+    entries: [entry({ id: 'a', title: 'A', body: 'a' })],
+    projectLabel: 'project:x',
+    maxUpserts: 10,
+    denyTools: [...CONSOLIDATE_DENY_TOOLS],
+    agentPreset: 'memories-consolidator',
+    timeoutMs: 5_000,
+    signal: new AbortController().signal,
+  })
+  assert.ok(plan !== undefined)
+  const spec = seen.spec as { provider: string; request: { agentPreset?: string; maxDepth: number; outputSchema?: unknown; toolFilter?: unknown } }
+  assert.equal(spec.provider, 'spawn')
+  assert.equal(spec.request.agentPreset, 'memories-consolidator')
+  assert.equal(spec.request.maxDepth, 1, 'the child runs, but cannot delegate further')
+  assert.ok(spec.request.outputSchema !== undefined, 'the child must answer through the JSON schema')
+  assert.equal(spec.request.toolFilter, undefined, 'the new request carries no tool filter')
+})
+
+test('the modern seam is refused without a preset, because the child would inherit the parent tools', async () => {
+  // A child that names no preset inherits the parent's composition, so the
+  // "restricted" child would quietly get the parent's tools back. The pass
+  // must not start one.
+  let called = false
+  const modern: SubagentSeam = {
+    startActivation: async () => {
+      called = true
+      return { result: Promise.resolve({ output: [], structured: undefined }) }
+    },
+  }
+  const plan = await runConsolidation(modern, {
+    parent: {} as never,
+    entries: [entry({ id: 'a', title: 'A', body: 'a' })],
+    projectLabel: 'project:x',
+    maxUpserts: 10,
+    denyTools: [...CONSOLIDATE_DENY_TOOLS],
+    timeoutMs: 5_000,
+    signal: new AbortController().signal,
+  })
+  assert.equal(plan, undefined)
+  assert.equal(called, false, 'the child must not be started without a tool-free preset')
+})
+
+test('the direct path reads a plain text answer and hands the model no tools', async () => {
+  const seen: { options?: unknown } = {}
+  const reply = '{"memories":[{"id":null,"scope":"global","title":"t","body":"b"}],"retire":[],"notes":"n"}'
+  const plan = await runConsolidationDirect(llm(reply, seen), {
+    parent: { session: { id: 'session-1' } } as never,
+    entries: [entry({ id: 'a', title: 'A', body: 'a' })],
+    projectLabel: 'project:x',
+    maxUpserts: 10,
+    denyTools: [...CONSOLIDATE_DENY_TOOLS],
+    timeoutMs: 5_000,
+    maxOutputTokens: 4096,
+    route: { provider: 'deepseek', model: 'deepseek-chat' },
+    signal: new AbortController().signal,
+  })
+  assert.ok(plan !== undefined)
+  assert.equal(plan.upserts.length, 1)
+  const options = seen.options as { provider: string; model: string; tools?: unknown; maxTokens: number; system?: string }
+  assert.equal(options.provider, 'deepseek')
+  assert.equal(options.model, 'deepseek-chat')
+  assert.equal(options.maxTokens, 4096)
+  assert.equal(options.tools, undefined, 'the direct path hands the model no tools at all')
 })
 
 test('renderConsolidationInput groups by scope and lists ids', () => {
