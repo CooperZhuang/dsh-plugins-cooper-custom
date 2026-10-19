@@ -299,10 +299,12 @@ test('a global draft that names a known workspace is filed with that workspace',
 
   // A global memory follows the user into every unrelated project, so a draft
   // that quotes this workspace's own path belongs to this workspace instead.
+  // The path is spelled with the platform's own separator: the guard looks for
+  // a path this platform would recognize.
   const misfiled = await runtime.write(agent.session, {
     scope: 'global',
     title: 'Invoice export rule',
-    body: `The exporter only reads ${workspace}\\invoices.`,
+    body: `The exporter only reads ${join(workspace, 'invoices')}.`,
     tags: [],
   }, 'auto')
   assert.equal(misfiled.entry.scope, 'project', 'the cited path decides the scope')

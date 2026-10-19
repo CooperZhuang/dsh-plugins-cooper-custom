@@ -16,9 +16,12 @@
  * @module dsh-memories/consolidate
  */
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
+import type { GenerateOptions, LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { toMemoryKind } from './types.js'
+import { MEMORY_SOURCE_KIND } from './types.js'
 import type { MemoryEntry, MemoryDraft, MemoryKind, MemoryScope } from './types.js'
 
 /** System instruction for the consolidation sub-agent. */
@@ -263,6 +266,17 @@ export interface ConsolidateRequest {
   /** Provider the child should use, defaulting to the parent's own route. */
   readonly provider?: string
   readonly model?: string
+  /**
+   * Agent Preset the child runs under.
+   *
+   * Required by the 0.2.1-rc.2 seam: a child that names no preset inherits the
+   * parent's composition, and the parent's tools are exactly what this pass
+   * exists to withhold. The preset this plugin registers carries no tool rows
+   * at all, so the child can only answer.
+   */
+  readonly agentPreset?: string
+  /** Subagent provider name; `spawn` unless a deployment names another. */
+  readonly subagentProvider?: string
   /** Entries to consider, newest first. */
   readonly entries: readonly MemoryEntry[]
   /** Model-facing project label. */
@@ -273,12 +287,43 @@ export interface ConsolidateRequest {
   readonly denyTools: readonly string[]
   /** Deadline for the child run. */
   readonly timeoutMs: number
+  /** Output token cap for the direct (no-subagent) path. */
+  readonly maxOutputTokens?: number
+  /** Route the direct (no-subagent) path runs on. */
+  readonly route?: { provider: string; model: string; reasoningEffort?: string }
   readonly signal: AbortSignal
 }
 
-/** The subagent seam this module consumes, kept structural for testability. */
+/**
+ * The subagent seam this module consumes, kept structural for testability.
+ *
+ * Two kernel shapes live here, because the seam changed under this plugin:
+ *
+ * - `startActivation` is the 0.2.1-rc.2 shape. The provider is named, the
+ *   request is nested under it, and the child's tool set comes from an Agent
+ *   Preset named in the request — `toolFilter` and `persona` are gone from the
+ *   start request (the model-facing subagent tool rejects both outright).
+ * - `start` is the pre-0.2.1 shape: a name-addressed call whose request carries
+ *   `toolFilter` and `persona`.
+ *
+ * The new shape is preferred, and it is only used when a preset is available:
+ * without one the child inherits the parent's composition, so a "restricted"
+ * child would quietly get the parent's tools back.
+ */
 export interface SubagentSeam {
-  start(name: string, request: {
+  startActivation?: (spec: {
+    provider: string
+    request: {
+      prompt: { type: 'text'; text: string }[]
+      parent: Agent
+      signal: AbortSignal
+      agentOptions?: { provider?: string; model?: string }
+      outputSchema?: unknown
+      maxDepth?: number
+      agentPreset?: string
+    }
+  }) => Promise<{ result: Promise<{ output: readonly unknown[]; structured?: unknown; stopReason?: { kind: string } }> }>
+  start?: (name: string, request: {
     prompt: { type: 'text'; text: string }[]
     parent: Agent
     signal: AbortSignal
@@ -287,11 +332,25 @@ export interface SubagentSeam {
     maxDepth?: number
     toolFilter?: { deny?: readonly string[]; allow?: readonly string[] }
     persona?: string
-  }): Promise<{ result: Promise<{ output: readonly unknown[]; structured?: unknown; stopReason?: { kind: string } }> }>
+  }) => Promise<{ result: Promise<{ output: readonly unknown[]; structured?: unknown; stopReason?: { kind: string } }> }>
 }
 
 /** Cap on skill drafts one pass may propose. */
 const MAX_SKILL_DRAFTS = 2
+
+/**
+ * The Agent Preset the consolidation child runs under.
+ *
+ * Since 0.2.1-rc.2 the kernel takes a child's tool set from the preset it
+ * names: a request's own `toolFilter` and `persona` are gone, and a child that
+ * names no preset inherits the parent's composition — which would hand the
+ * consolidation pass the parent's tools, the one thing this pass must never
+ * have. This preset carries no tool rows at all, so the child can only answer.
+ */
+export const CONSOLIDATE_PRESET_ID = 'memories-consolidator'
+
+/** Output token cap for the direct (no-subagent) consolidation path. */
+export const DEFAULT_CONSOLIDATE_MAX_OUTPUT_TOKENS = 8192
 
 /**
  * Tools the consolidation child must not have: it reads and proposes, nothing else.
@@ -332,30 +391,129 @@ export async function runConsolidation(seam: SubagentSeam, request: ConsolidateR
   const known = new Set(request.entries.map((entry) => entry.id))
   const input = renderConsolidationInput(request.entries, request.projectLabel)
   const timeout = AbortSignal.any([request.signal, AbortSignal.timeout(request.timeoutMs)])
-  const run = await seam.start('spawn', {
-    prompt: [{ type: 'text', text: `${CONSOLIDATE_SYSTEM}\n\n---\n\n${input}` }],
-    parent: request.parent,
+  const prompt = [{ type: 'text' as const, text: `${CONSOLIDATE_SYSTEM}\n\n---\n\n${input}` }]
+  const reply = await runChild(seam, prompt, request, timeout)
+  if (reply === undefined) return undefined
+  return parsePlan(reply, known, request.maxUpserts)
+}
+
+/**
+ * Ask the seam for one restricted child and return its answer as text.
+ *
+ * The 0.2.1-rc.2 seam is preferred, but only with a preset: a child that names
+ * no preset inherits the parent's composition, and the parent's tools are what
+ * this pass must withhold. The pre-0.2.1 seam is used when it is all there is.
+ *
+ * @param seam - the subagent service.
+ * @param prompt - the child's single user message.
+ * @param request - route, caps, and the preset name.
+ * @param timeout - the child's deadline.
+ * @returns the child's text, or `undefined` when the seam cannot run it.
+ */
+async function runChild(
+  seam: SubagentSeam,
+  prompt: { type: 'text'; text: string }[],
+  request: ConsolidateRequest,
+  timeout: AbortSignal,
+): Promise<string | undefined> {
+  const agentOptions = request.provider !== undefined && request.model !== undefined
+    ? { provider: request.provider, model: request.model }
+    : undefined
+  if (typeof seam.startActivation === 'function' && request.agentPreset !== undefined) {
+    const run = await seam.startActivation({
+      provider: request.subagentProvider ?? 'spawn',
+      request: {
+        prompt,
+        parent: request.parent,
+        signal: timeout,
+        ...agentOptions !== undefined ? { agentOptions } : {},
+        outputSchema: CONSOLIDATE_JSON_SCHEMA,
+        // The child may not delegate further: it returns a plan, nothing else.
+        //
+        // `maxDepth` is the cap on the CHILD's depth, and DSH counts depth from
+        // 1 (a top-level agent is 0, its child is 1). So 1 admits this child and
+        // rejects any grandchild — 0 would reject the child itself, which is how
+        // this line was wrong the first time.
+        maxDepth: 1,
+        agentPreset: request.agentPreset,
+      },
+    })
+    return textOf(await run.result)
+  }
+  if (typeof seam.start === 'function') {
+    const run = await seam.start('spawn', {
+      prompt,
+      parent: request.parent,
+      signal: timeout,
+      ...agentOptions !== undefined ? { agentOptions } : {},
+      outputSchema: CONSOLIDATE_JSON_SCHEMA,
+      maxDepth: 1,
+      // The child may not write anything and may not reach the network: its
+      // only output is the JSON plan it returns.
+      toolFilter: { deny: request.denyTools },
+    })
+    return textOf(await run.result)
+  }
+  return undefined
+}
+
+/**
+ * Read one child's answer as text.
+ *
+ * A child that answered through the structured-output tool carries the plan in
+ * `structured`; a child that answered in prose carries it in the text blocks.
+ * @param result - the child's finished run.
+ * @returns the text the plan is parsed from.
+ */
+function textOf(result: { output: readonly unknown[]; structured?: unknown }): string {
+  if (typeof result.structured === 'object' && result.structured !== null) return JSON.stringify(result.structured)
+  return result.output
+    .map((block) => (typeof block === 'object' && block !== null && 'text' in block && typeof block.text === 'string' ? block.text : ''))
+    .join('\n')
+}
+
+/**
+ * Run one consolidation without a subagent: a plain model call that owns no
+ * tools at all.
+ *
+ * This is the fallback for a deployment whose subagent seam cannot express a
+ * restricted child (no Agent Preset service, or a seam that predates the
+ * preset contract). It is not a weaker guarantee: the model is handed no tool
+ * list whatsoever, so it cannot write, shell out, or delegate — the same
+ * property the old deny list bought, reached by a different route.
+ *
+ * @param llm - the LLM runtime.
+ * @param request - entries, route, caps, and cancellation.
+ * @returns the validated plan, or `undefined` when the model produced none.
+ */
+export async function runConsolidationDirect(llm: LlmRuntime, request: ConsolidateRequest): Promise<ConsolidationPlan | undefined> {
+  if (request.entries.length === 0) return undefined
+  const route = request.route
+  if (route === undefined) return undefined
+  const known = new Set(request.entries.map((entry) => entry.id))
+  const input = renderConsolidationInput(request.entries, request.projectLabel)
+  const messages = [createUserMessage({
+    content: [{ type: 'text', text: input }],
+    source: { kind: MEMORY_SOURCE_KIND },
+  })]
+  const timeout = AbortSignal.any([request.signal, AbortSignal.timeout(request.timeoutMs)])
+  const options: GenerateOptions = {
+    provider: route.provider,
+    model: route.model,
+    messages,
+    system: CONSOLIDATE_SYSTEM,
+    maxTokens: request.maxOutputTokens ?? DEFAULT_CONSOLIDATE_MAX_OUTPUT_TOKENS,
+    purpose: 'compaction',
+    sessionId: request.parent.session.id,
     signal: timeout,
-    ...request.provider !== undefined && request.model !== undefined
-      ? { agentOptions: { provider: request.provider, model: request.model } }
-      : {},
-    outputSchema: CONSOLIDATE_JSON_SCHEMA,
-    // The child may not delegate further, may not write anything, and may not
-    // reach the network: its only output is the JSON plan it returns.
-    //
-    // `maxDepth` is the cap on the CHILD's depth, and DSH counts depth from 1
-    // (a top-level agent is 0, its child is 1). So 1 admits this child and
-    // rejects any grandchild — 0 would reject the child itself, which is how
-    // this line was wrong the first time.
-    maxDepth: 1,
-    toolFilter: { deny: request.denyTools },
-  })
-  const result = await run.result
-  const text = typeof result.structured === 'object' && result.structured !== null
-    ? JSON.stringify(result.structured)
-    : result.output
-      .map((block) => (typeof block === 'object' && block !== null && 'text' in block && typeof block.text === 'string' ? block.text : ''))
-      .join('\n')
+  }
+  const assembler = new BlockAssembler()
+  for await (const chunk of llm.stream(options)) assembler.push(chunk)
+  const text = assembler.blocks()
+    .filter((block): block is { type: 'text'; text: string } => block.type === 'text')
+    .map((block) => block.text)
+    .join('\n')
+  if (text.trim().length === 0) return undefined
   return parsePlan(text, known, request.maxUpserts)
 }
 

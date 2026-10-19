@@ -194,7 +194,7 @@ export function collectWindow(
 }
 
 /**
- * Resolve the provider/model route for an extraction call.
+ * Resolve the provider/model route for a model call.
  *
  * The session's own route is inherited deliberately — a background call should
  * not silently run on a model nobody chose — but the reasoning level comes with
@@ -202,8 +202,14 @@ export function collectWindow(
  * bills its reasoning against `maxOutputTokens` before the first visible token.
  * Carrying the level out with the route is what lets the caller's log line name
  * the reason a capped call produced nothing, instead of only naming the knob.
+ *
+ * @param session - the session whose logged route is the fallback.
+ * @param provider - an explicit provider, if the caller names one.
+ * @param model - an explicit model, if the caller names one.
+ * @param fallback - the route to use when the session has none.
+ * @returns the route, or `undefined` when no route can be resolved.
  */
-function resolveRoute(
+export function resolveLlmRoute(
   session: Session,
   provider: string | undefined,
   model: string | undefined,
@@ -410,7 +416,7 @@ export type ExtractionOutcome =
  */
 export async function runExtraction(llm: LlmRuntime, request: ExtractionRequest): Promise<ExtractionOutcome> {
   if (request.window.text.trim().length === 0) return { kind: 'none', reason: 'empty-window' }
-  const route = resolveRoute(request.session, request.provider, request.model, request.fallbackRoute ?? {})
+  const route = resolveLlmRoute(request.session, request.provider, request.model, request.fallbackRoute ?? {})
   if (route === undefined) return { kind: 'none', reason: 'no-route' }
   const known = request.knownTitles ?? []
   const framed = [

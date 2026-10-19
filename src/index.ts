@@ -47,13 +47,13 @@ import { findProjectRoot, isWithin } from './workspace.js'
 import { citationRoots, citationWarning, ignoredUnder, missingCitations } from './citations.js'
 import { planRetention, retentionKey } from './retention.js'
 import { MemoryLog, createFileSink, createLogExporter, pluginLogger } from './log.js'
-import { collectWindow, runExtraction } from './extract.js'
+import { collectWindow, resolveLlmRoute, runExtraction } from './extract.js'
 import type { ExtractionRoute } from './extract.js'
 import { backgroundDelayMs, cappedBackoffMs, extractionDelayMs, formatDelay, parsePeakHours, peakDelayMs } from './schedule.js'
-import { applyPlan, classifyPlan, clearPendingPlan, denyToolsFor, mergePendingPlan, proposalIsFresh, readPendingPlan, runConsolidation, selectForConsolidation, writePendingPlan } from './consolidate.js'
+import { CONSOLIDATE_PRESET_ID, applyPlan, classifyPlan, clearPendingPlan, denyToolsFor, mergePendingPlan, proposalIsFresh, readPendingPlan, runConsolidation, runConsolidationDirect, selectForConsolidation, writePendingPlan } from './consolidate.js'
 import type { ConsolidationDispute } from './consolidate.js'
 import { discardDraft, listDrafts, promote, writeDraft } from './skills.js'
-import type { ConsolidationTarget, SubagentSeam } from './consolidate.js'
+import type { ConsolidationPlan, ConsolidationTarget, SubagentSeam } from './consolidate.js'
 import { MEMORY_KINDS, MEMORY_SOURCE_KIND } from './types.js'
 import type { MemoryDraft, MemoryEntry, MemoryKind, MemoryScope, SessionMode } from './types.js'
 import { registerMemoryTool } from './tool.js'
@@ -190,6 +190,26 @@ interface AgentRegistryLike {
   roots?(): Agent[]
 }
 
+/**
+ * The Agent Preset registry, spelled structurally.
+ *
+ * `@deepseek-ai/dsh-agent-preset-registry` publishes it as the `agentPresets`
+ * service. Since 0.2.1-rc.2 a subagent's tool set comes from the preset it
+ * names, so this plugin registers one preset of its own — a preset with no tool
+ * rows — and the consolidation child runs under it. A deployment that composes
+ * no registry simply has no preset, and the consolidation pass falls back to a
+ * plain model call that owns no tools either.
+ */
+interface AgentPresetRegistryLike {
+  register(definition: {
+    id: string
+    name?: string
+    description?: string
+    order?: number
+    plugins: readonly unknown[]
+  }): Promise<() => Promise<void>>
+}
+
 /** Why one session was not mined, for the pass line. */
 type MineSkip = 'off' | 'peak' | 'not-idle' | 'quiet' | 'claim' | 'no-llm' | 'no-route' | 'empty' | 'max-tokens' | 'capped'
 
@@ -234,6 +254,15 @@ export class MemoriesRuntime {
   private warnedNoLlm = false
   /** Whether the "no subagent seam" warning has already been written. */
   private warnedNoSubagents = false
+  /**
+   * Whether the tool-free consolidation preset is registered.
+   *
+   * Since 0.2.1-rc.2 a subagent's tool set comes from the preset it names, and
+   * a child that names none inherits the parent's composition — the parent's
+   * tools, which is exactly what the consolidation pass must withhold. This flag
+   * is what tells the pass that the new-style seam can be used safely.
+   */
+  private consolidatePresetReady = false
   private readonly rootCache = new WeakMap<Session, Promise<string | undefined>>()
   /** Sessions whose conversation already carries the memory block. */
   private readonly injected = new WeakSet<Session>()
@@ -327,6 +356,19 @@ export class MemoriesRuntime {
   /** The tunables in force right now. */
   get settings(): MemoriesSettings {
     return this.settingsThunk()
+  }
+
+  /**
+   * Record that the tool-free consolidation preset is registered.
+   *
+   * The composition answers this once the preset registry is available; the
+   * flag is what the consolidation pass reads before it hands a child to the
+   * 0.2.1-rc.2 seam.
+   *
+   * @param ready - whether the preset is registered and usable.
+   */
+  markConsolidatePresetReady(ready: boolean): void {
+    this.consolidatePresetReady = ready
   }
 
   /** Abort every owned background activity and release the state store. */
@@ -514,7 +556,11 @@ export class MemoriesRuntime {
    */
   private async projectOwningPath(draft: MemoryDraft): Promise<string | undefined> {
     const text = `${draft.title} ${draft.body}`
-    if (!/[A-Za-z]:\\/u.test(text)) return undefined
+    // A path is spelled differently on each platform: a drive letter on
+    // Windows (`C:\...`), a rooted path elsewhere (`/...`). The cheap reject
+    // below only skips text that carries no path at all, so a POSIX workspace
+    // path is recognized just like a Windows one.
+    if (!/[A-Za-z]:\\/u.test(text) && !/(?:^|[\s'"`(\[])\//u.test(text)) return undefined
     const haystack = text.toLowerCase()
     for (const slug of await this.store.listProjects()) {
       const descriptor = await this.store.readProjectDescriptor(slug)
@@ -1984,9 +2030,9 @@ export class MemoriesRuntime {
   /**
    * Run one consolidation pass if the cooldown has elapsed.
    *
-   * The pass is a restricted sub-agent that returns a merged plan as JSON; this
-   * method is the only writer. Every failure is contained and backed off, so a
-   * broken pass never damages the store and never retries in a hot loop.
+   * The pass produces a merged plan as JSON; this method is the only writer.
+   * Every failure is contained and backed off, so a broken pass never damages
+   * the store and never retries in a hot loop.
    *
    * @param parent - an agent whose subagent seam and lineage the pass uses.
    * @param options - `apply` writes the result; the default only proposes it.
@@ -1994,8 +2040,6 @@ export class MemoriesRuntime {
    */
   async consolidateNow(parent: Agent, options: { apply?: boolean; force?: boolean } = {}): Promise<string | undefined> {
     if (!this.settings.consolidate) return undefined
-    const seam = this.subagents
-    if (seam === undefined) return undefined
     // A proposal is a question, and a background pass must not spend a model call
     // to overwrite one nobody has answered yet. Inside the window it leaves the
     // pending question alone; past it the store has moved on and a fresh proposal
@@ -2040,18 +2084,7 @@ export class MemoriesRuntime {
         this.state.deleteJob(CONSOLIDATE_JOB)
         return undefined
       }
-      const plan = await runConsolidation(seam, {
-        parent,
-        ...consolidationRouteOf(this.settings),
-        entries,
-        projectLabel: root === undefined ? NO_PROJECT_LABEL : this.store.target('project', root).label,
-        maxUpserts: this.settings.consolidateMaxEntries,
-        // Only names the registry actually has: `tools.restrict()` rejects an
-        // unknown name, and this deny list is cross-platform.
-        denyTools: denyToolsFor(new Set((this.ctx.get('tools')?.schemas() ?? []).map((schema) => schema.name))),
-        timeoutMs: this.settings.consolidateTimeoutMs,
-        signal: this.lifecycle.signal,
-      })
+      const plan = await this.runConsolidationPass(parent, entries, root)
       if (plan === undefined) {
         this.state.deleteJob(CONSOLIDATE_JOB)
         return undefined
@@ -2123,6 +2156,87 @@ export class MemoriesRuntime {
       this.log.warn('dsh-memories: consolidation failed for session %s: %s', parent.session.id, message)
       return undefined
     }
+  }
+
+  /**
+   * Run one consolidation pass and return the plan it produced.
+   *
+   * Three routes, in order of preference:
+   *
+   * 1. The 0.2.1-rc.2 subagent seam, with this plugin's own tool-free preset:
+   *    the child runs as a real agent that owns no tools.
+   * 2. The pre-0.2.1 seam, whose request still carries a tool filter.
+   * 3. A plain model call that owns no tools at all.
+   *
+   * The third route is not a weaker guarantee: a model handed no tool list
+   * cannot write, shell out, or delegate, which is the same property the old
+   * deny list bought. It exists because the first two need services this
+   * plugin cannot assume — the preset registry and delegation are both
+   * optional — and a pass that cannot run must leave the store alone and say
+   * so, not fail with an exception.
+   *
+   * @param parent - the agent whose lineage and route the pass uses.
+   * @param entries - the memories to review.
+   * @param root - the workspace root whose project scope is in scope.
+   * @returns the plan, or `undefined` when no route produced one.
+   */
+  private async runConsolidationPass(
+    parent: Agent,
+    entries: readonly MemoryEntry[],
+    root: string | undefined,
+  ): Promise<ConsolidationPlan | undefined> {
+    const request = {
+      parent,
+      ...consolidationRouteOf(this.settings),
+      entries,
+      projectLabel: root === undefined ? NO_PROJECT_LABEL : this.store.target('project', root).label,
+      maxUpserts: this.settings.consolidateMaxEntries,
+      // The deny list only reaches the pre-0.2.1 seam, whose request still
+      // carries a tool filter. It names only tools the registry actually has:
+      // `tools.restrict()` rejects an unknown name, and the list is
+      // cross-platform.
+      denyTools: denyToolsFor(new Set((this.ctx.get('tools')?.schemas() ?? []).map((schema) => schema.name))),
+      timeoutMs: this.settings.consolidateTimeoutMs,
+      // The direct path has no output cap of its own, so it borrows the one the
+      // extraction pass already uses: a plan for a full page of memories is the
+      // same size of answer as a page of drafts.
+      maxOutputTokens: this.settings.extractMaxOutputTokens,
+      signal: this.lifecycle.signal,
+    }
+    const seam = this.subagents
+    if (seam !== undefined) {
+      const modern = typeof seam.startActivation === 'function'
+      if (modern && this.consolidatePresetReady) {
+        return await runConsolidation(seam, { ...request, agentPreset: CONSOLIDATE_PRESET_ID })
+      }
+      if (!modern && typeof seam.start === 'function') {
+        return await runConsolidation(seam, request)
+      }
+      // A modern seam without the preset would hand the child the parent's
+      // tools, so the direct route is used instead.
+      this.log.decision('dsh-memories: the subagent seam cannot run a tool-free child here, the pass runs as a plain model call')
+    }
+    const llm = this.llm
+    if (llm === undefined) {
+      if (!this.warnedNoLlm) {
+        this.warnedNoLlm = true
+        this.log.warn('dsh-memories: no llm service, so consolidation cannot run')
+      }
+      return undefined
+    }
+    const route = resolveLlmRoute(parent.session, request.provider, request.model, consolidationRouteOf(this.settings))
+    if (route === undefined) {
+      this.log.warn('dsh-memories: no model route for the consolidation pass, so it did not run')
+      return undefined
+    }
+    return await runConsolidationDirect(llm, {
+      ...request,
+      route: {
+        provider: route.provider,
+        model: route.model,
+        ...route.reasoningEffort === undefined ? {} : { reasoningEffort: route.reasoningEffort },
+      },
+    })
   }
 
   /**
@@ -2757,6 +2871,33 @@ export function apply(ctx: Context, config: MemoriesConfig = {}): void {
 
   runtime = new MemoriesRuntime(ctx, config, read)
   ctx.effect(() => () => runtime.dispose(), 'dsh-memories.lifecycle')
+  // The consolidation child needs a composition of its own. Since 0.2.1-rc.2 a
+  // subagent takes its tool set from the preset it names, and a child that
+  // names none inherits the parent's composition — the parent's tools, which is
+  // exactly what this pass must withhold. This preset declares no plugin rows
+  // at all, so the child can read nothing, write nothing and delegate nothing:
+  // it can only answer with the plan.
+  //
+  // Optional throughout: a deployment that composes no preset registry keeps
+  // every other surface, and the consolidation pass falls back to a plain model
+  // call that owns no tools either.
+  ctx.inject(['agentPresets'], (child) => {
+    const presets = child.get('agentPresets') as AgentPresetRegistryLike | undefined
+    if (presets === undefined) return
+    void presets.register({
+      id: CONSOLIDATE_PRESET_ID,
+      name: '记忆合并（只读）',
+      description: '合并与重整记忆时使用的子代理组成：不含任何工具，只能返回 JSON 方案。',
+      plugins: [],
+    }).then((unregister) => {
+      runtime.markConsolidatePresetReady(true)
+      child.effect(() => () => { void unregister() }, 'dsh-memories.consolidatePreset')
+      log.info('dsh-memories: registered the tool-free preset %s for the consolidation child', CONSOLIDATE_PRESET_ID)
+    }, (error: unknown) => {
+      log.warn('dsh-memories: could not register the consolidation preset, the pass will run without a subagent: %s',
+        error instanceof Error ? error.message : String(error))
+    })
+  })
   onSettingsCommit = () => {
     runtime.startPeriodicExtraction()
     runtime.reportSettingsIssues()
