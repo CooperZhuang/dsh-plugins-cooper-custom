@@ -1,3 +1,44 @@
+# 1.1.73
+
+## 中文
+
+- 版本 **1.1.73**，对齐 DSH **0.2.1-rc.2**（`peerDependencies` 的 cordis 跟到 **4.0.5**）。
+- **子代理约定变了**（本次最要紧的一处）：内核不再认请求里的 `toolFilter` / `persona`，子代理的工具集只来自它
+  点名的 **Agent Preset**，不点名就继承父代理的组成。红队模式原来的「子代理连看都看不到 subagent_fork /
+  workflow / ralph」靠 `toolFilter` 实现，在 0.2.1-rc.2 上那一行直接报 "no longer supported"——整份「红队模式」
+  预设挂不上。现在改成内核保证：插件另出一份 **「红队执行角色（子代理）」（`redteam-worker`）** 预设，那份组成
+  里没有委派工具，指挥端 `subagent` 工具行用 `agentPreset` 指过去。拿不到这份预设时那一行挂掉（宁可不启子
+  代理，也不让子代理继承父代理的工具）。已有用户预设启动时自愈改写，不用手动删预设。
+- 内核不再注册 `cwd` 提示词变量（只剩 `provider` / `model`）：部署人设后缀里带 `{{cwd}}` 会让每轮报
+  "unknown prompt variable"，已清空；插值白名单同步收成 `model` / `provider`。
+- 内核重构了系统提示词组装（complete 段单独回填、多了 requiredContexts 过滤）：补上对应的 assemble 补丁，
+  dsh-purge 的注入段在各种模式下都还在。
+- 原子写（改名 / 复制）保留原文件权限位：备份还原 `dsh` CLI shim 时不再丢 `+x`。
+- 清掉 `dsh.client.inject` 里已下线的 `@deepseek-ai/dsh-client-runtime`（内核里已经没有这个包了）。
+- 新增 `npm run smoke`：不依赖宿主的加载冒烟，顺带验预设自愈与叶子预设派生。
+
+## English
+
+- **1.1.73**, aligned with DSH **0.2.1-rc.2** (cordis peer dependency moved to **4.0.5**).
+- **The subagent convention changed** (the important one): the kernel no longer accepts `toolFilter` / `persona`
+  in a subagent request, and a subagent's tool set comes only from the Agent Preset it names — without a name it
+  inherits the parent's composition. The red-team preset's "the child cannot even see subagent_fork / workflow /
+  ralph" used to be a `toolFilter`; on 0.2.1-rc.2 that row fails with "no longer supported" and the whole
+  red-team preset stops mounting. The kernel enforces it now: the plugin ships a second preset, **红队执行角色
+  （子代理）** (`redteam-worker`), whose composition has no delegation tool, and the commander's `subagent` row
+  points at it with `agentPreset`. If that preset cannot be resolved the row fails to install — no subagent beats
+  a child that inherits the parent's tools. Existing user presets are repaired on startup.
+- The kernel no longer registers the `cwd` prompt variable (only `provider` / `model` remain): a `{{cwd}}` persona
+  suffix made every run fail with "unknown prompt variable". The suffix is empty now and the interpolation
+  allowlist is down to `model` / `provider`.
+- The kernel refactored system-prompt assembly (the complete section is back-filled on its own, plus a
+  requiredContexts filter): the matching assemble patch keeps the dsh-purge injection in every mode.
+- Atomic writes (rename / copy) keep the original permission bits, so restoring the `dsh` CLI shim no longer
+  loses `+x`.
+- Dropped the retired `@deepseek-ai/dsh-client-runtime` from `dsh.client.inject` (the kernel has no such package
+  any more).
+- New `npm run smoke`: a host-free load smoke that also covers the preset repair and the leaf-preset derivation.
+
 # 1.1.71
 
 ## 中文

@@ -162,10 +162,20 @@ WeChat name **「老张的ai科技」**, same handle as the live-room viewer boa
 
 The latest plugin supports **dsh 0.2** only — do not apply it to 0.1.x.
 
-- **dsh 0.2** (official desktop **0.2.0-rc.2** / official `dsh web`): use **1.1.40** or newer. This page installs that line.
+- **dsh 0.2** (official desktop **0.2.1-rc.2** / official `dsh web`): use **1.1.73** or newer. This page installs that line.
 - **dsh 0.1.7** (incl. rc.1 / rc.2): use **1.1.39** or older — pick the tag on [Releases](https://github.com/YuJunZhiXue/dsh-purge/releases).
 
 Unmatched patches stay pending or skipped; nothing is rewritten blindly.
+
+### The 0.2.1-rc.2 subagent convention (red-team mode)
+
+The kernel changed how subagents get their tools: a subagent's tool set comes **only from the Agent Preset it
+names** (without a name it inherits the parent's composition), and `toolFilter` / `persona` are gone from the
+request (the model-facing `subagent` tool answers "no longer supported"). The leaf constraint is therefore
+enforced by the kernel now: the plugin ships a second preset, **红队执行角色（子代理）** (`redteam-worker`),
+whose composition has no `subagent` / `subagent_fork` / `workflow` / `ralph`. Every delegated child lands on it,
+so the model cannot even see a delegation tool. If that preset cannot be resolved, the `subagent` tool fails to
+install — better no subagent than a child that inherits the parent's tools.
 
 ---
 
