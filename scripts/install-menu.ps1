@@ -25,20 +25,25 @@
   install, uninstall, or status.
 
 .PARAMETER Port
-  The `dsh web` port passed to the verb host.
+  The host port baked into the verb. 0 (the default) asks the launcher what it
+  resolves right now: the DSH Desktop port (19387) when a Desktop app is
+  installed, otherwise the `dsh web` port (3080). Pass a number to pin it.
+
+.PARAMETER App
+  The Desktop app baked into the verb: an .exe, a .lnk, or the `dsh://open` URI
+  the shell registers. Empty (the default) resolves it the same way — the
+  launcher's own auto-detection — and stores the result, so a click never has to
+  guess. The launcher re-resolves by itself if that path later disappears.
 
 .PARAMETER VerbText
   The menu label.
-
-.PARAMETER AppShortcut
-  Optional .lnk to launch when the right-click arrives with no DSH page open.
 #>
 [CmdletBinding()]
 param(
   [ValidateSet('install', 'uninstall', 'status')][string]$Action = 'install',
-  [int]$Port = 3080,
+  [int]$Port = 0,
   [string]$VerbText = '通过 DSH 打开',
-  [string]$AppShortcut = ''
+  [string]$App = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -147,6 +152,17 @@ if ($Action -eq 'status') {
       Write-Output "$key`n  (not registered)"
     }
   }
+  # What a click would do *now*: the registered command line is a snapshot, and
+  # the interesting failures (host moved, app uninstalled, app not running) only
+  # show up against the live machine.
+  if (Test-Path -LiteralPath $launcher) {
+    $probe = (& $launcher -Probe) | ConvertFrom-Json
+    Write-Output ''
+    Write-Output 'resolved now:'
+    Write-Output "  mode:    $($probe.mode)"
+    Write-Output "  port:    $($probe.port)   (host answering: $($probe.host), pages following: $($probe.clients))"
+    Write-Output "  app:     $(if ($probe.app -eq '') { '(none - browser fallback)' } else { $probe.app })"
+  }
   exit 0
 }
 
@@ -167,11 +183,21 @@ New-MenuIcon $iconPath
 # console application, always gets one created before it can hide it — that
 # late hide is the flicker. The verb host passes the folder through the process
 # environment, which is also why no path ever appears on this command line.
+#
+# Port and app are resolved by asking the launcher itself (`-Probe` announces
+# nothing and launches nothing), so there is exactly one implementation of
+# "which host is this machine running" in the repository — the one that runs on
+# every click. The resolved values are then stored, so a click does not depend
+# on detection succeeding twice.
+$resolution = (& $launcher -Probe -Port $Port -App $App) | ConvertFrom-Json
+$verbPort = [int]$resolution.port
+$verbApp = [string]$resolution.app
+
 $appArg = ''
-if (-not [string]::IsNullOrWhiteSpace($AppShortcut)) {
-  $appArg = ' "{0}"' -f $AppShortcut
+if (-not [string]::IsNullOrWhiteSpace($verbApp)) {
+  $appArg = ' "{0}"' -f $verbApp
 }
-$command = '"{0}" //nologo "{1}" "%V" {2}{3}' -f $wscript, $verbHost, $Port, $appArg
+$command = '"{0}" //nologo "{1}" "%V" {2}{3}' -f $wscript, $verbHost, $verbPort, $appArg
 
 Set-Verb $verbKeys[0] $VerbText $iconPath $command ''
 # No `Position` either: the Windows 11 menus order their own entries, and the
@@ -182,7 +208,12 @@ Write-Output "registered '$VerbText' on:"
 Write-Output "  $($verbKeys[0])   (right-click a folder)"
 Write-Output "  $($verbKeys[1])   (right-click inside a folder)"
 Write-Output "  host:        $wscript -> $verbHost   (no console window)"
-Write-Output "  port:        $Port"
+Write-Output "  target:      $($resolution.mode) host, port $verbPort"
+if ($verbApp -ne '') {
+  Write-Output "  app:         $verbApp   (cold start + window raise)"
+} else {
+  Write-Output '  app:         (none found - a cold start opens the Web URL in the browser)'
+}
 if (Test-Path -LiteralPath $iconPath) { Write-Output "  icon:        $iconPath" }
 Write-Output ''
 Write-Output 'Windows 11: restart Explorer (or sign out and back in) once so the'

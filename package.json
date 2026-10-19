@@ -1,6 +1,6 @@
 {
   "name": "dsh-open-in-dsh",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "在 Windows 资源管理器里右键文件夹（或文件夹空白处）→「通过 DSH 打开」：DSH 把该目录作为工作区切入，并新建一个空白会话。Explorer context-menu entry that opens a folder as a DSH workspace with a blank session.",
   "type": "module",
@@ -28,7 +28,7 @@
   ],
   "scripts": {
     "build": "node scripts/build-client.mjs",
-    "test": "node --check lib/index.js && node --check lib/client.js && node --test test/host.test.mjs test/routes.test.mjs"
+    "test": "node --check lib/index.js && node --check lib/client.js && node --test test/host.test.mjs test/routes.test.mjs test/scripts.test.mjs"
   },
   "engines": {
     "node": ">=20"

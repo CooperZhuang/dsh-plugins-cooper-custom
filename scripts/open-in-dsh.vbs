@@ -13,8 +13,9 @@
 ' trailing separator (`D:\`) are just characters in an environment value, and
 ' nothing has to survive being re-quoted by the shell or by PowerShell.
 '
-' Arguments: 0 = folder (Explorer substitutes %V), 1 = port, 2 = optional .lnk
-' to launch when DSH is not open.
+' Arguments: 0 = folder (Explorer substitutes %V), 1 = port, 2 = the DSH Desktop
+' app to start and raise (.exe, .lnk, or the dsh://open URI). Absent values fall
+' back to the launcher's own resolution: DSH_OPEN_PORT and DSH_OPEN_APP.
 '
 ' This file is deliberately static — it resolves the interpreter itself, so the
 ' installer never has to generate or patch it.
@@ -34,7 +35,10 @@ If Len(Trim(path)) = 0 Then WScript.Quit 0
 script = fso.GetParentFolderName(WScript.ScriptFullName) & "\open-in-dsh.ps1"
 If Not fso.FileExists(script) Then WScript.Quit 1
 
-port = "3080"
+' The Desktop shell's own port (dsh-desktop-host starts the profile with
+' `--port 19387`). Kept in step with $DesktopPort in open-in-dsh.ps1 and with
+' the installer by test/scripts.test.mjs.
+port = "19387"
 If args.Count >= 2 Then
   If IsNumeric(args(1)) Then port = Trim(args(1))
 End If
