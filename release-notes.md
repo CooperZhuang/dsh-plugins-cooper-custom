@@ -1,3 +1,115 @@
+# 1.1.74
+
+## 中文
+
+- 版本 **1.1.74**。这一版只取上游（YuJunZhiXue/dsh-purge）的**行为**，不取它的代码：上游
+  10-19 起转商业许可且 10-27 起闭源，master 上最后两个功能 commit（e1d8e59 / 0a04bee）
+  从未以 MIT 授权发布过（不在任何 tag 里）。改法按上游的**修复意图**重写，落到本地 rc.2
+  适配树上。
+- **用户改过的提示词不会再被加密槽覆盖**（这一版最要紧的一处）。原来的判定把「带插件默认
+  血统的稿」当插件默认丢掉，而那三处标记（`<|im_start|>system:` / `<project_instructions>` /
+  `Little Code Sauce`）本来就出自默认稿——用户在自己稿里保留它们是常态，一改就丢。现在：
+  状态里加 `explicitSave` 位（点保存 = 显式用户动作，永久保留）；判定顺序改成
+  「空 → 就是当前槽 → 命中 seedHash → 命中自己写的 hash → explicitSave → 其余都算用户稿」；
+  `installOverride` / `commitOverrideOnApply` 统一走同一套判定，不再各写一份。
+  实测：点应用（UI 空 / 带内容）、框里保存、启动同步、`installOverride` 连调两次——七条路径
+  全部保留用户稿。
+- **停用/卸载不再让 DSH 起不来**。宿主 `resolve()` 对未知预设是硬抛、不回退 `config.default`：
+  `selectedDefault` 还指着 `redteam` 时，停用插件后宿主直接起不来。新增
+  `lib/preset-default.js`：停用时（插件 dispose / 演练台 disposer）清掉运行期 registry 配置，
+  卸载时额外清各 profile 的 `cordis.patch.yml` 里那一行并删掉残留的预设目录。
+- **打包桌面不再被改 `bin.js`**。官方/社区桌面不靠改 `bin.js` 启动（Electron 走自己的入口），
+  往里写注入是白改，还可能让桌面起不来。现在判出打包桌面就跳过改写，并把先前写进去的撤掉。
+- **子代理会话一建出来就挂上与父会话同一条 assemble**。原来靠 400ms 轮询兜底，新对话的第一次
+  assemble 可能就跑在钩子挂上之前，那一轮注入会塌。现在在 `session/created` 里对
+  `origin === "subagent"` 的会话当场挂上。
+- 注入正文取用顺序改成 **磁盘 `prompt-inject.md` > 框内提交 > 加密槽**：运行中手改磁盘文件
+  立刻生效，不必等插件重启。
+- **补丁现在真的打得到在跑的宿主上了**（这一版第二要紧的一处）。之前文件级补丁对本机
+  运行的 DSH Desktop Beta 覆盖率是 **0**：宿主定位完全落空。三处原因，全部修掉：
+  - 宿主可执行名认不出来。检测层只认精确的 `dsh desktop`，而社区桌面按渠道发版，实际是
+    `DSH Desktop Beta`，跑内核的 Electron 进程更是 `DSH Desktop Beta Helper`（在
+    `Contents/Frameworks/` 里的 Helper 包内，不在 app 包根）。于是 `detectSurface()` 把
+    桌面宿主判成 `web`，宿主定位转而去认旁边那份官方 DeepSeek Harness。现在按「名族」认：
+    `dsh desktop` 前缀后面跟什么都行（官方 `deepseek harness` 那族仍单独判，两条线不混）。
+  - 外层 app 包没被扫。Electron 的 utility 进程 exe 在 Framework 内，内核树在**外层 app
+    包**的 `Contents/Resources/app` 下。现在沿路径把每一层 `.app` 包都纳入候选。
+  - `/Applications` 里的 `.app` 发现按固定名列目录，写死 `DSH Desktop.app` 就漏掉 Beta
+    版。现在按名族扫 `/Applications` 一层（不做全盘扫描）。
+  - 顺带修了一个会指错宿主的坑：DSH_HOME 的同级常有 `.dsh.backup-*` 历史快照，里面存着
+    旧宿主树的软链；兜底递归扫描会扫进去，把「备份里的软链」当成当前宿主（界面显示的宿主
+    路径停在备份目录上）。现在备份/归档类目录一律不下钻。
+  - 实测：干净 Beta 树从「pending 60 / applied 6」变成 **applied 64**（与官方版解开副本
+    持平），39 个文件带 `[dsh-purge]` 标记；宿主重启后随新进程加载，注入针脚确认在
+    `dsh-agent-loop` 的 `step()` 里生效。
+- 没有跟上游一起搬的（有意为之）：patch 89/90/91（rc.2 宿主自己已经把系统提示词搬进原生
+  system 槽：`dsh-llm-pi-ai` 的 `splitSystemPrompt` → pi-ai `normalizeContext` → provider 原生
+  槽），上游删掉的 `escapeDshInterpolation`（rc.2 仍会对 section 做插值，删了会让 `{{...}}`
+  报错），上游删掉的 `redteam-worker` 叶子预设（rc.2 适配必须留），上游的 steer 语义反转
+  （本地压成 followup 是为消竞态），上游的 rewind 官方 fork 重写（照 0.2.0 API 写的）。
+
+## English
+
+- **1.1.74**. This release takes upstream's (YuJunZhiXue/dsh-purge) **behavior**, not its code:
+  upstream switched to a commercial license on 2026-10-19 and goes closed-source on 2026-10-27, and
+  its last two functional commits (e1d8e59 / 0a04bee) were never published under MIT (they are in
+  no tag). The fixes are rewritten from upstream's intent onto the local rc.2 adaptation.
+- **A prompt you edited is no longer overwritten by the sealed slot** (the important one). The old
+  check discarded any text carrying the plugin-default marks — but those marks
+  (`<|im_start|>system:` / `<project_instructions>` / `Little Code Sauce`) come from the default
+  draft, so keeping them in your own draft is normal and losing it was the norm. Now: the state
+  carries an `explicitSave` bit (pressing save is an explicit user action, kept forever); the check
+  order is "empty → exactly the current slot → matches seedHash → matches our own hash →
+  explicitSave → everything else is the user's"; `installOverride` and `commitOverrideOnApply` now
+  share one decision instead of two. Verified: apply (empty / with content), save, boot sync, and
+  `installOverride` called twice — all seven paths keep the user's text.
+- **Disabling or uninstalling no longer stops DSH from starting.** The host's `resolve()` throws on
+  an unknown preset and does not fall back to `config.default`: with `selectedDefault` still
+  pointing at `redteam`, the host fails to boot once the plugin is disabled. New
+  `lib/preset-default.js`: the live registry config is cleared on disable (plugin dispose /
+  red-team disposer), and uninstall additionally repairs the `selectedDefault` line in each
+  profile's `cordis.patch.yml` and removes the leftover preset directory.
+- **Packaged desktops are no longer patched into `bin.js`.** Official and community desktops do
+  not start by way of `bin.js` (Electron uses its own entry), so writing an injection there is
+  pointless and can keep the desktop from starting. A packaged desktop is now detected, skipped,
+  and any earlier injection is reverted.
+- **A subagent session gets the parent's assemble hook the moment it is created.** The 400ms
+  polling fallback can miss a new conversation's first assemble, and that turn loses the
+  injection. Sessions with `origin === "subagent"` are now hooked in `session/created`.
+- The injected text is now resolved as **disk `prompt-inject.md` > box submission > sealed slot**:
+  editing the file while running takes effect immediately, without waiting for a plugin restart.
+- **The file-level patches now actually reach the host that is running** (the second important one).
+  Coverage on the live DSH Desktop Beta was **0**: host resolution missed entirely. Three causes,
+  all fixed:
+  - The host executable name was not recognized. The detection layer only matched an exact
+    `dsh desktop`, but the community desktop ships per channel: the app is `DSH Desktop Beta`,
+    and the Electron process that actually runs the kernel is `DSH Desktop Beta Helper` (inside
+    `Contents/Frameworks/`, not at the app root). So `detectSurface()` classified a desktop host
+    as `web`, and host resolution went looking for the official DeepSeek Harness next to it. The
+    name is now matched as a family: anything after the `dsh desktop` prefix is accepted (the
+    official `deepseek harness` family stays separate — the two lines must not mix).
+  - The outer app bundle was never scanned. An Electron utility process has its exe inside the
+    Framework, while the kernel tree lives in the **outer** app bundle's
+    `Contents/Resources/app`. Every `.app` bundle along the path is now a candidate.
+  - `/Applications` discovery listed fixed names, so `DSH Desktop.app` was all that matched and
+    the Beta build was missed. `/Applications` is now scanned by name family (one level, no
+    full-disk scan).
+  - Also fixed a bug that pointed at the wrong host: siblings of `DSH_HOME` often hold
+    `.dsh.backup-*` snapshots containing symlinks to the old host tree; the recursive fallback
+    scan walked into them and took "the symlink inside the backup" for the current host (the
+    displayed host path then stopped inside the backup directory). Backup/archive directories are
+    now never descended into.
+  - Measured: a clean Beta tree went from "pending 60 / applied 6" to **applied 64** (on par with
+    the official unpacked copy), 39 files carry the `[dsh-purge]` marker, and after the host
+    restarted the injection needle is confirmed live in `dsh-agent-loop`'s `step()`.
+- Deliberately not taken from upstream: patches 89/90/91 (the rc.2 host already moves the system
+  prompt into a native slot on its own — `splitSystemPrompt` in `dsh-llm-pi-ai` → pi-ai
+  `normalizeContext` → the provider's native slot), upstream's removal of
+  `escapeDshInterpolation` (rc.2 still interpolates sections, so removing it makes `{{...}}`
+  throw), upstream's removal of the `redteam-worker` leaf preset (the rc.2 adaptation needs it),
+  upstream's steer-semantics reversal (the local followup-only rule removes a race), and
+  upstream's rewind official-fork rewrite (written against the 0.2.0 API).
+
 # 1.1.73
 
 ## 中文
