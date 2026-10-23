@@ -127,22 +127,40 @@ function fitDisplay(value, width) {
   return padDisplay(out + '…', width)
 }
 
-/** Wrap text to a display width without breaking CJK characters. */
+/** Wrap text to a display width, preferring word breaks for Latin text. */
 function wrapDisplay(value, width) {
+  const tokens = value.match(/[A-Za-z0-9_@.\/:;%#?=&+\-]+|\s+|./gu) ?? []
   const lines = []
   let line = ''
   let used = 0
-  for (const char of value) {
-    const next = used + charWidth(char)
-    if (next > width && line.length > 0) {
-      lines.push(line)
-      line = ''
-      used = 0
-    }
-    line += char
-    used += charWidth(char)
+  const flush = () => {
+    lines.push(line.trimEnd())
+    line = ''
+    used = 0
   }
-  if (line.length > 0) lines.push(line)
+  for (const token of tokens) {
+    const tokenWidth = displayWidth(token)
+    if (used + tokenWidth > width && used > 0) flush()
+    if (/^\s+$/u.test(token)) {
+      if (used > 0) {
+        line += token
+        used += tokenWidth
+      }
+      continue
+    }
+    if (tokenWidth > width) {
+      for (const char of token) {
+        const next = used + charWidth(char)
+        if (next > width && used > 0) flush()
+        line += char
+        used += charWidth(char)
+      }
+      continue
+    }
+    line += token
+    used += tokenWidth
+  }
+  if (line.length > 0) flush()
   return lines
 }
 
@@ -550,7 +568,7 @@ function parseMatcher(spec) {
     }
   }
   const needle = spec.toLowerCase()
-  return { kind: 'substring', label: '"' + spec + '" (substring)', test: (text) => text.toLowerCase().includes(needle) }
+  return { kind: 'substring', label: '"' + spec + '"', test: (text) => text.toLowerCase().includes(needle) }
 }
 
 function matchesEntry(entry, matcher) {
@@ -758,7 +776,10 @@ function groupDestinations(group, catalog) {
       if (score.score >= 3) evidence += 1
     }
     const nameMatch = group.re.test(scope.slug) || group.re.test(scope.name) || group.re.test(scope.root)
-    if (evidence > 0 || nameMatch) destinations.push({ slug: scope.slug, evidence, nameMatch, root: scope.root })
+    // A slug/name match is enough to name a destination, but textual evidence
+    // needs three project entries before it counts: one or two body mentions are
+    // usually incidental (health-report entries mention iPhone, for example).
+    if (evidence >= 3 || nameMatch) destinations.push({ slug: scope.slug, evidence, nameMatch, root: scope.root })
   }
   destinations.sort((left, right) => right.evidence - left.evidence
     || Number(right.nameMatch) - Number(left.nameMatch)
@@ -867,7 +888,8 @@ function commandCandidates(options) {
     console.log('      dest hints: ' + formatDestinations(destinations))
     console.log('      match: --match ' + shellQuote(group.re.source))
     if (group.note !== undefined) {
-      for (const line of wrapDisplay(group.note, width - 8)) console.log('      note: ' + line)
+      const noteLines = wrapDisplay(group.note, width - 8)
+      noteLines.forEach((line, index) => console.log(index === 0 ? '      note: ' + line : '            ' + line))
     }
     if (showEntries) {
       const sample = (classified.get(group.label) ?? []).slice(0, 5)
@@ -894,7 +916,8 @@ function commandCandidates(options) {
     const count = counts.get(group.label) ?? 0
     console.log('\n  ' + padDisplay(group.label, labelWidth) + String(count).padStart(4))
     if (group.note !== undefined) {
-      for (const line of wrapDisplay(group.note, width - 8)) console.log('      note: ' + line)
+      const noteLines = wrapDisplay(group.note, width - 8)
+      noteLines.forEach((line, index) => console.log(index === 0 ? '      note: ' + line : '            ' + line))
     }
   }
 
@@ -960,7 +983,9 @@ function destinationHintsForEntries(matched, catalog) {
   const groups = new Map()
   for (const entry of matched) {
     const assignment = classifyEntry(entry)
-    if (assignment === undefined) continue
+    // Platform/system groups are "keep global" proposals; their destination
+    // hints would point at unrelated projects, so only project groups count.
+    if (assignment === undefined || assignment.group.kind !== 'project') continue
     groups.set(assignment.group.label, (groups.get(assignment.group.label) ?? 0) + 1)
   }
   const hints = []
@@ -994,6 +1019,16 @@ function commandMatch(options, { applying }) {
   console.log('')
   if (matched.length > 0) {
     printDryRunTable(matched)
+    const bodyOnly = matched.filter((entry) => !matcher.test(entry.title)
+      && !matcher.test(entry.tags.join(' '))
+      && !matcher.test(entry.keys.join(' ')))
+    if (bodyOnly.length > 0) {
+      console.log('')
+      console.log('note: ' + bodyOnly.length + ' of these matched only in the body (not title/tags/keys), so they are')
+      console.log('      weaker migration candidates; review them before applying:')
+      for (const entry of bodyOnly.slice(0, 8)) console.log('      - ' + entry.id)
+      if (bodyOnly.length > 8) console.log('      ... +' + (bodyOnly.length - 8) + ' more')
+    }
   } else {
     console.log('  (no global entry matched)')
   }
@@ -1003,9 +1038,15 @@ function commandMatch(options, { applying }) {
     console.log('proposed destination: ' + destination.dir)
     console.log('  scope exists: yes' + (destination.root.length > 0 ? '   (project root: ' + destination.root + ')' : '') + '   name: ' + destination.name)
   } else {
-    console.log('proposed destination: (none — --to <slug> is required with --apply; no destination is guessed)')
     const catalog = loadProjectCatalog(store)
     const hints = destinationHintsForEntries(matched, catalog)
+    const destinationSlugs = [...new Set(hints.flatMap((hint) => hint.destinations.map((destination) => destination.slug)))]
+    if (destinationSlugs.length === 1) {
+      const slug = destinationSlugs[0]
+      console.log('proposed destination: ' + join(store, 'projects', slug) + '  (informational; pass --to ' + slug + ' to confirm)')
+    } else {
+      console.log('proposed destination: (none — --to <slug> is required with --apply; no destination is guessed)')
+    }
     if (hints.length > 0) {
       for (const hint of hints.slice(0, 4)) {
         console.log('  hint: ' + hint.group.label + ' (' + hint.count + ' matched) -> ' + formatDestinations(hint.destinations))
@@ -1027,6 +1068,10 @@ function commandMatch(options, { applying }) {
     console.log('  id conflicts       : ' + conflicts.length + (conflicts.length > 0 ? ' (already at destination; --apply will refuse these)' : ''))
     for (const entry of conflicts.slice(0, 10)) console.log('    - ' + entry.id)
     if (conflicts.length > 10) console.log('    ... +' + (conflicts.length - 10) + ' more')
+    console.log('  would move         : ' + (matched.length - conflicts.length) + (conflicts.length > 0 ? ' (would refuse: ' + conflicts.length + ')' : ''))
+  } else {
+    console.log('  destination scope  : (none selected — --to is required for --apply)')
+    console.log('  would move         : ' + matched.length + ' if a destination were selected')
   }
 
   printRuntimeWarning(applying)
