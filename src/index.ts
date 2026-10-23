@@ -50,8 +50,8 @@ import { MemoryLog, createFileSink, createLogExporter, pluginLogger } from './lo
 import { collectWindow, resolveLlmRoute, runExtraction } from './extract.js'
 import type { ExtractionRoute } from './extract.js'
 import { backgroundDelayMs, cappedBackoffMs, extractionDelayMs, formatDelay, parsePeakHours, peakDelayMs } from './schedule.js'
-import { CONSOLIDATE_PRESET_ID, applyPlan, classifyPlan, clearPendingPlan, denyToolsFor, mergePendingPlan, proposalIsFresh, readPendingPlan, runConsolidation, runConsolidationDirect, selectForConsolidation, writePendingPlan } from './consolidate.js'
-import type { ConsolidationDispute } from './consolidate.js'
+import { CONSOLIDATE_PRESET_ID, adjudicateDisputes, applyPlan, applyVerdicts, classifyPlan, clearPendingPlan, denyToolsFor, mergePendingPlan, proposalIsFresh, readPendingPlan, runConsolidation, runConsolidationDirect, selectForConsolidation, writePendingPlan } from './consolidate.js'
+import type { ConsolidateRequest, ConsolidationDispute, DisputeVerdict } from './consolidate.js'
 import { discardDraft, listDrafts, promote, writeDraft } from './skills.js'
 import type { ConsolidationPlan, ConsolidationTarget, SubagentSeam } from './consolidate.js'
 import { MEMORY_KINDS, MEMORY_SOURCE_KIND } from './types.js'
@@ -2232,8 +2232,16 @@ export class MemoriesRuntime {
       // the memory a session used, rewriting what a person typed, moving a fact
       // between scopes, or dropping the paths that made a body checkable are not
       // — those wait for a person, and they are the only thing that waits.
-      const { safe, disputes } = classifyPlan(plan, { entries })
-      const result = await applyPlan(safe, this.consolidationTarget(), root, { entries })
+      const { safe: classified, disputes: flagged } = classifyPlan(plan, { entries })
+      // A mutable copy the adjudicator may fold accepted verdicts into; the
+      // classified plan itself is readonly on purpose.
+      const safe = { upserts: [...classified.upserts], retire: [...classified.retire] }
+      // The classified plan is deterministic; what it cannot judge is whether a
+      // rewrite kept the meaning. That question goes to one tool-free child, and
+      // only for the items that are a judgement rather than a promise — see
+      // `decideFlagged`.
+      const disputes = await this.decideFlagged(parent, plan, safe, flagged, entries, root)
+      const result = await applyPlan({ ...classified, upserts: safe.upserts, retire: safe.retire }, this.consolidationTarget(), root, { entries })
       // Record the review, so the next pass starts from whatever has waited
       // longest instead of from the same newest page again.
       this.state.markConsolidated(entries.map((entry) => ({ scope: entry.scope, id: entry.id })))
@@ -2317,6 +2325,84 @@ export class MemoriesRuntime {
    * @param root - the workspace root whose project scope is in scope.
    * @returns the plan, or `undefined` when no route produced one.
    */
+  /**
+   * Adjudicate the flagged changes, when a person is not the right answer.
+   *
+   * The determinism this replaces was not neutral: on a real store every proposal
+   * waited on the panel because the entry had been read once, and the panel is
+   * only answered when somebody remembers it exists — an unanswered question goes
+   * stale and gets dropped. "Keep both copies" is the safe outcome for an AI that
+   * is unsure, and it is exactly the outcome of a re-read.
+   *
+   * Hard stops are filtered out here and never reach the child: permanence,
+   * a person's own words, and a scope move are promises, not judgements.
+   *
+   * @param parent - the agent whose seam runs the child.
+   * @param plan - the pass's full plan, for the bodies a rewrite would apply.
+   * @param safe - cleared plan, mutated in place with accepted verdicts.
+   * @param flagged - every dispute the classifier raised.
+   * @param entries - the reviewed page, for the request.
+   * @param root - project scope this pass covers.
+   * @returns the disputes that still need a person.
+   */
+  private async decideFlagged(
+    parent: Agent,
+    plan: ConsolidationPlan,
+    safe: { upserts: ConsolidationPlan['upserts'][number][]; retire: string[] },
+    flagged: readonly ConsolidationDispute[],
+    entries: readonly MemoryEntry[],
+    root: string | undefined,
+  ): Promise<readonly ConsolidationDispute[]> {
+    if (flagged.length === 0) return flagged
+    if (!this.settings.autoDecide) return flagged
+    const adjudicable = flagged.filter((dispute) => dispute.hard !== true)
+    if (adjudicable.length === 0) {
+      this.log.decision('dsh-memories: %d decision(s) are promises (permanent / written by a person / scope move), so they wait for a person', flagged.length)
+      return flagged
+    }
+    if (this.backgroundPaused()) {
+      this.log.decision('dsh-memories: auto-decide skipped, background passes are paused by a quota cooldown')
+      return flagged
+    }
+    const seam = this.subagents
+    if (seam === undefined || typeof seam.startActivation !== 'function' || !this.consolidatePresetReady) {
+      // Adjudication needs the same tool-free child the pass uses; without it the
+      // honest answer is "still a question", not a guessed decision.
+      this.log.decision('dsh-memories: auto-decide needs the tool-free child, so %d decision(s) wait for a person', adjudicable.length)
+      return flagged
+    }
+    const request: ConsolidateRequest = {
+      parent,
+      ...consolidationRouteOf(this.settings),
+      entries,
+      projectLabel: root === undefined ? NO_PROJECT_LABEL : this.store.target('project', root).label,
+      maxUpserts: this.settings.consolidateMaxEntries,
+      denyTools: denyToolsFor(new Set((this.ctx.get('tools')?.schemas() ?? []).map((schema) => schema.name))),
+      timeoutMs: this.settings.consolidateTimeoutMs,
+      maxOutputTokens: this.settings.extractMaxOutputTokens,
+      signal: this.lifecycle.signal,
+      agentPreset: CONSOLIDATE_PRESET_ID,
+    }
+    const verdicts = await adjudicateDisputes(seam, request, adjudicable)
+      .catch((error: unknown) => {
+        this.log.warn('dsh-memories: auto-decide failed, every decision stays with a person: %s',
+          error instanceof Error ? error.message : String(error))
+        return []
+      })
+    const remaining = applyVerdicts(safe, plan, flagged, verdicts, this.settings.autoDecideMinConfidence)
+    const byId = new Map(verdicts.map((verdict) => [verdict.id, verdict]))
+    for (const dispute of flagged) {
+      const verdict: DisputeVerdict | undefined = byId.get(dispute.id)
+      if (verdict === undefined) continue
+      this.log.info('dsh-memories: auto-decide %s %s/%s (confidence %.2f): %s',
+        verdict.accept ? 'accepted' : 'rejected', dispute.scope, dispute.id, verdict.confidence, verdict.reason)
+    }
+    if (remaining.length > 0) {
+      this.log.info('dsh-memories: %d decision(s) still need a person after auto-decide', remaining.length)
+    }
+    return remaining
+  }
+
   private async runConsolidationPass(
     parent: Agent,
     entries: readonly MemoryEntry[],

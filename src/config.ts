@@ -365,6 +365,17 @@ export const Config = z.object({
   extractProvider: z.string().default('').description("Provider route for extraction. Empty reuses the session's own logged route.").volatile(),
   /** Explicit extraction model; empty reuses the session route. */
   extractModel: z.string().default('').description("Model for extraction. Empty reuses the session's own logged route.").volatile(),
+  /**
+   * Whether an AI may decide the consolidation questions that used to wait for a person.
+   *
+   * Every merge used to stop at the human panel as soon as an entry had been read
+   * once, which on a real store meant all nine proposals waited — and the panel is
+   * where automation can be added safely, because the alternative to a decision is
+   * not "safer", it is "nothing ever happens".
+   */
+  autoDecide: z.boolean().default(true).description('Let an AI adjudicate the consolidation changes that would otherwise wait for you: it is asked only whether the change loses information, and answers accept or reject with a confidence. Permanent and user-written memories, and any scope move, still wait for you. Off sends everything to the 待裁决 panel.').volatile(),
+  /** Confidence floor under which an AI verdict is treated as "no answer". */
+  autoDecideMinConfidence: z.number().default(0.7).description('Below this confidence an AI adjudication is ignored and the item stays in 待裁决. 0 accepts every verdict; 1 accepts none unless certain.').volatile(),
   /** Explicit consolidation provider route; empty falls back to the extraction route. */
   consolidateProvider: z.string().default('').description('Provider route for consolidation. Empty falls back to the extraction route, then the session route.').volatile(),
   /** Explicit consolidation model; empty falls back to the extraction route. */
@@ -433,6 +444,10 @@ export interface MemoriesSettings {
   pauseOnQuotaError: boolean
   quotaCooldownMinutes: number
   quotaCooldownMaxMinutes: number
+  /** Whether an AI may adjudicate what would otherwise wait for a person. */
+  autoDecide: boolean
+  /** Confidence floor under which an AI verdict counts as no answer. */
+  autoDecideMinConfidence: number
   /** Model routes for the plugin's own calls; empty reuses the session's route. */
   extractProvider: string
   extractModel: string
@@ -489,6 +504,8 @@ export const MEMORIES_SETTINGS_DEFAULTS: MemoriesSettings = {
   consolidateProposalMaxAgeHours: DEFAULT_CONSOLIDATE_PROPOSAL_MAX_AGE_HOURS,
   consolidateMaxEntries: DEFAULT_CONSOLIDATE_MAX_ENTRIES,
   consolidateTimeoutMs: DEFAULT_CONSOLIDATE_TIMEOUT_MS,
+  autoDecide: true,
+  autoDecideMinConfidence: 0.7,
   pauseOnQuotaError: true,
   quotaCooldownMinutes: DEFAULT_QUOTA_COOLDOWN_MINUTES,
   quotaCooldownMaxMinutes: DEFAULT_QUOTA_COOLDOWN_MAX_MINUTES,
@@ -629,6 +646,8 @@ export function normalizeSettings(input: Partial<MemoriesSettings> | undefined):
     consolidateProposalMaxAgeHours: decimal(value.consolidateProposalMaxAgeHours, DEFAULT_CONSOLIDATE_PROPOSAL_MAX_AGE_HOURS, 0),
     consolidateMaxEntries: positive(value.consolidateMaxEntries, DEFAULT_CONSOLIDATE_MAX_ENTRIES),
     consolidateTimeoutMs: positive(value.consolidateTimeoutMs, DEFAULT_CONSOLIDATE_TIMEOUT_MS),
+    autoDecide: value.autoDecide ?? true,
+    autoDecideMinConfidence: clampUnit(value.autoDecideMinConfidence, 0.7),
     pauseOnQuotaError: value.pauseOnQuotaError ?? true,
     quotaCooldownMinutes: positive(value.quotaCooldownMinutes, DEFAULT_QUOTA_COOLDOWN_MINUTES, 0),
     quotaCooldownMaxMinutes: positive(value.quotaCooldownMaxMinutes, DEFAULT_QUOTA_COOLDOWN_MAX_MINUTES, 0),

@@ -20,6 +20,7 @@ import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { carriesForward } from './storage.js'
 import { toMemoryKind } from './types.js'
 import { MEMORY_SOURCE_KIND } from './types.js'
 import type { MemoryEntry, MemoryDraft, MemoryKind, MemoryScope } from './types.js'
@@ -456,6 +457,7 @@ export function buildActivationSpec(
   request: ConsolidateRequest,
   prompt: { type: 'text'; text: string }[],
   timeout: AbortSignal,
+  outputSchema: unknown = CONSOLIDATE_JSON_SCHEMA,
 ): ActivationSpec {
   const agentOptions = request.provider !== undefined && request.model !== undefined
     ? { provider: request.provider, model: request.model }
@@ -474,7 +476,7 @@ export function buildActivationSpec(
       parent: request.parent,
       signal: timeout,
       ...agentOptions !== undefined ? { agentOptions } : {},
-      outputSchema: CONSOLIDATE_JSON_SCHEMA,
+      outputSchema,
       // The child may not delegate further: it returns a plan, nothing else.
       //
       // `maxDepth` is the cap on the CHILD's depth, and DSH counts depth from
@@ -505,12 +507,13 @@ async function runChild(
   prompt: { type: 'text'; text: string }[],
   request: ConsolidateRequest,
   timeout: AbortSignal,
+  outputSchema: unknown = CONSOLIDATE_JSON_SCHEMA,
 ): Promise<string | undefined> {
   const agentOptions = request.provider !== undefined && request.model !== undefined
     ? { provider: request.provider, model: request.model }
     : undefined
   if (typeof seam.startActivation === 'function' && request.agentPreset !== undefined) {
-    const run = await seam.startActivation(buildActivationSpec(request, prompt, timeout))
+    const run = await seam.startActivation(buildActivationSpec(request, prompt, timeout, outputSchema))
     return textOf(await run.result)
   }
   if (typeof seam.start === 'function') {
@@ -519,7 +522,7 @@ async function runChild(
       parent: request.parent,
       signal: timeout,
       ...agentOptions !== undefined ? { agentOptions } : {},
-      outputSchema: CONSOLIDATE_JSON_SCHEMA,
+      outputSchema,
       maxDepth: 1,
       // The child may not write anything and may not reach the network: its
       // only output is the JSON plan it returns.
@@ -665,6 +668,25 @@ export interface ConsolidationDispute {
   readonly before: string
   /** What the pass wants it to say; empty for a retirement. */
   readonly after: string
+  /**
+   * True when no automatic decision may be taken: a person wrote or pinned it, or
+   * the change moves it between scopes. Everything else may be adjudicated.
+   *
+   * These are the four promises the plugin makes to its owner, so the whole
+   * "automate the rest" design stops here: an AI may decide whether a merge lost
+   * information, it may not decide that a rule somebody pinned no longer applies.
+   */
+  readonly hard?: boolean
+}
+
+/**
+ * Whether one dispute reason is a promise rather than a judgement.
+ *
+ * The reason strings are the plan's vocabulary, so this reads them the way the
+ * panel does. Kept next to {@link classifyPlan} so the two lists cannot drift.
+ */
+function isHardStopReason(reason: string): boolean {
+  return reason.includes('人手写') || reason.includes('置顶') || reason.includes('永久保留') || reason.includes('作用域')
 }
 
 /** Paths a body cites, as anchors that must survive a rewrite. */
@@ -737,6 +759,10 @@ export function classifyPlan(
       reason: reasons.join('；'),
       before: previous.body,
       after: item.body,
+      // Reordering the four flags: user/pinned/permanent/move are promises; a
+      // citation loss or a halved body is a judgement about information, which
+      // is exactly what an adjudicator can be trusted with.
+      ...reasons.some(isHardStopReason) ? { hard: true } : {},
     })
   }
   const safeRetire: string[] = []
@@ -747,8 +773,20 @@ export function classifyPlan(
     if (previous.source === 'user') reasons.push('这条是人手写的')
     if (previous.pinned === true) reasons.push('这条是置顶的')
     if (previous.permanent === true) reasons.push('这条标记为永久保留')
+    const hard = reasons.length > 0
+    // Tier 1, deterministic and free: if the plan itself folds this entry into a
+    // successor that provably carries its material, the retirement destroys
+    // nothing and "it was read N times" stops being a reason to ask a person.
+    // Nobody loses the content, which was the only thing the question protected.
+    if (!hard) {
+      const heir = plan.upserts.find((item) => item.derivedFrom?.includes(id))
+      if (heir !== undefined && carriesForward(previous, heir)) {
+        safeRetire.push(id)
+        continue
+      }
+    }
     if (previous.uses > 0) reasons.push(`它被读到过 ${previous.uses} 次`)
-    if (reasons.length === 0) {
+    if (!hard && reasons.length === 0) {
       safeRetire.push(id)
       continue
     }
@@ -760,6 +798,7 @@ export function classifyPlan(
       reason: reasons.join('；'),
       before: previous.body,
       after: '',
+      ...hard ? { hard: true } : {},
     })
   }
   return {
@@ -984,4 +1023,179 @@ export async function applyPlan(
     }
     throw error
   }
+}
+
+// ── 裁决层（AI 只回答「这次变更有没有丢信息」）──────────────────────────────
+
+/**
+ * The adjudicator's answer shape.
+ *
+ * One decision per dispute, keyed by id, plus a confidence the caller thresholds
+ * on. Deliberately no free-form field: an adjudicator that can explain itself in
+ * prose can also argue itself into a retire, and the only thing this layer is
+ * allowed to judge is whether information survives.
+ */
+export const ADJUDICATE_JSON_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['decisions'],
+  properties: {
+    decisions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'accept', 'confidence', 'reason'],
+        properties: {
+          id: { type: 'string' },
+          accept: { type: 'boolean' },
+          confidence: { type: 'number' },
+          reason: { type: 'string' },
+        },
+      },
+    },
+  },
+} as const
+
+/** What the adjudicator is asked to judge. */
+export const ADJUDICATE_SYSTEM = [
+  'You are the reviewer of a memory store. A merge pass proposed the changes below, and the plugin would not apply them without a second opinion.',
+  'Your only question for each item: does the proposed change keep everything a future reader needs? Facts, paths, numbers, commands, qualifiers, and the reason a rule exists must survive an ACCEPT. Anything dropped is gone — the old copy is archived, not read on demand.',
+  '',
+  'Rules:',
+  '- ACCEPT a rewrite only when the new body keeps every substantive fact of the old one, and the new body is not a vaguer restatement.',
+  '- ACCEPT a retirement only when the note says another memory now carries this content, and that is true of the text you were given.',
+  '- REJECT when you cannot see the replacement, or when the change narrows a rule (drops a condition, a scope, or a caveat).',
+  '- When unsure, REJECT with a low confidence. Nothing is lost by keeping both copies.',
+  '- Never accept a change because the entry was rarely read. Read counts are not evidence of value.',
+  '',
+  'Reply with JSON only: {"decisions":[{"id":string,"accept":boolean,"confidence":number,"reason":string}]}',
+  'confidence is 0..1. reason is one short sentence.',
+].join('\n')
+
+/**
+ * Render the disputes for the adjudicator.
+ * @param disputes - items the classifier would not apply on its own.
+ * @returns the document handed to the child.
+ */
+export function renderAdjudicationInput(disputes: readonly ConsolidationDispute[]): string {
+  const blocks = disputes.map((dispute) => [
+    `### ${dispute.id} (${dispute.action})`,
+    `title: ${dispute.title}`,
+    `flagged because: ${dispute.reason}`,
+    'BEFORE:',
+    dispute.before,
+    dispute.action === 'rewrite' ? 'AFTER:' : 'AFTER: (retired; no replacement text given here)',
+    dispute.action === 'rewrite' ? dispute.after : '',
+  ].join('\n'))
+  return blocks.join('\n\n')
+}
+
+/** One adjudicator answer. */
+export interface DisputeVerdict {
+  /** Entry the decision is about. */
+  readonly id: string
+  /** Whether the change may be applied. */
+  readonly accept: boolean
+  /** 0..1; the caller drops anything under its floor. */
+  readonly confidence: number
+  /** One short sentence, for the log and the pending panel. */
+  readonly reason: string
+}
+
+/**
+ * Ask a restricted child to adjudicate the disputes a person used to answer.
+ *
+ * Same seam, same preset and same fence as the consolidation pass itself, so the
+ * child still has no tools: it reads the two bodies and answers. Anything the
+ * child does not return, returns twice, or returns unparseably is treated as
+ * "no verdict" and stays with the human — this layer can only ever ADD an answer,
+ * never suppress a question.
+ *
+ * @param seam - the `ctx.subagents` service.
+ * @param request - route, preset, caps and the parent agent.
+ * @param disputes - items to adjudicate; hard stops must already be filtered out.
+ * @returns one verdict per answered id, possibly empty.
+ */
+export async function adjudicateDisputes(
+  seam: SubagentSeam,
+  request: ConsolidateRequest,
+  disputes: readonly ConsolidationDispute[],
+): Promise<readonly DisputeVerdict[]> {
+  if (disputes.length === 0) return []
+  const timeout = AbortSignal.any([request.signal, AbortSignal.timeout(request.timeoutMs)])
+  const prompt = [{ type: 'text' as const, text: `${ADJUDICATE_SYSTEM}\n\n---\n\n${renderAdjudicationInput(disputes)}` }]
+  const reply = await runChild(seam, prompt, request, timeout, ADJUDICATE_JSON_SCHEMA)
+  if (reply === undefined) return []
+  const trimmed = reply.trim().replace(/^```(?:json)?\s*/iu, '').replace(/```$/u, '').trim()
+  const start = trimmed.indexOf('{')
+  const end = trimmed.lastIndexOf('}')
+  if (start < 0 || end <= start) return []
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(trimmed.slice(start, end + 1))
+  } catch {
+    return []
+  }
+  if (typeof parsed !== 'object' || parsed === null) return []
+  const record0 = parsed as Record<string, unknown>
+  const rows = Array.isArray(record0['decisions']) ? record0['decisions'] : []
+  const known = new Set(disputes.map((dispute) => dispute.id))
+  const verdicts: DisputeVerdict[] = []
+  const seen = new Set<string>()
+  for (const row of rows) {
+    if (typeof row !== 'object' || row === null) continue
+    const record = row as Record<string, unknown>
+    const id = typeof record['id'] === 'string' ? record['id'] : undefined
+    if (id === undefined || !known.has(id) || seen.has(id)) continue
+    const accept = record['accept'] === true
+    const raw = typeof record['confidence'] === 'number' && Number.isFinite(record['confidence']) ? record['confidence'] : 0
+    seen.add(id)
+    verdicts.push({
+      id,
+      accept,
+      confidence: Math.max(0, Math.min(1, raw)),
+      reason: typeof record['reason'] === 'string' ? record['reason'].slice(0, 200) : '',
+    })
+  }
+  return verdicts
+}
+
+/**
+ * Fold adjudicator verdicts into the plan the caller is about to apply.
+ *
+ * Rejected items and items under the confidence floor are NOT left pending: a
+ * rejection is an answer ("do nothing"), and re-asking it every six hours would
+ * turn a decision into a queue. Only unanswered items stay with the human.
+ *
+ * @param safe - the plan the classifier already cleared; mutated in place.
+ * @param plan - the pass's full plan, for the upsert bodies a rewrite needs.
+ * @param disputes - items that were sent to the adjudicator.
+ * @param verdicts - what came back.
+ * @param minConfidence - floor below which a verdict is treated as no answer.
+ * @returns the disputes that still need a person.
+ */
+export function applyVerdicts(
+  safe: { upserts: ConsolidationPlan['upserts'][number][]; retire: string[] },
+  plan: ConsolidationPlan,
+  disputes: readonly ConsolidationDispute[],
+  verdicts: readonly DisputeVerdict[],
+  minConfidence: number,
+): readonly ConsolidationDispute[] {
+  const byId = new Map(verdicts.map((verdict) => [verdict.id, verdict]))
+  const answered = new Set<string>()
+  for (const dispute of disputes) {
+    const verdict = byId.get(dispute.id)
+    if (verdict === undefined || verdict.confidence < minConfidence) continue
+    answered.add(dispute.id)
+    if (!verdict.accept) continue
+    if (dispute.action === 'retire') {
+      if (!safe.retire.includes(dispute.id)) safe.retire.push(dispute.id)
+      continue
+    }
+    const item = plan.upserts.find((candidate) => candidate.id === dispute.id && candidate.scope === dispute.scope)
+    if (item === undefined) continue
+    if (!safe.upserts.includes(item)) safe.upserts.push(item)
+  }
+  return disputes.filter((dispute) => !answered.has(dispute.id))
 }
