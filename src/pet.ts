@@ -111,6 +111,11 @@ export async function say(
   // authenticated URL ends up inside the token value and the request is rejected.
   const url = new URL(`/dsh-pet-${target.routeId}/broadcast`, target.origin)
   url.searchParams.set('pet', target.petId)
+  // `surface` is REQUIRED and undocumented at the call site: without it the pet
+  // answers {"ok":false,"reason":"bad-request","message":"surface 必填：web /
+  // desktop / both / any"}. Measured by running the pet's own route handler in a
+  // stub cordis context (scripts/pet-probe.mjs) instead of restarting the host.
+  url.searchParams.set('surface', 'any')
   if (target.token !== undefined && target.token.length > 0) url.searchParams.set('token', target.token)
   try {
     const response = await fetchImpl(url.href, {
