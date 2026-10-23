@@ -45,6 +45,8 @@ import { admitNotice, dueNotices, pruneNotices, readNotices, withNotice, writeNo
 import { readPetId, say, systemNotification } from './pet.js'
 import type { PetTarget } from './pet.js'
 import { closeLoop, describeLoops, dueLoops, mergeLoops, pruneLoops, readLoops, withLoop, writeLoops } from './loops.js'
+import { gateNotices } from './gate.js'
+import type { GateCandidate } from './gate.js'
 import { parseTimeRange } from './time.js'
 import { isSubstantiveTurn } from './query.js'
 import { MEMORY_OPEN, rankForSummary, renderEntry, renderHit, renderMemorySummaryResult, renderRecall, renderScopeListing, selectForSummary } from './render.js'
@@ -1671,6 +1673,11 @@ export class MemoriesRuntime {
     }
     this.reportPass(counts, reasons)
     await this.sweepIfDue()
+    // The judgement gate needs a session to route its one question through; the
+    // first candidate of this pass is as good as any. A pump with no session
+    // stays silent about undated loops rather than guessing a route.
+    const routed = [...candidates.values()][0]
+    if (routed !== undefined) await this.pumpNotices(routed.session)
   }
 
   /** Live agents from the harness registry, when the deployment composes one. */
@@ -2381,7 +2388,10 @@ export class MemoriesRuntime {
    * Called from the once-per-conversation hook and from the maintenance sweep. A
    * failure is logged and swallowed: speaking is never allowed to break a turn.
    */
-  private async pumpNotices(): Promise<void> {
+  private async pumpNotices(session?: Session): Promise<void> {
+    // The test runner has no pet and no user; a notice delivered here would be an
+    // osascript popup or a file written after a temp dir is torn down.
+    if (process.env['NODE_TEST_CONTEXT'] !== undefined) return
     if (!this.settings.noticesEnabled) return
     const dir = this.store.memoriesDir
     const now = Date.now()
@@ -2461,8 +2471,57 @@ export class MemoriesRuntime {
         }
         await writeLoops(dir, ledger)
       }
+      // 4. Judgement notices: a note with no deadline that has been sitting for
+      // days. There is no rule that says it is worth an interruption, so the
+      // gate decides — and its default is silence. Without a session there is no
+      // route to ask through, and silence is the right failure.
+      if (this.settings.noticeGate) {
+        const staleAfter = 3 * 86_400_000
+        const candidates = loopNow.loops.filter((loop) => loop.state === 'open'
+          && loop.dueAt === undefined
+          && now - loop.openedAt >= staleAfter
+          && (loop.remindCount ?? 0) < 3
+          && (loop.remindedAt === undefined || now - loop.remindedAt >= 86_400_000))
+        if (candidates.length > 0) {
+          const gate = await gateNotices({
+            llm: this.llm,
+            session,
+            candidates: candidates.map((loop): GateCandidate => ({
+              id: loop.id,
+              title: `还挂着：${loop.text}`,
+              detail: `说了 ${Math.round((now - loop.openedAt) / 86_400_000)} 天，没有截止日期，已提醒 ${loop.remindCount ?? 0} 次`,
+            })),
+            ...await readPersona(dir).then((text) => text === undefined ? {} : { persona: text }),
+            provider: this.settings.extractProvider,
+            model: this.settings.extractModel,
+            timeoutMs: 20_000,
+            signal: this.lifecycle.signal,
+          })
+          this.log.info('dsh-memories: notice gate: %d candidate(s), %d allowed (%s)',
+            candidates.length, gate.deliver.size, gate.reason)
+          let ledger = loopNow
+          for (const candidate of candidates) {
+            if (!gate.deliver.has(candidate.id)) continue
+            const admitted = admitNotice(queue, {
+              kind: 'loop',
+              createdAt: now,
+              dueAt: now,
+              title: `还挂着：${candidate.text}`,
+              body: candidate.text,
+              evidence: [candidate.id],
+              dedupeKey: `loop:${candidate.id}`,
+            }, policy)
+            if (!admitted.ok) continue
+            queue = { ...queue, notices: [admitted.notice, ...queue.notices] }
+            ledger = withLoop(ledger, candidate.id, { remindedAt: now, remindCount: (candidate.remindCount ?? 0) + 1 })
+          }
+          if (ledger !== loopNow) await writeLoops(dir, ledger)
+        }
+      } else if (loopNow.loops.some((loop) => loop.state === 'open' && loop.dueAt === undefined)) {
+        this.log.decision('dsh-memories: notice gate is off, undated loops stay silent')
+      }
       const before = JSON.stringify(queue)
-      // 4. Deliver what is due: pet first, system notification as fallback.
+      // 5. Deliver what is due: pet first, system notification as fallback.
       const target = this.petTarget()
       let next = queue
       for (const notice of dueNotices(queue, now)) {
