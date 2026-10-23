@@ -11,7 +11,7 @@
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { applyVerdicts, classifyPlan, selectForConsolidation } from '../consolidate.js'
+import { applyVerdicts, classifyPlan, conflictDisputes, parsePlan, selectForConsolidation } from '../consolidate.js'
 import type { MemoryEntry } from '../types.js'
 
 /** Build one entry. */
@@ -132,4 +132,36 @@ test('verdicts apply the accepted, drop the rejected, and keep the unheard', () 
   ], 0.7)
   assert.deepEqual(safe.retire, ['a'], 'only the confident accept is applied')
   assert.deepEqual(remaining.map((row) => row.id), ['c'], 'a low-confidence verdict is not an answer')
+})
+test('a contradiction is reported as a question for the user, never resolved silently', () => {
+  const entries = [
+    { ...entry('old-rule', 100), body: 'never push to main', uses: 3 },
+    { ...entry('new-rule', 200), body: 'push to main when the suite is green', uses: 1, voice: 'user' as const },
+  ]
+  const plan = parsePlan(JSON.stringify({
+    memories: [], retire: [], skills: [], notes: '',
+    conflicts: [{ keep: 'new-rule', drop: 'old-rule', reason: '推送策略反了' }],
+  }), new Set(['old-rule', 'new-rule']), 10)
+  assert.ok(plan?.conflicts !== undefined)
+  assert.deepEqual(plan.conflicts, [{ keep: 'new-rule', drop: 'old-rule', reason: '推送策略反了' }])
+
+  const disputes = conflictDisputes(plan.conflicts ?? [], entries)
+  assert.equal(disputes.length, 1, 'the losing entry becomes one question')
+  assert.equal(disputes[0]?.id, 'old-rule')
+  assert.match(disputes[0]?.reason ?? '', /与 new-rule 矛盾/u, 'the question names what it conflicts with')
+  assert.equal(disputes[0]?.hard, true, 'intent is never adjudicated by a machine')
+})
+
+test('a conflict naming ids outside the page, or the same id twice, is dropped', () => {
+  const known = new Set(['a', 'b'])
+  const plan = parsePlan(JSON.stringify({
+    memories: [], retire: [], skills: [], notes: '',
+    conflicts: [
+      { keep: 'a', drop: 'a', reason: 'self' },
+      { keep: 'a', drop: 'missing', reason: 'unknown' },
+      { keep: 'a', drop: 'b', reason: 'real' },
+      { keep: 'b', drop: 'b', reason: 'duplicate loser' },
+    ],
+  }), known, 10)
+  assert.deepEqual(plan?.conflicts, [{ keep: 'a', drop: 'b', reason: 'real' }])
 })

@@ -51,7 +51,7 @@ import { MemoryLog, createFileSink, createLogExporter, pluginLogger } from './lo
 import { collectWindow, resolveLlmRoute, runExtraction } from './extract.js'
 import type { ExtractionRoute } from './extract.js'
 import { backgroundDelayMs, cappedBackoffMs, extractionDelayMs, formatDelay, parsePeakHours, peakDelayMs } from './schedule.js'
-import { CONSOLIDATE_PRESET_ID, adjudicateDisputes, applyPlan, applyVerdicts, classifyPlan, clearPendingPlan, denyToolsFor, mergePendingPlan, proposalIsFresh, readPendingPlan, runConsolidation, runConsolidationDirect, selectForConsolidation, writePendingPlan } from './consolidate.js'
+import { CONSOLIDATE_PRESET_ID, adjudicateDisputes, applyPlan, applyVerdicts, classifyPlan, clearPendingPlan, conflictDisputes, denyToolsFor, mergePendingPlan, proposalIsFresh, readPendingPlan, runConsolidation, runConsolidationDirect, selectForConsolidation, writePendingPlan } from './consolidate.js'
 import type { ConsolidateRequest, ConsolidationDispute, DisputeVerdict } from './consolidate.js'
 import { discardDraft, listDrafts, promote, writeDraft } from './skills.js'
 import type { ConsolidationPlan, ConsolidationTarget, SubagentSeam } from './consolidate.js'
@@ -2239,7 +2239,14 @@ export class MemoriesRuntime {
       // the memory a session used, rewriting what a person typed, moving a fact
       // between scopes, or dropping the paths that made a body checkable are not
       // — those wait for a person, and they are the only thing that waits.
-      const { safe: classified, disputes: flagged } = classifyPlan(plan, { entries })
+      const { safe: classified, disputes: classifiedDisputes } = classifyPlan(plan, { entries })
+      // Contradictions are reported, not resolved: the merge child may say which
+      // statement it believes, but only the user knows which one they still mean.
+      const conflicts = plan.conflicts ?? []
+      for (const conflict of conflicts) {
+        this.log.info('dsh-memories: conflict %s vs %s — %s', conflict.keep, conflict.drop, conflict.reason)
+      }
+      const flagged = [...classifiedDisputes, ...conflictDisputes(conflicts, entries)]
       // A mutable copy the adjudicator may fold accepted verdicts into; the
       // classified plan itself is readonly on purpose.
       const safe = { upserts: [...classified.upserts], retire: [...classified.retire] }
@@ -2278,10 +2285,14 @@ export class MemoriesRuntime {
       if (disputes.length > 0) {
         const disputedIds = new Set(disputes.map((row) => row.id))
         const label = root === undefined ? NO_PROJECT_LABEL : this.store.target('project', root).label
+        // A conflict's losing id is retired by the pending plan when the user
+        // accepts it, and that id is usually NOT in plan.retire (the merge child
+        // preferred to report the contradiction instead of acting on it).
+        const retireForPending = [...new Set([...plan.retire, ...conflicts.map((conflict) => conflict.drop)])]
         waiting = await mergePendingPlan(this.store.memoriesDir, {
           plan: {
             upserts: plan.upserts.filter((item) => item.id !== null && disputedIds.has(item.id)),
-            retire: plan.retire.filter((id) => disputedIds.has(id)),
+            retire: retireForPending.filter((id) => disputedIds.has(id)),
             skills: [],
             notes: plan.notes,
           },
