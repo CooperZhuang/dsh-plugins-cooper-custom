@@ -92,6 +92,11 @@ const FIELDS = [
     hint: { zh: '一条记忆要被按需补注，除了达到相关度下限，还必须在标题、别名、标签或「何时有用」里命中这么多个不同的提问词。中文提问尤其需要：只共用「插件」「日志」这类常见词不算证据，共享两个词才算。设为 1 就只按相关度打分判断（会明显更容易误补）。', en: 'Distinct query terms that must land in the title, keys, tags, or appliesTo before a memory may be recalled. This is what stops a Chinese turn from recalling everything that shares a common word; set it to 1 to gate on relevance alone.' },
   },
   {
+    field: 'personaMaxBytes', kind: 'number', min: 0, step: 100,
+    label: { zh: '画像块字节预算', en: 'Persona block budget' },
+    hint: { zh: '每会话开头注入的「关于你」块的上限。它由合并子代理从 voice=user 的记忆里维护，是整轮对话的上下文，不占记忆摘要的预算；设为 0 关闭。', en: 'Upper bound for the profile block injected once per conversation. It is maintained by the consolidation pass from voice=user memories and is turn-level context, so it does not compete with the memory summary budget. 0 disables it.' },
+  },
+  {
     field: 'autoDecide', kind: 'boolean',
     label: { zh: '合并争议交给 AI 裁决', en: 'Let an AI adjudicate merge disputes' },
     hint: { zh: '合并里那些「只是判断、不是承诺」的变更（例如这条被读过 2 次就想退役、改写后正文变短）改由一次受限子代理裁决：它只回答"有没有丢信息"，答 accept 或 reject 并给置信度。永久保留、人手写、跨作用域搬移三类仍然等你。关掉则全部进「待裁决」。', en: 'Changes blocked only because they are a judgement rather than a promise are adjudicated by one tool-free child that answers accept or reject with a confidence. Permanent, user-written and scope-moving items still wait for you. Off sends everything to the panel.' },

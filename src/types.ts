@@ -52,6 +52,8 @@ export interface MemoryEntry {
   readonly body: string
   /** Lowercase keyword tags used by search ranking. */
   readonly tags: readonly string[]
+  /** Whose words this memory preserves; see {@link MemoryVoice}. */
+  readonly voice?: MemoryVoice
   /**
    * Extra search keys: aliases and keyphrases that should also find this
    * memory.
@@ -161,6 +163,25 @@ export type MemoryKind =
 export const MEMORY_KINDS: readonly MemoryKind[] = ['preference', 'failure', 'procedure', 'knowledge', 'fact']
 
 /**
+ * Whose words a memory is built from.
+ *
+ * The store used to record only what the assistant concluded, which makes every
+ * memory sound like the agent's opinion: on a real store that read as 163 `auto`
+ * and 37 `tool` entries and ZERO that preserved something the user actually said.
+ * A profile of the person cannot be rebuilt from the assistant's summary of them,
+ * so the extractor now marks the entries that quote or rephrase the user's own
+ * statements about how they work — and only those.
+ *
+ * `voice` is NOT a durability flag: it ranks and it feeds the profile, while
+ * retention and adjudication keep reading `source`/`pinned`/`permanent`.
+ */
+export type MemoryVoice =
+  /** The user's own words: a preference, a correction, a way of working. */
+  | 'user'
+  /** The assistant's own conclusion or observation. */
+  | 'assistant'
+
+/**
  * How long a memory stays true.
  *
  * The distinction exists because a number that was correct when written is the
@@ -237,6 +258,8 @@ export interface MemoryDraft {
   readonly body: string
   /** Optional keyword tags. */
   readonly tags: readonly string[]
+  /** Whose words this draft preserves; see {@link MemoryVoice}. */
+  readonly voice?: MemoryVoice
   /** What kind of memory this is; defaults to `fact`. */
   readonly kind?: MemoryKind
   /** When this memory is worth recalling. */

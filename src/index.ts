@@ -39,6 +39,7 @@ import { MemoryStore, slugify } from './storage.js'
 import { StateStore, importLegacyState, statePath } from './state.js'
 import { browseMemories, EXPAND_SEEDS, hubTerms, matchCredit, QUALIFIED_SCORE_FACTOR, relatedHits, searchMemories } from './search.js'
 import type { MatchCredit, ScopeEntries } from './search.js'
+import { readPersona, renderPersonaBlock, writePersona } from './persona.js'
 import { parseTimeRange } from './time.js'
 import { isSubstantiveTurn } from './query.js'
 import { MEMORY_OPEN, rankForSummary, renderEntry, renderHit, renderMemorySummaryResult, renderRecall, renderScopeListing, selectForSummary } from './render.js'
@@ -703,7 +704,13 @@ export class MemoriesRuntime {
       ...flags.size === 0 ? {} : { flags },
     })
     if (result === undefined) return undefined
-    return { text: result.text, surfaced: result.listed }
+    // The profile goes FIRST: it is the context the rest of the turn is read
+    // against, and it is bounded and stable, so it costs one cached block.
+    const persona = renderPersonaBlock(
+      await readPersona(this.store.memoriesDir).catch(() => undefined),
+      this.settings.personaMaxBytes,
+    )
+    return { text: persona === undefined ? result.text : `${persona}\n\n${result.text}`, surfaced: result.listed }
   }
 
   /**
@@ -2245,6 +2252,14 @@ export class MemoriesRuntime {
       // Record the review, so the next pass starts from whatever has waited
       // longest instead of from the same newest page again.
       this.state.markConsolidated(entries.map((entry) => ({ scope: entry.scope, id: entry.id })))
+      // The profile is a document, not a memory: it is injected as its own block
+      // at a known budget, so it is written beside the store rather than into it.
+      if (plan.persona !== undefined && plan.persona.trim().length > 0) {
+        await writePersona(this.store.memoriesDir, plan.persona).catch((error: unknown) => {
+          this.log.warn('dsh-memories: could not write the persona profile: %s',
+            error instanceof Error ? error.message : String(error))
+        })
+      }
       // Skill drafts are staged, not installed: a background pass must not
       // silently grow the model's skill catalog.
       const staged: string[] = []
@@ -2412,6 +2427,9 @@ export class MemoriesRuntime {
       parent,
       ...consolidationRouteOf(this.settings),
       entries,
+      // The profile as it stands, so the pass refines it instead of re-inventing
+      // one every six hours. Read before the call: the pass writes it back.
+      ...await readPersona(this.store.memoriesDir).then((text) => text === undefined ? {} : { persona: text }),
       projectLabel: root === undefined ? NO_PROJECT_LABEL : this.store.target('project', root).label,
       maxUpserts: this.settings.consolidateMaxEntries,
       // The deny list only reaches the pre-0.2.1 seam, whose request still
