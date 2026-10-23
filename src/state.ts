@@ -396,11 +396,33 @@ export class StateStore {
     const job = this.getJob(key)
     if (job === undefined) return undefined
     if (job.notBefore > now) return undefined
+    // `notBefore` is the BACKOFF, and it exists to stop a broken pass spinning.
+    // A person typing the command is not a broken pass: `consolidateNow` clears
+    // the backoff before claiming when it was forced, so a stale row from an era
+    // when the pass always failed cannot block a command the user asked for.
     const heldByOther = job.lease !== undefined && job.lease !== token && (job.leaseUntil ?? 0) > now
     if (heldByOther) return undefined
     const claimed: ConsolidateJob = { ...job, lease: token, leaseUntil: now + leaseMs }
     this.putJob(claimed)
     return claimed
+  }
+
+  /**
+   * Drop one job's backoff and last failure, leaving the job queued.
+   *
+   * Called when a person forces a pass. Without it a manual `/memories
+   * consolidate` returned "nothing to consolidate" for hours after a failure had
+   * already been fixed — the command was refused by a backoff meant for the
+   * background retry, and the message named three causes none of which was the
+   * real one.
+   *
+   * @param key - job key.
+   */
+  clearJobBackoff(key: string): void {
+    const job = this.getJob(key)
+    if (job === undefined) return
+    const { lastError: _lastError, lease: _lease, leaseUntil: _leaseUntil, ...rest } = job
+    this.putJob({ ...rest, notBefore: 0, retries: 0 })
   }
 
   /** Record one usage hit for a memory entry. */
