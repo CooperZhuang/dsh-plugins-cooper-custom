@@ -649,8 +649,15 @@ export class MemoriesRuntime {
     // memory was gone — measured on the real store, including the one at
     // relevance 62. Selecting against the real cap is what makes
     // `selectForSummary`'s own bound bite.
+    // The global cap exists to stop the global half eating a budget the project
+    // half needs. With no project half there is nothing to protect, and the cap
+    // became the ONLY constraint: measured on the real store, every project-less
+    // session listed exactly 4 entries out of 200 and left 62% of
+    // `maxSummaryBytes` unusable. Raise it only when nothing else competes.
+    const projectHasEntries = states.some((state) => state.scope === 'project' && state.entries.length > 0)
+    const globalCap = projectHasEntries ? this.settings.globalSummaryEntries : this.settings.maxSummaryEntries
     const capOf = (state: ScopeState): number =>
-      state.scope === 'global' ? this.settings.globalSummaryEntries : this.settings.maxSummaryEntries
+      state.scope === 'global' ? globalCap : this.settings.maxSummaryEntries
     const selected = states.map((state) => selectForSummary(state.entries, capOf(state), {
       freshSlots: this.settings.summaryFreshSlots,
       // The opening turn is the only topic signal available this early, and it
@@ -668,7 +675,7 @@ export class MemoriesRuntime {
       // Every session shares the global half, so it gets its own smaller cap —
       // in entries and in bytes, because a count cap alone still let it take
       // most of the block once the entries were Chinese.
-      ...state.scope === 'global'
+      ...state.scope === 'global' && projectHasEntries
         ? { maxEntries: this.settings.globalSummaryEntries, maxBytes: this.settings.globalSummaryBytes }
         : {},
     }))

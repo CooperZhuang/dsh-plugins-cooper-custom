@@ -370,12 +370,35 @@ async function dedupeEntries(
   for (const entry of entries) {
     const title = fingerprint(entry.title)
     const body = fingerprint(entry.body)
-    const clash = winners.find((candidate) =>
-      candidate.title === title
-      || (candidate.title === title && candidate.body === body)
-      || (candidate.title.length > 0 && containsPhrase(title, candidate.title) && containsPhrase(body, candidate.body))
-      || (title.length > 0 && containsPhrase(candidate.title, title) && containsPhrase(candidate.body, body))
-      || (similarity > 0 && isNearDuplicate(entry, candidate.entry, similarity)))
+    // Two different rules live here and they deserve different trust. An equal
+    // normalized title is the same memory written twice, and merging it is the
+    // identity rule itself. Everything else is a guess about wording — phrase
+    // containment or token overlap — and a guess may only collapse the pair when
+    // the newer entry carries the older one's material forward. Without that gate
+    // a lossy rewrite archived the only copy that still had the qualifiers.
+    const exact = winners.find((candidate) => candidate.title === title)
+    const guess = exact === undefined
+      ? winners.find((candidate) =>
+        (candidate.title.length > 0 && containsPhrase(title, candidate.title) && containsPhrase(body, candidate.body))
+        || (title.length > 0 && containsPhrase(candidate.title, title) && containsPhrase(candidate.body, body))
+        || (similarity > 0 && isNearDuplicate(entry, candidate.entry, similarity)))
+      : undefined
+    // Whichever of the two is about to survive must carry the other's material.
+    // (The kept-id branch below can promote the older entry, so the survivor is
+    // not simply the newest one.)
+    let clash = exact
+    if (clash === undefined && guess !== undefined) {
+      const preferEntry = keep.has(entry.id) && !keep.has(guess.entry.id)
+      const survivor = preferEntry ? entry : guess.entry
+      const dying = preferEntry ? guess.entry : entry
+      if (carriesForward(dying, {
+        scope: survivor.scope,
+        title: survivor.title,
+        body: survivor.body,
+        tags: survivor.tags,
+        keys: survivor.keys,
+      })) clash = guess
+    }
     if (clash === undefined) {
       winners.push({ title, body, entry })
       continue
@@ -507,6 +530,40 @@ export function parseSessionNote(text: string, fallbackSession: string): Session
  * immediately. Every method is safe to call concurrently: entry writes are
  * atomic and the index is a rebuildable cache.
  */
+/** Path-shaped runs in a body: what a later reader is meant to be able to check. */
+const CITATION_PATTERN = /(?:[A-Za-z]:\\|~?\/)[^\s'"`)]+/gu
+
+/**
+ * Count the file paths a body cites.
+ * @param text - the body.
+ * @returns how many path-shaped runs it contains.
+ */
+function citationCount(text: string): number {
+  return (text.match(CITATION_PATTERN) ?? []).length
+}
+
+/**
+ * Whether a near-duplicate rewrite still carries the material it replaces.
+ *
+ * Conservative on purpose: refusing to supersede costs one extra entry for the
+ * consolidation pass to fold, while superseding wrongly destroys the only copy
+ * of a qualifier. A rewrite may therefore lose no citation, no length, no tag and
+ * no key.
+ *
+ * @param previous - the entry the implicit match proposes to replace.
+ * @param draft - the incoming rewrite.
+ * @returns true when the rewrite is a superset of what it replaces.
+ */
+export function carriesForward(previous: MemoryEntry, draft: MemoryDraft): boolean {
+  if (citationCount(draft.body) < citationCount(previous.body)) return false
+  if (draft.body.trim().length < previous.body.trim().length) return false
+  const tags = new Set(draft.tags.map((tag) => tag.toLowerCase()))
+  for (const tag of previous.tags) if (!tags.has(tag.toLowerCase())) return false
+  const keys = new Set((draft.keys ?? []).map((key) => key.toLowerCase()))
+  for (const key of previous.keys) if (!keys.has(key.toLowerCase())) return false
+  return true
+}
+
 /** Why one entry left the live store. Recorded so an irreversible action stays explainable. */
 export type RetireReason = 'evict' | 'superseded' | 'near-duplicate' | 'retention' | 'consolidation'
 
@@ -903,9 +960,23 @@ export class MemoryStore {
     // already in the scope is treated as the thing this one rewrites, so a
     // re-worded lesson replaces its predecessor instead of joining it.
     const explicit = draft.supersedes?.trim()
-    const supersedes = explicit !== undefined && explicit.length > 0
-      ? explicit
+    const similar = explicit !== undefined && explicit.length > 0
+      ? undefined
       : existing === undefined ? await this.findSimilar(draft, projectRoot, id) : undefined
+    // A null return means "do not treat this as a rewrite". The implicit match is
+    // a guess about wording, and the archive it used to trigger is irreversible
+    // from the model's side: the predecessor stops being retrievable. Measured on
+    // the real store, one rewording turned "提交推送规矩：公开仓库直接 push，
+    // 私有或新建仓库先问" into "提交后默认直接 push，不用再问" and the only copy
+    // that carried the two qualifiers went to `archive/`. So the guess may only
+    // replace its predecessor when it keeps what made it useful; otherwise both
+    // stay and consolidation — which can read both — decides with far more context.
+    let supersedes: string | undefined
+    if (explicit !== undefined && explicit.length > 0) supersedes = explicit
+    else if (similar !== undefined) {
+      const previous = await this.read(draft.scope, projectRoot, similar)
+      supersedes = previous !== undefined && carriesForward(previous, draft) ? similar : undefined
+    }
     const entry: MemoryEntry = {
       id,
       scope: draft.scope,
@@ -1097,9 +1168,13 @@ export class MemoryStore {
     const entries = await this.list(scope, projectRoot, { fresh: true })
     const excess = entries.length - limit
     if (excess <= 0) return
-    // `list` is newest-first, so the tail is what a cap should look at first.
+    // Oldest ATTENTION first, not oldest edit. `updatedAt` alone made the cap a
+    // recency window: a memory sessions kept reading lost to one that merely got
+    // rewritten, and the real store evicted entries read minutes earlier.
+    const attention = (entry: MemoryEntry): number => Math.max(entry.updatedAt, entry.lastUsedAt, entry.lastSurfacedAt)
+    const oldestFirst = entries.slice().sort((left, right) => attention(left) - attention(right) || left.id.localeCompare(right.id))
     let archived = 0
-    for (const entry of entries.slice().reverse()) {
+    for (const entry of oldestFirst) {
       if (archived >= excess) break
       if (entry.pinned === true || entry.permanent === true || entry.source === 'user') continue
       if (await this.archive(scope, projectRoot, entry.id, Date.now(), 'evict')) archived += 1

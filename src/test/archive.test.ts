@@ -160,3 +160,43 @@ test('permanence survives a rewrite that does not mention it, and is read back f
   assert.equal(live[0]?.body, 'keep, reworded')
   assert.equal(live[0]?.permanent, true, 'omitting the field means unchanged, the same rule pinned uses')
 })
+test('a near-duplicate rewrite that drops material does not archive its predecessor', async (t) => {
+  const { store, dir } = await tempStore()
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  store.similarityLimit = () => 0.7
+  const older = await store.upsert({
+    scope: 'global', title: 'Push rule public repositories private',
+    body: 'public repositories push directly; private repositories ask first.',
+    tags: ['git', 'push'],
+  }, undefined, 'tool', 1)
+  // Same lesson, shorter body, one tag gone: a lossy rewrite, not a supersede.
+  const newer = await store.upsert({
+    scope: 'global', title: 'Push rule public repositories',
+    body: 'public repositories push directly; private repositories ask first, and either way say so.',
+    tags: ['git'],
+  }, undefined, 'tool', 2)
+  const live = await store.list('global', undefined, { fresh: true })
+  assert.equal(newer.action, 'created')
+  assert.ok(live.some((entry) => entry.id === older.entry.id), 'the predecessor stays retrievable')
+  assert.deepEqual((await store.listArchived('global', undefined)).map((entry) => entry.id), [])
+})
+
+test('a near-duplicate rewrite that keeps everything still supersedes', async (t) => {
+  const { store, dir } = await tempStore()
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  store.similarityLimit = () => 0.7
+  const older = await store.upsert({
+    scope: 'global', title: 'Push rule public repositories private',
+    body: 'public repositories push directly; private repositories ask first.',
+    tags: ['git', 'push'],
+  }, undefined, 'tool', 1)
+  const newer = await store.upsert({
+    scope: 'global', title: 'Push rule public repositories',
+    body: 'public repositories push directly; private repositories ask first, and say so in the PR.',
+    tags: ['git', 'push'],
+  }, undefined, 'tool', 2)
+  assert.equal(newer.action, 'created')
+  const live = await store.list('global', undefined, { fresh: true })
+  assert.ok(!live.some((entry) => entry.id === older.entry.id), 'the predecessor is retired')
+  assert.deepEqual((await store.listArchived('global', undefined)).map((entry) => entry.id), [older.entry.id])
+})

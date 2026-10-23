@@ -271,6 +271,9 @@ test('a never-surfaced backlog cannot swallow the shared global half', async (t)
   for (const title of ['Newest note A', 'Newest note B', 'Newest note C']) {
     await runtime.write(agent.session, { scope: 'global', title, body: 'Never surfaced yet.', tags: [] }, 'auto')
   }
+  // One project memory makes the two halves compete for the shared budget, which
+  // is the only situation the global count cap exists to arbitrate.
+  await runtime.write(agent.session, { scope: 'project', title: 'Workspace fact', body: 'Only here.', tags: [] }, 'auto')
 
   const summary = await runtime.summary(agent.session)
   assert.ok(summary !== undefined)
@@ -283,6 +286,29 @@ test('a never-surfaced backlog cannot swallow the shared global half', async (t)
   // whatever happened to be written recently.
   assert.ok(freshShown <= 1, `the reservation takes at most a third of the section, not ${freshShown} of 4`)
   assert.match(globalPart ?? '', /Established rule/u, 'and the ranking still fills the rest')
+})
+
+test('with no project half, the global half may use the shared budget', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-memories-alone-'))
+  const workspace = await mkdtemp(join(tmpdir(), 'dsh-memories-ws-'))
+  const runtime = new MemoriesRuntime(stubContext, {
+    memoriesDir: dir, autoExtract: false, globalSummaryEntries: 4, summaryFreshSlots: 3,
+  })
+  t.after(() => runtime.dispose())
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  t.after(() => rm(workspace, { recursive: true, force: true }))
+  const agent = stubAgent(stubSession(workspace))
+
+  for (let index = 0; index < 10; index += 1) {
+    await runtime.write(agent.session, {
+      scope: 'global', title: `Global rule ${index}`, body: 'Applies everywhere.', tags: [],
+    }, 'auto')
+  }
+  const summary = await runtime.summary(agent.session)
+  assert.ok(summary !== undefined)
+  const bullets = summary.split('\n').filter((line) => line.startsWith('- ') && !line.startsWith('- …')).length
+  // Four was the only cap left in force, and 62% of the byte budget sat unused.
+  assert.ok(bullets > 4, `a project-less session should list more than the global cap, got ${bullets}`)
 })
 
 test('a global draft that names a known workspace is filed with that workspace', async (t) => {
