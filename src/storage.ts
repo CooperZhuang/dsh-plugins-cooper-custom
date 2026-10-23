@@ -391,7 +391,7 @@ async function dedupeEntries(
     // Archived rather than removed: this pass runs without a model's judgement,
     // and a wrong call must stay recoverable with `/memories restore`. Removal is
     // reserved for `/memories forget`, where a person asked for it.
-    const archived = await store.archive(scope, projectRoot, loser.id).catch(() => false)
+    const archived = await store.archive(scope, projectRoot, loser.id, Date.now(), 'near-duplicate').catch(() => false)
     if (!archived) await rm(join(store.entriesDirOf(scope, projectRoot), `${loser.id}.md`), { force: true })
   }
   const dropped = new Set(losers.map((loser) => loser.id))
@@ -504,6 +504,17 @@ export function parseSessionNote(text: string, fallbackSession: string): Session
  * immediately. Every method is safe to call concurrently: entry writes are
  * atomic and the index is a rebuildable cache.
  */
+/** Why one entry left the live store. Recorded so an irreversible action stays explainable. */
+export type RetireReason = 'evict' | 'superseded' | 'near-duplicate' | 'retention' | 'consolidation'
+
+/** One retirement, reported to whoever owns the store and therefore owns the log. */
+export interface RetireInfo {
+  readonly scope: MemoryScope
+  readonly id: string
+  readonly reason: RetireReason
+  readonly projectRoot?: string
+}
+
 export class MemoryStore {
   readonly memoriesDir: string
   private readonly cache = new Map<string, IndexCache>()
@@ -924,7 +935,7 @@ export class MemoryStore {
     // for. Measured: the two paths disagreed, so a re-worded memory surviving its
     // predecessor depended on which of the two happened to fire.
     if (entry.supersedes !== undefined && entry.supersedes !== id) {
-      await this.archive(draft.scope, projectRoot, entry.supersedes, now).catch(() => false)
+      await this.archive(draft.scope, projectRoot, entry.supersedes, now, 'superseded').catch(() => false)
     }
     this.invalidate(draft.scope, projectRoot)
     const limit = this.entryLimit()
@@ -963,7 +974,13 @@ export class MemoryStore {
    * @param now - clock recorded in the archive stamp.
    * @returns whether an entry was archived.
    */
-  async archive(scope: MemoryScope, projectRoot: string | undefined, id: string, now = Date.now()): Promise<boolean> {
+  async archive(
+    scope: MemoryScope,
+    projectRoot: string | undefined,
+    id: string,
+    now = Date.now(),
+    reason: RetireReason = 'retention',
+  ): Promise<boolean> {
     const source = await this.entryFile(scope, projectRoot, id)
     const text = await readText(source)
     if (text === undefined) return false
@@ -972,7 +989,22 @@ export class MemoryStore {
     await rm(source, { force: true })
     await this.reindex(scope, projectRoot)
     await this.evictArchive(scope, projectRoot)
+    this.reportRetire(scope, projectRoot, id, reason)
     return true
+  }
+
+  /** Report one archival to the owner. A broken reporter must not undo the archival. */
+  private reportRetire(scope: MemoryScope, projectRoot: string | undefined, id: string, reason: RetireReason): void {
+    try {
+      this.onRetire?.({
+        scope,
+        id,
+        reason,
+        ...projectRoot === undefined ? {} : { projectRoot },
+      })
+    } catch {
+      // Losing the log line is better than losing the write it was about.
+    }
   }
 
   /** Move one archived entry back into the live store. */
@@ -1043,12 +1075,27 @@ export class MemoryStore {
     }
   }
 
-  /** Enforce the per-scope cap, archiving the least recently updated entries. */
+  /**
+   * Enforce the per-scope cap, archiving the least recently updated entries.
+   *
+   * Pinned entries and entries a person wrote are skipped. Retention has always
+   * protected both (`planRetention`), and a cap that did not would evict exactly
+   * the rules somebody asked to keep — silently, because a cap is not a
+   * judgement. Skipping them can leave a scope above its cap; that is the
+   * intended trade, since the alternative is trading a person's decision for an
+   * extractor's guess. Measured on the real store before this guard: the two
+   * most-used pinned rules sat 29 and 33 writes away from being evicted.
+   */
   private async evict(scope: MemoryScope, projectRoot: string | undefined, limit: number): Promise<void> {
     const entries = await this.list(scope, projectRoot, { fresh: true })
-    if (entries.length <= limit) return
-    for (const entry of entries.slice(limit)) {
-      await this.archive(scope, projectRoot, entry.id)
+    const excess = entries.length - limit
+    if (excess <= 0) return
+    // `list` is newest-first, so the tail is what a cap should look at first.
+    let archived = 0
+    for (const entry of entries.slice().reverse()) {
+      if (archived >= excess) break
+      if (entry.pinned === true || entry.source === 'user') continue
+      if (await this.archive(scope, projectRoot, entry.id, Date.now(), 'evict')) archived += 1
     }
   }
 
@@ -1148,6 +1195,15 @@ export class MemoryStore {
    * applies to the very next operation. `0` keeps only the exact-match rule.
    */
   similarityLimit: () => number = () => 0
+
+  /**
+   * Called for every entry this store retires.
+   *
+   * The store does not log: it has no logger and no deployment facts. The plugin
+   * installs a reporter here, so "a memory disappeared" stops being a silent
+   * event. A reporter that throws must never fail the write that retired it.
+   */
+  onRetire?: (info: RetireInfo) => void
 
   /** Ids that must survive the next dedupe pass (the entry just written). */
   private keepIds: ReadonlySet<string> = new Set()
