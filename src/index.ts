@@ -3613,8 +3613,12 @@ async function handleCommand(runtime: MemoriesRuntime, invocation: CommandInvoca
       return { kind: 'success', text: archived === 0 ? 'Nothing to archive.' : `Archived ${archived} unused memories.` }
     }
     case 'notices': {
-      if (rest.length === 0) return { kind: 'success', text: await runtime.describeNotices() }
-      if (rest[0] === 'test') {
+      // `rest` is the remainder of the line as ONE STRING, not argv: indexing it
+      // reads a character, so `notices test` used to fall through to the usage
+      // error ("Usage: /memories notices [test]") whenever an argument was given.
+      const argument = rest.trim().toLowerCase()
+      if (argument.length === 0) return { kind: 'success', text: await runtime.describeNotices() }
+      if (argument === 'test') {
         const probe = await runtime.probePet()
         return probe.ok
           ? { kind: 'success', text: `The pet accepted a test bubble (${probe.target}).` }
