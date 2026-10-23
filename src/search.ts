@@ -541,8 +541,24 @@ export const AUTO_IMPORTANCE_CEILING = 1 + USE_CAP * USE_BONUS
  */
 export function importanceOf(entry: MemoryEntry): number {
   const used = 1 + Math.min(entry.uses, USE_CAP) * USE_BONUS
-  return entry.source === 'auto' ? used : used * EXPLICIT_SOURCE_BONUS
+  // A memory built from the user's own statement outranks one the assistant
+  // concluded, at equal use. Same argument as the explicit-source bonus — a
+  // person said it, so it is a constraint rather than a guess — and it is what
+  // lets the profile's rules win a slot against heavily-read notes about the
+  // plugin itself.
+  const voiced = entry.voice === 'user' ? USER_VOICE_BONUS : 1
+  return (entry.source === 'auto' ? used : used * EXPLICIT_SOURCE_BONUS) * voiced
 }
+
+/**
+ * Lift for a memory whose claim came from the user.
+ *
+ * Deliberately smaller than {@link EXPLICIT_SOURCE_BONUS}: it breaks ties among
+ * memories that already matched the turn's words, it does not put somebody's
+ * preferences in front of the code they asked about — the lexical gate still
+ * decides reachability.
+ */
+export const USER_VOICE_BONUS = 1.35
 
 /**
  * How much a turn's time window lifts an entry whose *measurement* falls in it.

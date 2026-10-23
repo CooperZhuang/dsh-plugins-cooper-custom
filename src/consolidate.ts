@@ -53,6 +53,7 @@ export const CONSOLIDATE_SYSTEM = [
   '',
   'When two or more memories together describe a repeatable procedure that would be worth running again, also return it as a skill: a short kebab-case name, a one-line description, and the ordered steps. Skills are drafts a human promotes; return at most 2.',
   '',
+  'When two memories contradict each other, do not quietly pick one: list the pair under "conflicts" with the id to keep, the id to drop, and one sentence saying what disagrees. A memory from the user ("voice: user") beats one the assistant concluded, and the newer statement beats the older — unless a rule is permanent, in which case name the pair and drop the OTHER one. "conflicts" is a report as much as an instruction: it is how the user finds out they changed their mind.',
   'Also maintain "persona": a short profile of the USER, in markdown, built only from what they themselves said. The input marks those entries with "voice: user" and may include the current profile — refine it, do not rewrite it from nothing, and keep it under 40 lines. Contents: how they want work done, the corrections they have issued, how they write, what they care about, and what they never want. Write it in the third person ("他要求…"), never as instructions to yourself. If no entry carries voice: user, and no current profile exists, omit the field entirely.',
   '',
   'Reply with JSON only, no prose and no code fence:',
@@ -105,6 +106,19 @@ export const CONSOLIDATE_JSON_SCHEMA = {
     },
     notes: { type: 'string' },
     persona: { type: 'string' },
+    conflicts: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['keep', 'drop', 'reason'],
+        properties: {
+          keep: { type: 'string' },
+          drop: { type: 'string' },
+          reason: { type: 'string' },
+        },
+      },
+    },
   },
 } as const
 
@@ -128,6 +142,15 @@ export interface ConsolidationPlan {
   readonly skills: readonly SkillDraft[]
   /** The sub-agent's one-line account of what it changed. */
   readonly notes: string
+  /**
+   * Pairs of memories that contradict each other.
+   *
+   * A contradiction is the one thing a merge must NOT resolve silently: the
+   * assistant cannot know which of two statements the user still means. Naming
+   * the pair turns "the store quietly picked one" into a question with a winner
+   * and a reason, and a `permanent` rule always wins the "ask a person" branch.
+   */
+  readonly conflicts?: readonly { readonly keep: string; readonly drop: string; readonly reason: string }[]
   /**
    * The refreshed profile of the user, in markdown.
    *
@@ -241,17 +264,93 @@ export function parsePlan(text: string, knownIds: ReadonlySet<string>, maxUpsert
     retired.add(value)
   }
   const skills = parseSkills(record['skills'])
+  const conflicts = parseConflicts(record['conflicts'], knownIds, retired)
   const persona = typeof record['persona'] === 'string' ? record['persona'].trim().slice(0, PERSONA_MAX_SOURCE_CHARS) : ''
   // A pass that only refines the profile is a real outcome: the profile changes
   // without any memory moving, and dropping that reply would lose it.
-  if (upserts.length === 0 && retired.size === 0 && skills.length === 0 && persona.length === 0) return undefined
+  if (upserts.length === 0 && retired.size === 0 && skills.length === 0 && persona.length === 0 && conflicts.length === 0) return undefined
   return {
     upserts,
     retire: [...retired],
     skills,
     notes: typeof record['notes'] === 'string' ? record['notes'].slice(0, 300) : '',
     ...persona.length > 0 ? { persona } : {},
+    ...conflicts.length > 0 ? { conflicts } : {},
   }
+}
+
+/**
+ * Parse the contradiction report of one reply.
+ *
+ * Only ids the store actually has, never a pair that names the same memory
+ * twice, and never a "drop" the same plan is already retiring for another
+ * reason — that entry's question is already on its way to the reader.
+ *
+ * @param value - the raw `conflicts` field.
+ * @param knownIds - ids present in the reviewed page.
+ * @param retired - ids this plan already retires.
+ * @returns at most ten conflicts.
+ */
+function parseConflicts(
+  value: unknown,
+  knownIds: ReadonlySet<string>,
+  retired: ReadonlySet<string>,
+): { keep: string; drop: string; reason: string }[] {
+  if (!Array.isArray(value)) return []
+  const conflicts: { keep: string; drop: string; reason: string }[] = []
+  const seen = new Set<string>()
+  for (const item of value) {
+    if (conflicts.length >= 10) break
+    if (typeof item !== 'object' || item === null) continue
+    const record = item as Record<string, unknown>
+    const keep = typeof record['keep'] === 'string' ? record['keep'] : ''
+    const drop = typeof record['drop'] === 'string' ? record['drop'] : ''
+    if (keep === drop || !knownIds.has(keep) || !knownIds.has(drop)) continue
+    if (retired.has(drop) || seen.has(drop)) continue
+    seen.add(drop)
+    conflicts.push({
+      keep,
+      drop,
+      reason: typeof record['reason'] === 'string' ? record['reason'].replace(/\s+/gu, ' ').trim().slice(0, 200) : '',
+    })
+  }
+  return conflicts
+}
+
+/**
+ * Turn a contradiction report into questions for a person.
+ *
+ * A conflict is never auto-resolved, and never even adjudicated: whether a rule
+ * still holds is intent, and intent is the one thing only the user knows. The
+ * merge child's own opinion about the winner is recorded as the reason, not
+ * applied as a verdict. Every conflict therefore reaches a person, whatever
+ * `autoDecide` says.
+ *
+ * @param conflicts - the plan's report.
+ * @param entries - the reviewed page, for titles and protection flags.
+ * @returns one dispute per resolvable conflict.
+ */
+export function conflictDisputes(
+  conflicts: readonly { keep: string; drop: string; reason: string }[],
+  entries: readonly MemoryEntry[],
+): ConsolidationDispute[] {
+  const byId = new Map(entries.map((entry) => [entry.id, entry]))
+  const disputes: ConsolidationDispute[] = []
+  for (const conflict of conflicts) {
+    const loser = byId.get(conflict.drop)
+    if (loser === undefined) continue
+    disputes.push({
+      id: loser.id,
+      scope: loser.scope,
+      action: 'retire',
+      title: loser.title,
+      reason: `与 ${conflict.keep} 矛盾${conflict.reason.length > 0 ? '：' + conflict.reason : ''}`,
+      before: loser.body,
+      after: '',
+      hard: true,
+    })
+  }
+  return disputes
 }
 
 /**
