@@ -135,3 +135,15 @@ test('the check is not vacuous: a descriptor with an undefined label is rejected
     /not losslessly JSON-serializable/u,
   )
 })
+test('the spec carries the signal at the top level, where the kernel reads it', () => {
+  // The kernel's continuable path calls `spec.signal.throwIfAborted()` and passes
+  // `spec.signal` into prepareContinuable; it never looks at `spec.request.signal`.
+  // A spec with the signal only inside the request reserved the child and then
+  // crashed with "Cannot read properties of undefined (reading 'throwIfAborted')".
+  const timeout = AbortSignal.timeout(1_000)
+  const spec = buildActivationSpec(routedRequest(), PROMPT, timeout)
+  assert.equal(spec.signal, timeout, 'the top-level signal is the one the caller passed')
+  assert.equal(spec.request.signal, timeout, 'and the request kept its own copy')
+  assert.equal(typeof spec.signal.throwIfAborted, 'function')
+  assert.doesNotThrow(() => spec.signal.throwIfAborted())
+})

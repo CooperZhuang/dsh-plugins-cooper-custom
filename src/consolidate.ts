@@ -324,9 +324,27 @@ export interface ActivationSpec {
    * 2026-10-20 until this field was declared here.
    */
   label: string
+  /**
+   * Cancellation for the whole activation.
+   *
+   * Top-level, NOT inside `request`: the kernel reads `spec.signal` directly
+   * (`spec.signal.throwIfAborted()`, and `prepareContinuable({ signal })`), so a
+   * spec that carries the signal only in its request throws
+   * `Cannot read properties of undefined (reading 'throwIfAborted')` — after the
+   * child has already been reserved, which is why it reads as a crash rather than
+   * a refusal.
+   *
+   * The kernel's continuable path reads exactly these top-level fields —
+   * `provider`, `label`, `signal`, `childId`, `delivery`, `request` — and these
+   * on the request: `prompt`, `parent`, `maxDepth`, `outputSchema`,
+   * `agentOptions`, `agentPreset`, `cwd`. Anything omitted here fails at the
+   * kernel boundary, not at this module's type boundary.
+   */
+  signal: AbortSignal
   request: {
     prompt: { type: 'text'; text: string }[]
     parent: Agent
+    /** Kept for the request contract even though the kernel reads the top-level one. */
     signal: AbortSignal
     agentOptions?: { provider?: string; model?: string }
     outputSchema?: unknown
@@ -448,6 +466,9 @@ export function buildActivationSpec(
     // descriptor validator BEFORE the child starts, and the symptom is a
     // silently dead consolidation pass rather than a start error.
     label: CONSOLIDATE_LABEL,
+    // Same class of mistake as the label, one field later: the kernel reads
+    // `spec.signal` and never `spec.request.signal`, so it has to be here too.
+    signal: timeout,
     request: {
       prompt,
       parent: request.parent,
