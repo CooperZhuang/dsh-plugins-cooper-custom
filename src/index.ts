@@ -1520,6 +1520,17 @@ export class MemoriesRuntime {
    */
   startPeriodicExtraction(): void {
     this.stopPeriodicExtraction()
+    // A notice is worth more than 30 minutes of freshness: the digest and the
+    // backlog warning are computed from the log, not from a session, so the first
+    // one should arrive shortly after the host comes up rather than at the next
+    // tick. Skipped under the test runner, which tears its temp dirs down faster
+    // than this delayed write would fire.
+    if (process.env['NODE_TEST_CONTEXT'] === undefined) {
+      const boot = setTimeout(() => {
+        void this.pumpNotices().catch(() => undefined)
+      }, 15_000)
+      boot.unref?.()
+    }
     const minutes = this.settings.extractIntervalMinutes
     if (!(minutes > 0)) return
     const timer = setInterval(() => {
