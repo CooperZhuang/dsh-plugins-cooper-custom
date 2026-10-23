@@ -312,6 +312,11 @@ export class MemoriesRuntime {
     this.store = new MemoryStore(this.deployment.memoriesDir)
     this.store.entryLimit = () => this.settings.maxEntriesPerScope
     this.store.similarityLimit = () => this.settings.dedupeSimilarity
+    // Every retirement goes through the store, and the store has no logger: a
+    // memory disappearing used to leave no trace at all, which made the 200-cap
+    // rotation indistinguishable from a deliberate consolidation. One line per
+    // retirement is cheap next to an irreversible action nobody can explain.
+    this.store.onRetire = (info) => this.log.info('dsh-memories: retired %s/%s (%s)', info.scope, info.id, info.reason)
     this.state = new StateStore(statePath(this.deployment.memoriesDir))
     this.llmAtActivation = ctx.get('llm') as LlmRuntime | undefined
     this.subagentsAtActivation = ctx.get('subagents') as SubagentSeam | undefined
@@ -2249,7 +2254,7 @@ export class MemoriesRuntime {
     return {
       upsert: (draft, projectRoot, source, keepId) => this.store.upsert(draft, projectRoot, source, Date.now(), keepId),
       // Retirements are archival, so a wrong judgement stays recoverable.
-      archive: (scope, projectRoot, id) => this.store.archive(scope, projectRoot, id),
+      archive: (scope, projectRoot, id) => this.store.archive(scope, projectRoot, id, Date.now(), 'consolidation'),
       restore: (scope, projectRoot, id) => this.store.restore(scope, projectRoot, id),
     }
   }
@@ -2470,7 +2475,7 @@ export class MemoriesRuntime {
     let archived = 0
     for (const decision of expired) {
       this.log.decision('dsh-memories: archiving %s/%s, unused for %d days', decision.scope, decision.id, Math.round(decision.ageDays))
-      if (await this.store.archive(scope, root, decision.id, now)) archived += 1
+      if (await this.store.archive(scope, root, decision.id, now, 'retention')) archived += 1
     }
     return archived
   }

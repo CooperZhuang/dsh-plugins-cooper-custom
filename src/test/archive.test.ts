@@ -88,3 +88,51 @@ test('an archived project entry stays inside its own workspace', async (t) => {
   assert.deepEqual(await store.listArchived('project', 'C:\\Code\\beta'), [], 'another workspace sees no archive')
   assert.deepEqual((await store.listArchived('project', root)).map((entry) => entry.id), ['only-here'])
 })
+test('the cap never evicts a pinned entry, nor one a person wrote', async (t) => {
+  const { store, dir } = await tempStore()
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  // One slot, three entries: the naive cap would evict the two oldest, which are
+  // exactly the two retention has always promised to protect.
+  store.entryLimit = () => 1
+  await store.upsert({ scope: 'global', title: 'Pinned rule', body: 'keep me', tags: [], pinned: true }, undefined, 'auto', 1)
+  await store.upsert({ scope: 'global', title: 'Typed by a person', body: 'keep me too', tags: [] }, undefined, 'user', 2)
+  await store.upsert({ scope: 'global', title: 'Extracted', body: 'guess', tags: [] }, undefined, 'auto', 3)
+
+  const live = await store.list('global', undefined, { fresh: true })
+  assert.deepEqual(live.map((entry) => entry.id).sort(), ['pinned-rule', 'typed-by-a-person'])
+  assert.deepEqual((await store.listArchived('global', undefined)).map((entry) => entry.id), ['extracted'],
+    'the cap spent its one eviction on the only entry it is allowed to take')
+})
+
+test('every retirement is reported with the reason it happened', async (t) => {
+  const { store, dir } = await tempStore()
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const retired: string[] = []
+  store.onRetire = (info) => retired.push(info.reason + ':' + info.id)
+
+  await store.upsert({ scope: 'global', title: 'Old fact', body: 'a', tags: [] }, undefined, 'auto', 1)
+  await store.upsert({ scope: 'global', title: 'New fact', body: 'b', tags: [], supersedes: 'old-fact' }, undefined, 'tool', 2)
+  await store.archive('global', undefined, 'new-fact', 3)
+
+  assert.deepEqual(retired, ['superseded:old-fact', 'retention:new-fact'])
+})
+
+test('a retirement is reported when the cap causes it, not only when asked', async (t) => {
+  const { store, dir } = await tempStore()
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const retired: string[] = []
+  store.onRetire = (info) => retired.push(info.reason + ':' + info.id)
+  store.entryLimit = () => 1
+  await store.upsert({ scope: 'global', title: 'First', body: 'a', tags: [] }, undefined, 'auto', 1)
+  await store.upsert({ scope: 'global', title: 'Second', body: 'b', tags: [] }, undefined, 'auto', 2)
+  assert.deepEqual(retired, ['evict:first'])
+})
+
+test('a broken reporter cannot undo the retirement it was told about', async (t) => {
+  const { store, dir } = await tempStore()
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  store.onRetire = () => { throw new Error('the log is gone') }
+  await store.upsert({ scope: 'global', title: 'Doomed', body: 'x', tags: [] }, undefined, 'auto', 1)
+  assert.equal(await store.archive('global', undefined, 'doomed', 2), true)
+  assert.deepEqual((await store.listArchived('global', undefined)).map((entry) => entry.id), ['doomed'])
+})
