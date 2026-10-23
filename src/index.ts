@@ -23,7 +23,7 @@
  */
 import { ACCOUNT_QUOTA_EXCEEDED_CODE, createUserMessage, isQuotaExceededError, QUOTA_EXCEEDED_CODE } from '@deepseek-ai/dsh-llm'
 import { homedir } from 'node:os'
-import { resolve } from 'node:path'
+import { resolve, sep } from 'node:path'
 import type { LlmRuntime, UserMessage } from '@deepseek-ai/dsh-llm'
 import type { Agent, SessionStartSource } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
@@ -408,6 +408,14 @@ export class MemoriesRuntime {
     // directory is where the harness happens to run, not where the conversation
     // works, and scoping to it merged unrelated repositories into one bucket.
     if (cwd === undefined || cwd.length === 0) return undefined
+    // A directory the deployment names explicitly wins over every rule below —
+    // including the catch-all rule for the harness home, which is exactly why
+    // this exists: plugin and kernel work happens in `~/.dsh`, and 28% of the
+    // global scope turned out to be those notes following the user around.
+    for (const [prefix, root] of this.deployment.projectRootOverrides) {
+      const bounded = prefix.endsWith(sep) ? prefix : prefix + sep
+      if (cwd === prefix || cwd.startsWith(bounded)) return root
+    }
     const root = await findProjectRoot(cwd, this.deployment.projectRootMarkers)
     // A directory that is not a project is not a scope either: the harness home,
     // the user's home directory itself, and the OS temp tree are places a
