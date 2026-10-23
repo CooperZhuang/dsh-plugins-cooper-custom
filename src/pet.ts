@@ -129,7 +129,11 @@ export async function say(
     }
     const payload = (await response.json().catch(() => ({}))) as { ok?: unknown; reason?: unknown; message?: unknown }
     if (payload.ok === false) {
-      return { ok: false, reason: `pet refused: ${String(payload.reason ?? payload.message ?? 'unknown')}` }
+      // Carry the pet's own message: it is the difference between "text 为空" and
+      // "duration 必须是…", and without it a refusal is unactionable.
+      const reason = String(payload.reason ?? 'unknown')
+      const message = typeof payload.message === 'string' && payload.message.length > 0 ? `: ${payload.message}` : ''
+      return { ok: false, reason: `pet refused: ${reason}${message}` }
     }
     return { ok: true }
   } catch (error) {
