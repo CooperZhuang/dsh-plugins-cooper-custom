@@ -19,6 +19,8 @@
 import z from '@deepseek-ai/schemastery'
 import { isVolatile, type Volatile } from '@deepseek-ai/cosmokit'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
+import { homedir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { logPath, toLogLevel } from './log.js'
 
 /**
@@ -498,6 +500,18 @@ export interface MemoriesConfig extends Partial<RowTunables> {
   dshHome?: string
   memoriesDir?: string
   projectRootMarkers?: string[]
+  /**
+   * Directories that are a workspace even though they are not a repository.
+   *
+   * Keyed by absolute path prefix, valued by the scope root to file under. The
+   * harness home is excluded from scoping on purpose (it is where a session is
+   * *started*, not what it works on), but plugin and kernel work really does
+   * happen there — and 28% of the global scope turned out to be exactly that:
+   * DSH-development notes following the user into every unrelated project. Naming
+   * a directory here gives it a scope of its own without weakening the catch-all
+   * rule for the home directory itself.
+   */
+  projectRootOverrides?: Record<string, string>
   /** Plugin log file; defaults to `<dshHome>/logs/dsh-memories.log`. Empty disables file logging. */
   logFile?: string
 }
@@ -513,6 +527,8 @@ export interface ResolvedConfig {
   readonly dshHome: string
   readonly memoriesDir: string
   readonly projectRootMarkers: readonly string[]
+  /** Absolute prefixes that own a scope regardless of markers, longest first. */
+  readonly projectRootOverrides: readonly (readonly [string, string])[]
   /**
    * Log file for the plugin's own lines; empty disables file logging.
    *
@@ -678,6 +694,12 @@ export function readTunables(config: MemoriesConfig): MemoriesSettings {
  * @param config - the entry configuration the Loader hands `apply`.
  * @returns normalized paths, workspace markers, and tunables.
  */
+/** Expand a leading `~` and leave everything else to `resolve`. */
+function expandHome(path: string): string {
+  if (path === '~') return homedir()
+  return path.startsWith('~/') ? join(homedir(), path.slice(2)) : path
+}
+
 export function resolveConfig(config: MemoriesConfig = {}): ResolvedConfig {
   const row = plainRow(config)
   const dshHome = resolveDshHome(row.dshHome)
@@ -686,10 +708,16 @@ export function resolveConfig(config: MemoriesConfig = {}): ResolvedConfig {
     : `${dshHome}/memories`
   const markers = (row.projectRootMarkers ?? [...DEFAULT_PROJECT_ROOT_MARKERS])
     .filter((marker) => marker.trim().length > 0)
+  const overrides = Object.entries(row.projectRootOverrides ?? {})
+    .filter(([prefix, root]) => prefix.trim().length > 0 && typeof root === 'string' && root.trim().length > 0)
+    .map(([prefix, root]) => [resolve(expandHome(prefix.trim())), resolve(expandHome(root.trim()))] as const)
+    // Longest prefix first, so a nested workspace beats the tree it lives in.
+    .sort((left, right) => right[0].length - left[0].length)
   return {
     dshHome,
     memoriesDir,
     projectRootMarkers: markers.length > 0 ? markers : [...DEFAULT_PROJECT_ROOT_MARKERS],
+    projectRootOverrides: overrides,
     // Only `undefined` falls back to the default location, so an explicit empty
     // string disables file logging.
     logFile: row.logFile?.trim() ?? logPath(dshHome),

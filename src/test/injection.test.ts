@@ -311,6 +311,26 @@ test('with no project half, the global half may use the shared budget', async (t
   assert.ok(bullets > 4, `a project-less session should list more than the global cap, got ${bullets}`)
 })
 
+test('a directory named in projectRootOverrides owns a scope without a marker', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-memories-ovr-'))
+  const workspace = await mkdtemp(join(tmpdir(), 'dsh-memories-home-'))
+  const runtime = new MemoriesRuntime(stubContext, {
+    memoriesDir: dir, autoExtract: false, projectRootOverrides: { [workspace]: workspace },
+  })
+  t.after(() => runtime.dispose())
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  t.after(() => rm(workspace, { recursive: true, force: true }))
+  const agent = stubAgent(stubSession(workspace))
+
+  // No .git here: without the override this session has no workspace at all,
+  // which is exactly how plugin-development notes ended up in the global scope.
+  const written = await runtime.write(agent.session, {
+    scope: 'project', title: 'Harness note', body: 'About the plugin itself.', tags: [],
+  }, 'auto')
+  assert.equal(written.entry.scope, 'project')
+  assert.deepEqual((await runtime.read(agent.session, 'project', written.entry.id))?.title, 'Harness note')
+})
+
 test('a global draft that names a known workspace is filed with that workspace', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'dsh-memories-scopeguard-'))
   const workspace = await mkdtemp(join(tmpdir(), 'dsh-memories-ws-'))
