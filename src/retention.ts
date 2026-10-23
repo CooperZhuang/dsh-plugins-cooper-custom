@@ -86,9 +86,9 @@ export function planRetention(entries: readonly MemoryEntry[], rows: readonly Re
   const snapshotMs = snapshotMaxAgeDays * 86_400_000
   const decisions: RetentionDecision[] = []
   for (const entry of entries) {
-    // A pinned memory is a decision a person made; a schedule is not entitled to
-    // overrule it, exactly like a `user`-sourced one.
-    if (entry.source === 'user' || entry.pinned === true) continue
+    // A pinned or permanent memory is a decision a person made; a schedule is not
+    // entitled to overrule it, exactly like a `user`-sourced one.
+    if (entry.source === 'user' || entry.pinned === true || entry.permanent === true) continue
     const attention = lastAttention(entry, usage.get(retentionKey(entry.scope, entry.id)))
     if (snapshotMaxAgeDays > 0 && entry.durability === 'snapshot') {
       // Measured against when it was taken, not when it was last read.

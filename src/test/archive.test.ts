@@ -136,3 +136,27 @@ test('a broken reporter cannot undo the retirement it was told about', async (t)
   assert.equal(await store.archive('global', undefined, 'doomed', 2), true)
   assert.deepEqual((await store.listArchived('global', undefined)).map((entry) => entry.id), ['doomed'])
 })
+test('the cap takes the oldest entry it is allowed to take, not the permanent one', async (t) => {
+  const { store, dir } = await tempStore()
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  store.entryLimit = () => 2
+  // The permanent entry is the OLDEST, so a cap that ignores the flag takes it first.
+  await store.upsert({ scope: 'global', title: 'Standing rule', body: 'keep', tags: [], permanent: true }, undefined, 'tool', 1)
+  await store.upsert({ scope: 'global', title: 'Middle one', body: 'x', tags: [] }, undefined, 'auto', 2)
+  await store.upsert({ scope: 'global', title: 'Newest one', body: 'y', tags: [] }, undefined, 'auto', 3)
+
+  const live = await store.list('global', undefined, { fresh: true })
+  assert.deepEqual(live.map((entry) => entry.id).sort(), ['newest-one', 'standing-rule'])
+  assert.deepEqual((await store.listArchived('global', undefined)).map((entry) => entry.id), ['middle-one'])
+})
+
+test('permanence survives a rewrite that does not mention it, and is read back from disk', async (t) => {
+  const { store, dir } = await tempStore()
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  await store.upsert({ scope: 'global', title: 'Standing rule', body: 'keep', tags: [], permanent: true }, undefined, 'tool', 1)
+  await store.upsert({ scope: 'global', title: 'Standing rule', body: 'keep, reworded', tags: [] }, undefined, 'tool', 2)
+  const live = await store.list('global', undefined, { fresh: true })
+  assert.equal(live.length, 1)
+  assert.equal(live[0]?.body, 'keep, reworded')
+  assert.equal(live[0]?.permanent, true, 'omitting the field means unchanged, the same rule pinned uses')
+})

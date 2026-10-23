@@ -11,7 +11,7 @@
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { selectForConsolidation } from '../consolidate.js'
+import { classifyPlan, selectForConsolidation } from '../consolidate.js'
 import type { MemoryEntry } from '../types.js'
 
 /** Build one entry. */
@@ -75,4 +75,18 @@ test('scopes are distinct, and a limit of 0 selects nothing', () => {
   // global one shares its id.
   assert.deepEqual(selectForConsolidation(entries, marks, 1).map((item) => item.scope), ['project'])
   assert.deepEqual(selectForConsolidation(entries, marks, 0), [])
+})
+test('a permanent memory is never rewritten or retired unattended', () => {
+  const rule: MemoryEntry = { ...entry('rule', 100), source: 'tool', permanent: true, body: 'the standing rule' }
+  const plan = {
+    upserts: [{ id: 'rule', scope: 'global' as const, kind: 'fact' as const, title: 'rule', body: 'a shorter take', tags: [] }],
+    retire: ['rule'],
+    skills: [],
+    notes: '',
+  }
+  const { safe, disputes } = classifyPlan(plan, { entries: [rule] })
+  assert.equal(safe.upserts.length, 0, 'a permanent memory is not rewritten without a person')
+  assert.deepEqual(safe.retire, [], 'and it is not retired either')
+  assert.equal(disputes.length, 2)
+  for (const dispute of disputes) assert.match(dispute.reason, /永久保留/u)
 })

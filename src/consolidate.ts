@@ -697,6 +697,7 @@ export function classifyPlan(
     const reasons: string[] = []
     if (previous.source === 'user') reasons.push('这条是人手写的')
     if (previous.pinned === true) reasons.push('这条是置顶的')
+    if (previous.permanent === true) reasons.push('这条标记为永久保留')
     if (previous.scope !== item.scope) reasons.push(`作用域要从 ${previous.scope} 改成 ${item.scope}`)
     const lostCitations = citationCount(previous.body) - citationCount(item.body)
     if (lostCitations > 0) reasons.push(`新版少了 ${lostCitations} 处文件路径引用`)
@@ -724,6 +725,7 @@ export function classifyPlan(
     const reasons: string[] = []
     if (previous.source === 'user') reasons.push('这条是人手写的')
     if (previous.pinned === true) reasons.push('这条是置顶的')
+    if (previous.permanent === true) reasons.push('这条标记为永久保留')
     if (previous.uses > 0) reasons.push(`它被读到过 ${previous.uses} 次`)
     if (reasons.length === 0) {
       safeRetire.push(id)

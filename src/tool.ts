@@ -127,6 +127,10 @@ export function registerMemoryTool(ctx: Context, runtime: MemoriesRuntime): () =
         type: 'boolean',
         description: 'write: keep this memory in the injected summary whenever it fits, ahead of what the ranking would choose. For the few rules that must be visible in every session; pinned memories are also never archived for being unused.',
       },
+      permanent: {
+        type: 'boolean',
+        description: 'write: never retire this memory on its own — retention, the per-scope cap, and unattended consolidation all leave it alone, and only /memories forget removes it. Costs no summary slot; use it for a rule that should survive until you change your mind (rewriting the same title is how you change your mind).',
+      },
       query: {
         type: 'string',
         description: 'search: what to look for. Empty lists the most recent memories.',
@@ -177,6 +181,7 @@ export function registerMemoryTool(ctx: Context, runtime: MemoriesRuntime): () =
             ...args.durability === undefined ? {} : { durability: args.durability },
             ...asOf === undefined ? {} : { asOf },
             ...args.pinned === undefined ? {} : { pinned: args.pinned },
+            ...args.permanent === undefined ? {} : { permanent: args.permanent },
           }, 'tool')
           // The runtime may have stored a project draft globally: a session with
           // no workspace of its own has no project scope, and reporting the scope
