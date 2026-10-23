@@ -39,7 +39,11 @@ import { MemoryStore, slugify } from './storage.js'
 import { StateStore, importLegacyState, statePath } from './state.js'
 import { browseMemories, EXPAND_SEEDS, hubTerms, matchCredit, QUALIFIED_SCORE_FACTOR, relatedHits, searchMemories } from './search.js'
 import type { MatchCredit, ScopeEntries } from './search.js'
+import { readFile } from 'node:fs/promises'
 import { readPersona, renderPersonaBlock, writePersona } from './persona.js'
+import { admitNotice, dueNotices, pruneNotices, readNotices, withNotice, writeNotices } from './notices.js'
+import { readPetId, say, systemNotification } from './pet.js'
+import type { PetTarget } from './pet.js'
 import { parseTimeRange } from './time.js'
 import { isSubstantiveTurn } from './query.js'
 import { MEMORY_OPEN, rankForSummary, renderEntry, renderHit, renderMemorySummaryResult, renderRecall, renderScopeListing, selectForSummary } from './render.js'
@@ -2352,6 +2356,126 @@ export class MemoriesRuntime {
    * @returns the plan, or `undefined` when no route produced one.
    */
   /**
+   * Speak without being asked, when there is something to say.
+   *
+   * Two deterministic triggers only, for now: a daily line about what the plugin
+   * maintained, and a warning when decisions have waited long enough that the
+   * pending panel will drop them. Both are judgements a rule can make, which is
+   * why they are the first ones allowed to interrupt. Everything smarter (open
+   * loops, reflections) enters here later through the same queue, and the same
+   * rules apply: evidence or silence, and never the same subject twice.
+   *
+   * Called from the once-per-conversation hook and from the maintenance sweep. A
+   * failure is logged and swallowed: speaking is never allowed to break a turn.
+   */
+  private async pumpNotices(): Promise<void> {
+    if (!this.settings.noticesEnabled) return
+    const dir = this.store.memoriesDir
+    const now = Date.now()
+    try {
+      let queue = pruneNotices(await readNotices(dir), now)
+      const policy = {
+        now,
+        quietHours: this.settings.noticeQuietHours,
+        dailyCap: 20,
+        minSpacingHours: 6,
+      }
+      // 1. Daily digest, computed from the plugin's own log since the last one.
+      const lastDigest = queue.lastDigestAt ?? 0
+      if (now - lastDigest >= 86_400_000) {
+        const counts = await this.maintenanceCounts(lastDigest)
+        if (counts.total > 0) {
+          const admitted = admitNotice(queue, {
+            kind: 'digest',
+            createdAt: now,
+            dueAt: now,
+            title: `昨天我整理了 ${counts.total} 条记忆：新增 ${counts.stored}、合并退役 ${counts.retired}、维护扫描 ${counts.sweeps} 次`,
+            body: counts.detail,
+            evidence: counts.evidence,
+            dedupeKey: 'digest:daily',
+          }, policy)
+          if (admitted.ok) queue = { ...queue, lastDigestAt: now, notices: [admitted.notice, ...queue.notices] }
+          else this.log.decision('dsh-memories: notice suppressed (%s)', admitted.reason)
+        } else {
+          queue = { ...queue, lastDigestAt: now }
+        }
+      }
+      // 2. Backlog warning: unanswered decisions go stale and are dropped.
+      const pending = await readPendingPlan(dir).catch(() => undefined)
+      if (pending !== undefined && now - pending.at >= 12 * 3_600_000) {
+        const age = Math.round((now - pending.at) / 3_600_000)
+        const admitted = admitNotice(queue, {
+          kind: 'backlog',
+          createdAt: now,
+          dueAt: now,
+          title: `有 ${pending.disputes.length} 条记忆变更等你确认（已等 ${age} 小时，超时会丢弃）`,
+          body: pending.disputes.map((row) => `- [${row.action}] ${row.title}：${row.reason}`).join('\n'),
+          evidence: pending.disputes.map((row) => row.id),
+          dedupeKey: `backlog:${pending.disputes.length}`,
+        }, policy)
+        if (admitted.ok) queue = { ...queue, notices: [admitted.notice, ...queue.notices] }
+        else this.log.decision('dsh-memories: notice suppressed (%s)', admitted.reason)
+      }
+      const before = JSON.stringify(queue)
+      // 3. Deliver what is due: pet first, system notification as fallback.
+      const target = this.petTarget()
+      let next = queue
+      for (const notice of dueNotices(queue, now)) {
+        const result = target === undefined ? { ok: false, reason: 'no pet configured' } : await say(target, { text: notice.title, duration: this.settings.petBubbleMs })
+        if (result.ok) {
+          next = withNotice(next, { ...notice, state: 'delivered', deliveredAt: now })
+          this.log.info('dsh-memories: notice delivered via the pet: %s', notice.title)
+          continue
+        }
+        this.log.decision('dsh-memories: pet delivery failed (%s), trying the system', result.reason ?? 'unknown')
+        if (systemNotification('dsh-memories', notice.title)) {
+          next = withNotice(next, { ...notice, state: 'delivered', deliveredAt: now })
+          this.log.info('dsh-memories: notice delivered via system notification: %s', notice.title)
+        } else {
+          this.log.warn('dsh-memories: no channel for notice %s (%s)', notice.id, notice.title)
+        }
+      }
+      if (JSON.stringify(next) !== before) await writeNotices(dir, next)
+    } catch (error) {
+      this.log.warn('dsh-memories: notice pump failed: %s', error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  /** Where the pet is, or `undefined` when it cannot be reached. */
+  private petTarget(): PetTarget | undefined {
+    const petId = this.settings.petId.trim().length > 0
+      ? this.settings.petId.trim()
+      : readPetId(this.deployment.dshHome)
+    if (petId === undefined) return undefined
+    const web = this.ctx.get('webServer') as { port?: number } | undefined
+    const port = web?.port
+    if (port === undefined) return undefined
+    const connection = this.ctx.get('connection') as { authenticatedUrl?: (url: string) => string } | undefined
+    const origin = connection?.authenticatedUrl?.(`http://127.0.0.1:${port}`) ?? `http://127.0.0.1:${port}`
+    return { origin, petId, routeId: this.settings.petRouteId }
+  }
+
+  /** Count what the plugin did since one timestamp, from its own log. */
+  private async maintenanceCounts(since: number): Promise<{ total: number; stored: number; retired: number; sweeps: number; detail: string; evidence: string[] }> {
+    const text = await readFile(this.deployment.logFile, 'utf8').catch(() => '')
+    const after = new Date(since).toISOString()
+    const lines = text.split(/\r?\n/u).filter((line) => line.length > 0 && line.slice(0, 24) >= after)
+    const count = (needle: string): number => lines.filter((line) => line.includes(needle)).length
+    const stored = count(' stored ')
+    const retired = count(' retired ')
+    const sweeps = count('sweep:')
+    const consolidated = count(' consolidated ')
+    return {
+      total: stored + retired + consolidated + sweeps,
+      stored,
+      retired,
+      sweeps,
+      detail: `新增 ${stored} 条、退役 ${retired} 条、合并 ${consolidated} 次、维护扫描 ${sweeps} 次；当前 ${(await this.store.list('global', undefined, { fresh: true })).length} 条全局记忆。`,
+      evidence: ['digest'],
+    }
+  }
+
+  /**
    * Adjudicate the flagged changes, when a person is not the right answer.
    *
    * The determinism this replaces was not neutral: on a real store every proposal
@@ -2583,6 +2707,11 @@ export class MemoriesRuntime {
     this.log.info('dsh-memories: sweep: archived %d memories across %d project scopes, pruned %d empty project director%s, %d stale citation%s%s',
       archived, scopes, removed.length, removed.length === 1 ? 'y' : 'ies', stale, stale === 1 ? '' : 's',
       queued === 1 ? ', queued a consolidation pass' : '')
+    // The sweep is the moment the plugin is awake without a turn; the digest does
+    // not need a conversation to be worth saying. Awaited, not fire-and-forget:
+    // a background write racing its own teardown is how a test suite starts
+    // failing with ENOTEMPTY, and the sweep is already off the user's path.
+    await this.pumpNotices()
     return archived
   }
 
