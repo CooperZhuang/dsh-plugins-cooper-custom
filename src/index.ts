@@ -1049,6 +1049,44 @@ export class MemoriesRuntime {
   }
 
   /**
+   * At most one archived memory that answers this turn.
+   *
+   * The archive is a graveyard only if nothing reads it: 70% of what sits there
+   * was genuinely used before it was retired, and the recall path is the only
+   * thing that could still reach it. One entry, because a retired memory is a
+   * weaker claim than a live one and the block has a byte budget.
+   *
+   * @param session - session whose scopes to search.
+   * @param states - the live scopes; the archive is searched per scope.
+   * @param query - the turn's text.
+   * @param hub - the term discount, when enabled.
+   * @returns zero or one retired entry, best first.
+   */
+  private async archivedFor(
+    session: Session,
+    states: readonly ScopeState[],
+    query: string,
+    hub: ((term: string) => boolean) | undefined,
+  ): Promise<readonly MemoryEntry[]> {
+    const root = await this.projectRoot(session)
+    const window = parseTimeRange(query)
+    const hits: { entry: MemoryEntry; relevance: number }[] = []
+    for (const state of states) {
+      const retired = await this.store.listArchived(state.scope, state.scope === 'project' ? root : undefined)
+        .catch(() => [] as readonly MemoryEntry[])
+      for (const entry of retired) {
+        const why = matchCredit(entry, query, this.settings.recallMinScore, this.settings.recallMinTerms, {
+          range: window ?? null,
+          ...hub === undefined ? {} : { hub },
+        })
+        if (why.about) hits.push({ entry, relevance: why.relevance })
+      }
+    }
+    hits.sort((left, right) => right.relevance - left.relevance || right.entry.updatedAt - left.entry.updatedAt)
+    return hits.slice(0, 1).map((hit) => hit.entry)
+  }
+
+  /**
    * Which query terms are too common in these scopes to count as evidence.
    *
    * Cached against a signature of the store (entry count plus newest update), so
@@ -1134,6 +1172,23 @@ export class MemoriesRuntime {
       }
     }
     if (eligible.length === 0) {
+      // Nothing live answers this turn. An entry retired by the cap, folded by a
+      // rewrite or aged out can still hold the answer, and "we used to say this"
+      // costs one line where silence is a miss the reader never learns about.
+      const retired = await this.archivedFor(session, states, query, hub)
+      if (retired.length > 0) {
+        const text = renderRecall([], this.settings.recallMaxBytes, retired)
+        if (text !== undefined) {
+          for (const entry of retired) seen.add(entry.id)
+          this.recallCounts.set(session, used + retired.length)
+          this.log.info('dsh-memories: session %s recalled %s from the archive (nothing live matched)',
+            session.id, retired.map((entry) => entry.id).join(', '))
+          return createUserMessage({
+            content: [{ type: 'text', text }],
+            source: { kind: MEMORY_SOURCE_KIND, form: 'recall' },
+          })
+        }
+      }
       // The detail is RENDERED, not passed as arguments: the host's formatter
       // understands `%s`/`%d`/`%o` and nothing else, so a nested format string
       // passed as one `%s` arrives with its own placeholders still in it. That

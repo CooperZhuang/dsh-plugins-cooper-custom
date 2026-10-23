@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { MemoriesRuntime } from '../index.js'
+import { renderRecall } from '../render.js'
 import { hubTerms, matchCredit } from '../search.js'
 import { Logger } from '@deepseek-ai/cordis'
 import { MEMORY_SOURCE_KIND } from '../types.js'
@@ -417,4 +418,22 @@ test('a query with two real terms still clears the gate when a hub word is prese
   const hub = hubTerms(store, 0.5)
   const entry = store[0] as MemoryEntry
   assert.equal(matchCredit(entry, 'dsh plugin logger', 9, 2, { hub }).about, true)
+})
+test('an archived memory renders with an explicit marker, after any live ones', () => {
+  const make = (id: string, title: string, body: string): MemoryEntry => ({
+    id, scope: 'global', kind: 'fact', title, body, tags: [], keys: [],
+    createdAt: 0, updatedAt: 0, uses: 0, lastUsedAt: 0, lastSurfacedAt: 0, source: 'auto',
+  })
+  const live = make('live', 'Current rule', 'this is what we do now')
+  const retired = make('retired', 'Old rule', 'this is what we used to do')
+  const mixed = renderRecall([live], 4_000, [retired])
+  assert.ok(mixed !== undefined)
+  assert.match(mixed ?? '', /\[archived\] Old rule/u, 'a retired memory says so')
+  assert.ok((mixed ?? '').indexOf('Current rule') < (mixed ?? '').indexOf('[archived]'), 'live entries come first')
+
+  const onlyRetired = renderRecall([], 4_000, [retired])
+  assert.ok(onlyRetired !== undefined, 'an archived-only block is still worth emitting')
+  assert.match(onlyRetired ?? '', /以前是这么说的/u)
+
+  assert.equal(renderRecall([], 4_000, []), undefined, 'nothing to say renders nothing')
 })
