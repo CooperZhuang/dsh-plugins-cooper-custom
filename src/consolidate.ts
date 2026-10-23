@@ -20,6 +20,7 @@ import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { PERSONA_MAX_SOURCE_CHARS } from './persona.js'
 import { carriesForward } from './storage.js'
 import { toMemoryKind } from './types.js'
 import { MEMORY_SOURCE_KIND } from './types.js'
@@ -52,8 +53,10 @@ export const CONSOLIDATE_SYSTEM = [
   '',
   'When two or more memories together describe a repeatable procedure that would be worth running again, also return it as a skill: a short kebab-case name, a one-line description, and the ordered steps. Skills are drafts a human promotes; return at most 2.',
   '',
+  'Also maintain "persona": a short profile of the USER, in markdown, built only from what they themselves said. The input marks those entries with "voice: user" and may include the current profile — refine it, do not rewrite it from nothing, and keep it under 40 lines. Contents: how they want work done, the corrections they have issued, how they write, what they care about, and what they never want. Write it in the third person ("他要求…"), never as instructions to yourself. If no entry carries voice: user, and no current profile exists, omit the field entirely.',
+  '',
   'Reply with JSON only, no prose and no code fence:',
-  '{"memories":[{"id":string|null,"scope":"global"|"project","kind":string,"title":string,"body":string,"tags":string[],"keys":string[],"appliesTo":string,"derivedFrom":string[]}],"retire":[string],"skills":[{"name":string,"description":string,"steps":string[]}],"notes":string}',
+  '{"memories":[{"id":string|null,"scope":"global"|"project","kind":string,"title":string,"body":string,"tags":string[],"keys":string[],"appliesTo":string,"derivedFrom":string[]}],"retire":[string],"skills":[{"name":string,"description":string,"steps":string[]}],"notes":string,"persona":string}',
   'Use null for the id of a new memory. "retire" lists ids to delete. "notes" is one short sentence about what you changed.',
 ].join('\n')
 
@@ -101,6 +104,7 @@ export const CONSOLIDATE_JSON_SCHEMA = {
       },
     },
     notes: { type: 'string' },
+    persona: { type: 'string' },
   },
 } as const
 
@@ -124,10 +128,22 @@ export interface ConsolidationPlan {
   readonly skills: readonly SkillDraft[]
   /** The sub-agent's one-line account of what it changed. */
   readonly notes: string
+  /**
+   * The refreshed profile of the user, in markdown.
+   *
+   * Omitted when the pass had nothing to add: the pass is shown the current
+   * profile and told to return it unchanged rather than to re-invent it, because
+   * a profile that is rewritten from scratch every six hours drifts.
+   */
+  readonly persona?: string
 }
 
 /** Render the input document handed to the consolidation agent. */
-export function renderConsolidationInput(entries: readonly MemoryEntry[], projectLabel: string): string {
+export function renderConsolidationInput(
+  entries: readonly MemoryEntry[],
+  projectLabel: string,
+  currentPersona?: string,
+): string {
   const sections = new Map<MemoryScope, MemoryEntry[]>()
   for (const entry of entries) {
     const list = sections.get(entry.scope)
@@ -135,6 +151,10 @@ export function renderConsolidationInput(entries: readonly MemoryEntry[], projec
     else list.push(entry)
   }
   const blocks: string[] = [`Workspace scope label: ${projectLabel}`, `Current memories: ${entries.length}`, '']
+  if (currentPersona !== undefined && currentPersona.trim().length > 0) {
+    blocks.push('## Current profile of the user (refine it; do not rewrite it from nothing)')
+    blocks.push(currentPersona.trim(), '')
+  }
   for (const scope of ['global', 'project'] as const) {
     const list = sections.get(scope)
     if (list === undefined || list.length === 0) continue
@@ -145,6 +165,7 @@ export function renderConsolidationInput(entries: readonly MemoryEntry[], projec
       blocks.push(`  tags: ${entry.tags.join(', ') || '(none)'}`)
       blocks.push(`  keys: ${entry.keys.join(', ') || '(none)'}`)
       blocks.push(`  body: ${entry.body.replace(/\n+/gu, ' ')}`)
+      if (entry.voice === 'user') blocks.push('  voice: user (the user\'s own words)')
     }
     blocks.push('')
   }
@@ -220,12 +241,16 @@ export function parsePlan(text: string, knownIds: ReadonlySet<string>, maxUpsert
     retired.add(value)
   }
   const skills = parseSkills(record['skills'])
-  if (upserts.length === 0 && retired.size === 0 && skills.length === 0) return undefined
+  const persona = typeof record['persona'] === 'string' ? record['persona'].trim().slice(0, PERSONA_MAX_SOURCE_CHARS) : ''
+  // A pass that only refines the profile is a real outcome: the profile changes
+  // without any memory moving, and dropping that reply would lose it.
+  if (upserts.length === 0 && retired.size === 0 && skills.length === 0 && persona.length === 0) return undefined
   return {
     upserts,
     retire: [...retired],
     skills,
     notes: typeof record['notes'] === 'string' ? record['notes'].slice(0, 300) : '',
+    ...persona.length > 0 ? { persona } : {},
   }
 }
 
@@ -280,6 +305,8 @@ export interface ConsolidateRequest {
   readonly subagentProvider?: string
   /** Entries to consider, newest first. */
   readonly entries: readonly MemoryEntry[]
+  /** The profile as it stands, so the pass refines it rather than re-inventing it. */
+  readonly persona?: string
   /** Model-facing project label. */
   readonly projectLabel: string
   /** Cap on returned memories. */
@@ -431,7 +458,7 @@ export function denyToolsFor(available: ReadonlySet<string>): string[] {
 export async function runConsolidation(seam: SubagentSeam, request: ConsolidateRequest): Promise<ConsolidationPlan | undefined> {
   if (request.entries.length === 0) return undefined
   const known = new Set(request.entries.map((entry) => entry.id))
-  const input = renderConsolidationInput(request.entries, request.projectLabel)
+  const input = renderConsolidationInput(request.entries, request.projectLabel, request.persona)
   const timeout = AbortSignal.any([request.signal, AbortSignal.timeout(request.timeoutMs)])
   const prompt = [{ type: 'text' as const, text: `${CONSOLIDATE_SYSTEM}\n\n---\n\n${input}` }]
   const reply = await runChild(seam, prompt, request, timeout)
@@ -567,7 +594,7 @@ export async function runConsolidationDirect(llm: LlmRuntime, request: Consolida
   const route = request.route
   if (route === undefined) return undefined
   const known = new Set(request.entries.map((entry) => entry.id))
-  const input = renderConsolidationInput(request.entries, request.projectLabel)
+  const input = renderConsolidationInput(request.entries, request.projectLabel, request.persona)
   const messages = [createUserMessage({
     content: [{ type: 'text', text: input }],
     source: { kind: MEMORY_SOURCE_KIND },

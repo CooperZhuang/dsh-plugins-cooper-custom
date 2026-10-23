@@ -388,6 +388,8 @@ export const Config = z.object({
   logLevel: z.string().default(DEFAULT_LOG_LEVEL).description('How much dsh-memories writes to its log file: off, error, warn, info, or debug. info keeps errors, warnings, and pass summaries; debug adds per-entry decisions.').volatile(),
   /** Whether maintenance decisions are logged at info, where a stock logLevel keeps them. */
   traceMaintenance: z.boolean().default(DEFAULT_TRACE_MAINTENANCE).description('Log every retention, recall, and selection decision at info instead of debug. Off keeps the file to one line per pass.').volatile(),
+  /** Byte budget for the persona block injected ahead of the memory summary. */
+  personaMaxBytes: z.number().default(1200).description('Byte budget for the persona block (who the user is, in their own words) injected once per conversation ahead of the memory summary. 0 disables the block. Kept separate from the summary budget because the profile is context for the whole turn, not one of the memories being listed.').volatile(),
   /** Share of a scope above which a query term stops counting as recall evidence. */
   evidenceMaxDf: z.number().default(DEFAULT_EVIDENCE_MAX_DF).description('A query term that appears in more than this share of one scope does not count towards the recall gate\'s evidence requirement. 0.15 is measured on a real 200-entry store: it catches exactly one term (dsh, 22% of entries) and cuts false admissions by three quarters without changing any of ten labelled probes. 0 disables the discount and restores the pre-2026-10-23 behaviour.').volatile(),
   /** Local-time windows whose tokens are the expensive ones. */
@@ -448,6 +450,8 @@ export interface MemoriesSettings {
   autoDecide: boolean
   /** Confidence floor under which an AI verdict counts as no answer. */
   autoDecideMinConfidence: number
+  /** Byte budget for the injected persona block. */
+  personaMaxBytes: number
   /** Model routes for the plugin's own calls; empty reuses the session's route. */
   extractProvider: string
   extractModel: string
@@ -506,6 +510,7 @@ export const MEMORIES_SETTINGS_DEFAULTS: MemoriesSettings = {
   consolidateTimeoutMs: DEFAULT_CONSOLIDATE_TIMEOUT_MS,
   autoDecide: true,
   autoDecideMinConfidence: 0.7,
+  personaMaxBytes: 1200,
   pauseOnQuotaError: true,
   quotaCooldownMinutes: DEFAULT_QUOTA_COOLDOWN_MINUTES,
   quotaCooldownMaxMinutes: DEFAULT_QUOTA_COOLDOWN_MAX_MINUTES,
@@ -648,6 +653,7 @@ export function normalizeSettings(input: Partial<MemoriesSettings> | undefined):
     consolidateTimeoutMs: positive(value.consolidateTimeoutMs, DEFAULT_CONSOLIDATE_TIMEOUT_MS),
     autoDecide: value.autoDecide ?? true,
     autoDecideMinConfidence: clampUnit(value.autoDecideMinConfidence, 0.7),
+    personaMaxBytes: positive(value.personaMaxBytes, 1200, 0),
     pauseOnQuotaError: value.pauseOnQuotaError ?? true,
     quotaCooldownMinutes: positive(value.quotaCooldownMinutes, DEFAULT_QUOTA_COOLDOWN_MINUTES, 0),
     quotaCooldownMaxMinutes: positive(value.quotaCooldownMaxMinutes, DEFAULT_QUOTA_COOLDOWN_MAX_MINUTES, 0),

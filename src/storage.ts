@@ -131,6 +131,7 @@ export function formatEntry(entry: MemoryEntry): string {
     ...entry.durability === 'snapshot' && entry.asOf !== undefined ? [`asOf: ${new Date(entry.asOf).toISOString()}`] : [],
     ...entry.pinned === true ? ['pinned: true'] : [],
     ...entry.permanent === true ? ['permanent: true'] : [],
+    ...entry.voice === 'user' ? ['voice: user'] : [],
     ...entry.supersedes !== undefined && entry.supersedes.length > 0 ? [`supersedes: ${entry.supersedes}`] : [],
     ...entry.sourceSession !== undefined && entry.sourceSession.length > 0 ? [`session: ${entry.sourceSession}`] : [],
     ...entry.derivedFrom !== undefined && entry.derivedFrom.length > 0 ? [`derivedFrom: ${entry.derivedFrom.join(', ')}`] : [],
@@ -190,6 +191,7 @@ export function parseEntry(text: string, scope: MemoryScope, fallbackId: string)
   const asOf = parseTime(fields.get('asof'), 0)
   const pinned = fields.get('pinned') === 'true'
   const permanent = fields.get('permanent') === 'true'
+  const voice = fields.get('voice') === 'user' ? 'user' as const : undefined
   const supersedes = fields.get('supersedes')
   const sourceSession = fields.get('session')
   // A list of ids in one comma-separated line, the same shape `tags` and `keys`
@@ -210,6 +212,7 @@ export function parseEntry(text: string, scope: MemoryScope, fallbackId: string)
     ...durability === 'snapshot' ? { durability, ...asOf > 0 ? { asOf } : {} } : {},
     ...pinned ? { pinned: true } : {},
     ...permanent ? { permanent: true } : {},
+    ...voice === undefined ? {} : { voice },
     ...supersedes !== undefined && supersedes.length > 0 ? { supersedes } : {},
     ...sourceSession !== undefined && sourceSession.length > 0 ? { sourceSession } : {},
     ...derivedFrom.length > 0 ? { derivedFrom } : {},
@@ -823,6 +826,7 @@ export class MemoryStore {
         ...entry.durability === 'snapshot' ? { durability: entry.durability, ...entry.asOf === undefined ? {} : { asOf: entry.asOf } } : {},
         ...entry.pinned === true ? { pinned: true } : {},
         ...entry.permanent === true ? { permanent: true } : {},
+        ...entry.voice === undefined ? {} : { voice: entry.voice },
         ...entry.supersedes === undefined ? {} : { supersedes: entry.supersedes },
         createdAt: entry.createdAt,
         updatedAt: entry.updatedAt,
@@ -946,6 +950,9 @@ export class MemoryStore {
     const pinned = draft.pinned ?? existing?.pinned ?? false
     // Same rule as `pinned`: a rewrite that does not mention permanence keeps it.
     const permanent = draft.permanent ?? existing?.permanent ?? false
+    // And whose words it is: a consolidation that re-words a memory must not
+    // quietly turn the user's own statement into the assistant's conclusion.
+    const voice = draft.voice ?? existing?.voice
     const sourceSession = draft.sourceSession?.trim() ?? existing?.sourceSession
     // The merge trail. A draft may name what it was folded from (a consolidation
     // does), and a supersede is itself evidence: the entry this one replaces is
@@ -991,6 +998,7 @@ export class MemoryStore {
       ...durability === 'snapshot' ? { durability, ...asOf === undefined || asOf <= 0 ? { asOf: now } : { asOf } } : {},
       ...pinned ? { pinned: true } : {},
       ...permanent ? { permanent: true } : {},
+      ...voice === undefined ? {} : { voice },
       ...supersedes !== undefined && supersedes.length > 0 ? { supersedes } : {},
       // Provenance survives a rewrite: a consolidation that re-words an entry
       // must not erase which conversation it came from.

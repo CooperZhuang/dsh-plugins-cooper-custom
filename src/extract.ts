@@ -70,6 +70,11 @@ export const EXTRACT_SYSTEM = [
   '- "knowledge": a non-obvious technique worth reusing.',
   '- "fact": durable background that is none of the above.',
   'Always provide "appliesTo": a short phrase in the user\'s words saying when this memory matters ("准备推送代码之前"). It is the field that lets a paraphrased turn find the memory, and it is required.',
+  '',
+  'Mark whose words a memory preserves with "voice":',
+  '- "user" when the user themselves stated it: how they want work done, a correction they issued, a habit, an opinion, a rule they set ("以后都…", "不要…", "我喜欢…"). Keep their distinctive wording where it carries meaning; a preference of theirs phrased in your own voice is worth less than one that still sounds like them.',
+  '- omit the field (the default) when the memory is your own conclusion, an observation about the code, or a fact you looked up.',
+  'Never attribute your own conclusion to the user. A profile of this person is rebuilt from the "user" entries, so a misattributed guess becomes a false belief about them.',
   'Prefer few high-value memories over many trivial ones. Return at most the requested number.',
   'Reply with JSON only, no prose and no code fence: {"memories":[{"scope":"global"|"project","kind":string,"title":string,"body":string,"tags":string[],"appliesTo":string}],"summary":string}',
   'Write the "memories" array first and the "summary" paragraph last: the reply is capped, and a summary written first can spend the whole budget before the first memory is complete.',
@@ -103,6 +108,7 @@ export const EXTRACT_JSON_SCHEMA = {
           tags: { type: 'array', items: { type: 'string' } },
           keys: { type: 'array', items: { type: 'string' } },
           appliesTo: { type: 'string' },
+          voice: { type: 'string', enum: ['user', 'assistant'] },
           durability: { type: 'string', enum: ['durable', 'snapshot'] },
           asOf: { type: 'string' },
         },
@@ -287,6 +293,9 @@ export function parseExtraction(text: string, maxMemories: number, sessionId: st
     // extractor's own claim if it parsed, otherwise the moment of extraction.
     const snapshot = record['durability'] === 'snapshot'
     const parsedAsOf = typeof record['asOf'] === 'string' ? Date.parse(record['asOf']) : Number.NaN
+    // "assistant" is the default and is stored as absent, so every entry written
+    // before this field existed keeps its meaning.
+    const voice = record['voice'] === 'user' ? 'user' as const : undefined
     usable.push({
       scope: scope as MemoryScope,
       kind: toMemoryKind(record['kind']),
@@ -294,6 +303,7 @@ export function parseExtraction(text: string, maxMemories: number, sessionId: st
       body: cleanBody,
       tags,
       keys,
+      ...voice === undefined ? {} : { voice },
       ...appliesTo.length > 0 ? { appliesTo } : {},
       ...snapshot ? { durability: 'snapshot' as const, asOf: Number.isFinite(parsedAsOf) ? parsedAsOf : Date.now() } : {},
       sourceSession: sessionId,
