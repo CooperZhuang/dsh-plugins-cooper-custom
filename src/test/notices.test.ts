@@ -125,5 +125,6 @@ test('the broadcast URL keeps its path before the token and carries the renderer
   assert.match(seenUrl, /^http:\/\/127\.0\.0\.1:43120\/dsh-pet-7340\/broadcast\?/u)
   assert.match(seenUrl, /pet=main/u)
   assert.match(seenUrl, /token=tok123/u)
+  assert.match(seenUrl, /surface=any/u, 'the pet refuses a broadcast without a surface')
   assert.equal(seenHeaders['x-dsh-desktop-renderer'], 'cap', 'the desktop gate needs the renderer capability')
 })
