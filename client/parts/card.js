@@ -92,6 +92,31 @@ const FIELDS = [
     hint: { zh: '一条记忆要被按需补注，除了达到相关度下限，还必须在标题、别名、标签或「何时有用」里命中这么多个不同的提问词。中文提问尤其需要：只共用「插件」「日志」这类常见词不算证据，共享两个词才算。设为 1 就只按相关度打分判断（会明显更容易误补）。', en: 'Distinct query terms that must land in the title, keys, tags, or appliesTo before a memory may be recalled. This is what stops a Chinese turn from recalling everything that shares a common word; set it to 1 to gate on relevance alone.' },
   },
   {
+    field: 'noticesEnabled', kind: 'boolean',
+    label: { zh: '允许它主动开口', en: 'Let it speak first' },
+    hint: { zh: '每天一条整理简报、待裁决积压超时提醒。先走桌宠气泡，桌宠不在时退回系统通知。关掉则只在你问的时候回答。', en: 'A daily digest of maintenance and a warning when decisions have waited too long. Desktop pet bubble first, system notification as fallback. Off means it only answers.' },
+  },
+  {
+    field: 'petId', kind: 'text',
+    label: { zh: '桌宠 id', en: 'Desktop pet id' },
+    hint: { zh: '留空则从 dsh-pet 的配置里读第一个宠物的 id（本机是 main / 蓝毛小女仆）。', en: 'Empty reads the first pet from the pet plugin\'s own config (main on this machine).' },
+  },
+  {
+    field: 'petRouteId', kind: 'text',
+    label: { zh: '桌宠路由 id', en: 'Pet route id' },
+    hint: { zh: '桌宠注册的 HTTP 前缀里的那一段（/dsh-pet-<id>）。只有换桌宠版本时才需要改。', en: 'Route segment in the pet HTTP prefix (/dsh-pet-<id>). Only change it if the pet changes it.' },
+  },
+  {
+    field: 'petBubbleMs', kind: 'number', min: 1000, step: 1000,
+    label: { zh: '气泡停留时长', en: 'Bubble duration' },
+    hint: { zh: '一条通知在桌宠上停留多久（毫秒）。', en: 'How long one notice stays on screen, in milliseconds.' },
+  },
+  {
+    field: 'noticeQuietHours', kind: 'text',
+    label: { zh: '安静时段', en: 'Quiet hours' },
+    hint: { zh: '本地时间的免打扰窗口，例如 "22:00-08:00"；留空表示不限制。落在窗口内的通知会顺延到窗口结束，不会丢。', en: 'Local windows when nothing is delivered, e.g. "22:00-08:00". Held notices fire when the window ends; they are not dropped.' },
+  },
+  {
     field: 'personaMaxBytes', kind: 'number', min: 0, step: 100,
     label: { zh: '画像块字节预算', en: 'Persona block budget' },
     hint: { zh: '每会话开头注入的「关于你」块的上限。它由合并子代理从 voice=user 的记忆里维护，是整轮对话的上下文，不占记忆摘要的预算；设为 0 关闭。', en: 'Upper bound for the profile block injected once per conversation. It is maintained by the consolidation pass from voice=user memories and is turn-level context, so it does not compete with the memory summary budget. 0 disables it.' },

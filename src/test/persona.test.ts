@@ -10,11 +10,11 @@
  * @module dsh-memories/test/persona.test
  */
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { PERSONA_FILE, readPersona, renderPersonaBlock, writePersona } from '../persona.js'
+import { personaPath, readPersona, renderPersonaBlock, writePersona } from '../persona.js'
 import { MemoryStore } from '../storage.js'
 import { parsePlan } from '../consolidate.js'
 
@@ -24,9 +24,9 @@ test('a profile round-trips through the store directory', async (t) => {
 
   assert.equal(await readPersona(dir), undefined, 'no profile before one is written')
   const path = await writePersona(dir, '他要求先确认再改代码。')
-  assert.match(path, /persona\.md$/u)
+  assert.match(path, /persona[\\/]human\.md$/u)
   assert.equal(await readPersona(dir), '他要求先确认再改代码。')
-  assert.match(await readFile(join(dir, PERSONA_FILE), 'utf8'), /先确认再改代码/u)
+  assert.match(await readFile(personaPath(dir, 'human'), 'utf8'), /先确认再改代码/u)
 })
 
 test('the block is framed, dated, and explicitly not an instruction set', () => {
@@ -72,4 +72,11 @@ test('the voice flag survives the storage round trip', async (t) => {
   await store.upsert({ scope: 'global', title: 'Said by the user', body: 'prefers short answers, always', tags: [] }, undefined, 'auto', 3)
   const reworded = (await store.list('global', undefined, { fresh: true })).find((entry) => entry.id === 'said-by-the-user')
   assert.equal(reworded?.voice, 'user')
+})
+test('a legacy single-file profile is still read as the human block', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-memories-legacy-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  await writeFile(join(dir, 'persona.md'), '旧的单文件画像\n', 'utf8')
+  assert.equal(await readPersona(dir), '旧的单文件画像', 'upgrading does not lose the profile')
+  assert.equal(await readPersona(dir, 'assistant'), undefined, 'but it is not reused as the pet persona')
 })

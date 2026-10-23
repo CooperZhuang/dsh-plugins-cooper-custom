@@ -388,6 +388,16 @@ export const Config = z.object({
   logLevel: z.string().default(DEFAULT_LOG_LEVEL).description('How much dsh-memories writes to its log file: off, error, warn, info, or debug. info keeps errors, warnings, and pass summaries; debug adds per-entry decisions.').volatile(),
   /** Whether maintenance decisions are logged at info, where a stock logLevel keeps them. */
   traceMaintenance: z.boolean().default(DEFAULT_TRACE_MAINTENANCE).description('Log every retention, recall, and selection decision at info instead of debug. Off keeps the file to one line per pass.').volatile(),
+  /** Whether the plugin may speak without being asked (pet bubble / OS notification). */
+  noticesEnabled: z.boolean().default(true).description('Let the plugin raise a notice on its own: a daily digest of what it maintained, a backlog warning when decisions have waited too long, and later open loops. Notices go to the desktop pet first and to a system notification as a fallback. Off means the plugin only ever answers.').volatile(),
+  /** Pet id to speak through; empty reads it from the pet's own config. */
+  petId: z.string().default('').description("Desktop pet id for notices, e.g. main. Empty reads the first pet from dsh-pet's own config. The pet's HTTP route needs the harness's authenticated URL, which is resolved in-process.").volatile(),
+  /** Pet route id baked into its registered prefix. */
+  petRouteId: z.string().default('7340').description('Route id in the pet HTTP prefix (/dsh-pet-<routeId>). Only change it if the pet package registers a different one.').volatile(),
+  /** How long one bubble stays up. */
+  petBubbleMs: z.number().default(8000).description('How long the pet keeps a notice bubble on screen, in milliseconds.').volatile(),
+  /** Windows during which nothing is delivered. */
+  noticeQuietHours: z.string().default('').description('Local-time windows during which notices are held rather than delivered, for example "22:00-08:00". Empty means always allowed. Held notices fire when the window ends; they are not dropped.').volatile(),
   /** Byte budget for the persona block injected ahead of the memory summary. */
   personaMaxBytes: z.number().default(1200).description('Byte budget for the persona block (who the user is, in their own words) injected once per conversation ahead of the memory summary. 0 disables the block. Kept separate from the summary budget because the profile is context for the whole turn, not one of the memories being listed.').volatile(),
   /** Share of a scope above which a query term stops counting as recall evidence. */
@@ -452,6 +462,16 @@ export interface MemoriesSettings {
   autoDecideMinConfidence: number
   /** Byte budget for the injected persona block. */
   personaMaxBytes: number
+  /** Whether the plugin may speak without being asked. */
+  noticesEnabled: boolean
+  /** Pet id, or empty to read it from the pet's config. */
+  petId: string
+  /** Route id in the pet's HTTP prefix. */
+  petRouteId: string
+  /** Bubble duration in ms. */
+  petBubbleMs: number
+  /** Local-time windows during which notices are held. */
+  noticeQuietHours: string
   /** Model routes for the plugin's own calls; empty reuses the session's route. */
   extractProvider: string
   extractModel: string
@@ -511,6 +531,11 @@ export const MEMORIES_SETTINGS_DEFAULTS: MemoriesSettings = {
   autoDecide: true,
   autoDecideMinConfidence: 0.7,
   personaMaxBytes: 1200,
+  noticesEnabled: true,
+  petId: '',
+  petRouteId: '7340',
+  petBubbleMs: 8000,
+  noticeQuietHours: '',
   pauseOnQuotaError: true,
   quotaCooldownMinutes: DEFAULT_QUOTA_COOLDOWN_MINUTES,
   quotaCooldownMaxMinutes: DEFAULT_QUOTA_COOLDOWN_MAX_MINUTES,
@@ -654,6 +679,11 @@ export function normalizeSettings(input: Partial<MemoriesSettings> | undefined):
     autoDecide: value.autoDecide ?? true,
     autoDecideMinConfidence: clampUnit(value.autoDecideMinConfidence, 0.7),
     personaMaxBytes: positive(value.personaMaxBytes, 1200, 0),
+    noticesEnabled: value.noticesEnabled ?? true,
+    petId: value.petId ?? '',
+    petRouteId: (value.petRouteId ?? '7340').trim() || '7340',
+    petBubbleMs: positive(value.petBubbleMs, 8000, 1000),
+    noticeQuietHours: value.noticeQuietHours ?? '',
     pauseOnQuotaError: value.pauseOnQuotaError ?? true,
     quotaCooldownMinutes: positive(value.quotaCooldownMinutes, DEFAULT_QUOTA_COOLDOWN_MINUTES, 0),
     quotaCooldownMaxMinutes: positive(value.quotaCooldownMaxMinutes, DEFAULT_QUOTA_COOLDOWN_MAX_MINUTES, 0),
