@@ -30,7 +30,7 @@ const home = flags['home'] ?? process.env.DSH_HOME ?? join(homedir(), '.dsh')
 const store = join(home, 'memories')
 const scale = Number(flags['scale'] ?? 1)
 const { MemoryStore, } = await import(join(process.env.DSH_REPO ?? process.cwd(), 'lib', 'storage.js'))
-const { matchCredit } = await import(join(process.env.DSH_REPO ?? process.cwd(), 'lib', 'search.js'))
+const { matchCredit, prefilterEntries } = await import(join(process.env.DSH_REPO ?? process.cwd(), 'lib', 'search.js'))
 
 const live = (() => { try { return readdirSync(join(store, 'entries')).filter((f) => f.endsWith('.md')).length } catch { return 0 } })()
 const memory = new MemoryStore(store)
@@ -48,6 +48,11 @@ const time = (fn, runs = 20) => {
 const cold = time(() => memory.list('global', undefined, { fresh: true }), 5)
 const warm = time(() => memory.list('global', undefined), 20)
 const score = time(() => { for (const entry of entries) matchCredit(entry, query, 9, 2) }, 10)
+const indexed = time(() => {
+  const candidates = prefilterEntries(entries, query)
+  for (const entry of candidates) matchCredit(entry, query, 9, 2)
+}, 10)
+const candidateCount = prefilterEntries(entries, query).length
 
 const report = {
   at: new Date().toISOString(),
@@ -56,8 +61,10 @@ const report = {
   coldListMs: Number(cold.toFixed(2)),
   warmListMs: Number(warm.toFixed(2)),
   scorePerTurnMs: Number(score.toFixed(2)),
+  indexedScorePerTurnMs: Number(indexed.toFixed(2)),
+  candidates: candidateCount,
   thresholdMs: 50,
-  verdict: score < 50 ? 'fine' : 'needs an inverted index',
+  verdict: indexed < 50 ? 'fine' : 'needs a better index',
 }
 console.log(flags['json'] === 'true' ? JSON.stringify(report, null, 2)
-  : 'dsh-memories · recall cost\n live ' + report.live + ' (scaled ' + report.scaled + ')\n cold list ' + report.coldListMs + ' ms\n warm list ' + report.warmListMs + ' ms\n score/turn ' + report.scorePerTurnMs + ' ms (threshold ' + report.thresholdMs + ' ms)\n verdict: ' + report.verdict)
+  : 'dsh-memories · recall cost\n live ' + report.live + ' (scaled ' + report.scaled + ')\n cold list ' + report.coldListMs + ' ms\n warm list ' + report.warmListMs + ' ms\n score/turn ' + report.scorePerTurnMs + ' ms full scan, ' + report.indexedScorePerTurnMs + ' ms indexed (' + report.candidates + '/' + report.scaled + ' candidates) (threshold ' + report.thresholdMs + ' ms)\n verdict: ' + report.verdict)

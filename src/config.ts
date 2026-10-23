@@ -83,8 +83,17 @@ export const DEFAULT_GLOBAL_SUMMARY_BYTES = 1200
  */
 export const DEFAULT_SUMMARY_FRESH_SLOTS = 3
 
-/** Default cap on stored entries per scope before the oldest are evicted. */
-export const DEFAULT_MAX_ENTRIES_PER_SCOPE = 200
+/**
+ * Default cap on stored entries per scope before the least recently used are evicted.
+ *
+ * 1000 rather than 200 as of 2026-10-24, after the recall path got an inverted
+ * index (`prefilterEntries`): measured on this machine, 1000 entries cost 63 ms
+ * per turn scanning everything and 25 ms through the index, and the index falls
+ * back to a full scan when it would leave too few candidates to be trusted.
+ * `scripts/recall-bench.mjs` is the probe that decided it; re-run it before
+ * raising this again.
+ */
+export const DEFAULT_MAX_ENTRIES_PER_SCOPE = 1000
 
 /** Default hours between periodic maintenance sweeps; `0` disables the sweep. */
 export const DEFAULT_SWEEP_INTERVAL_HOURS = 12
