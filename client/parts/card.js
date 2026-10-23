@@ -92,6 +92,16 @@ const FIELDS = [
     hint: { zh: '一条记忆要被按需补注，除了达到相关度下限，还必须在标题、别名、标签或「何时有用」里命中这么多个不同的提问词。中文提问尤其需要：只共用「插件」「日志」这类常见词不算证据，共享两个词才算。设为 1 就只按相关度打分判断（会明显更容易误补）。', en: 'Distinct query terms that must land in the title, keys, tags, or appliesTo before a memory may be recalled. This is what stops a Chinese turn from recalling everything that shares a common word; set it to 1 to gate on relevance alone.' },
   },
   {
+    field: 'autoDecide', kind: 'boolean',
+    label: { zh: '合并争议交给 AI 裁决', en: 'Let an AI adjudicate merge disputes' },
+    hint: { zh: '合并里那些「只是判断、不是承诺」的变更（例如这条被读过 2 次就想退役、改写后正文变短）改由一次受限子代理裁决：它只回答"有没有丢信息"，答 accept 或 reject 并给置信度。永久保留、人手写、跨作用域搬移三类仍然等你。关掉则全部进「待裁决」。', en: 'Changes blocked only because they are a judgement rather than a promise are adjudicated by one tool-free child that answers accept or reject with a confidence. Permanent, user-written and scope-moving items still wait for you. Off sends everything to the panel.' },
+  },
+  {
+    field: 'autoDecideMinConfidence', kind: 'number', min: 0, max: 1, step: 0.05,
+    label: { zh: 'AI 裁决的最低置信度', en: 'AI verdict confidence floor' },
+    hint: { zh: '低于该置信度视为「没有答案」，条目留在待裁决。', en: 'Below this the verdict counts as no answer and the item stays in the panel.' },
+  },
+  {
     field: 'evidenceMaxDf', kind: 'number', min: 0, max: 1, step: 0.05,
     label: { zh: '算作「常见词」的库占比', en: 'Share of the store that makes a word common' },
     hint: { zh: '一个提问词若出现在该作用域超过这个比例的记忆里，就不算补注所需的「证据词」。默认 0.15 是在真实库上量出来的：只命中一个词（dsh，占 22%），把「dsh 插件 配置」这类泛问的误纳入从 37 条降到 9 条，10 条标注探针一条不变。设为 0 关闭折扣。', en: 'A query term appearing in more than this share of one scope stops counting as recall evidence. 0.15 is measured on a real store: it catches one word (dsh, 22%) and takes a generic turn from 37 admitted memories to 9 while all ten labelled probes keep their verdict. 0 disables it.' },

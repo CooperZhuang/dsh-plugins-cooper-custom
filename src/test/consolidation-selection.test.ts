@@ -11,7 +11,7 @@
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { classifyPlan, selectForConsolidation } from '../consolidate.js'
+import { applyVerdicts, classifyPlan, selectForConsolidation } from '../consolidate.js'
 import type { MemoryEntry } from '../types.js'
 
 /** Build one entry. */
@@ -89,4 +89,47 @@ test('a permanent memory is never rewritten or retired unattended', () => {
   assert.deepEqual(safe.retire, [], 'and it is not retired either')
   assert.equal(disputes.length, 2)
   for (const dispute of disputes) assert.match(dispute.reason, /永久保留/u)
+})
+test('a retirement covered by its successor is applied without asking a person', () => {
+  const old = { ...entry('old', 100), body: 'keep /a/b.md and the caveat', uses: 4 }
+  const plan = {
+    upserts: [{ id: 'new', scope: 'global' as const, kind: 'fact' as const, title: 'new', body: 'keep /a/b.md and the caveat, plus more detail', tags: [], derivedFrom: ['old'] }],
+    retire: ['old'],
+    skills: [],
+    notes: '',
+  }
+  const { safe, disputes } = classifyPlan(plan, { entries: [old] })
+  assert.deepEqual(safe.retire, ['old'], 'the predecessor is folded into its successor')
+  assert.equal(disputes.length, 0, 'nothing is asked: the content survives')
+})
+
+test('permanence stops the automation even when the content is covered', () => {
+  const old = { ...entry('old', 100), body: 'keep /a/b.md and the caveat', uses: 4, permanent: true }
+  const plan = {
+    upserts: [{ id: 'new', scope: 'global' as const, kind: 'fact' as const, title: 'new', body: 'keep /a/b.md and the caveat, plus more detail', tags: [], derivedFrom: ['old'] }],
+    retire: ['old'],
+    skills: [],
+    notes: '',
+  }
+  const { safe, disputes } = classifyPlan(plan, { entries: [old] })
+  assert.deepEqual(safe.retire, [], 'a promise is not automated away')
+  assert.equal(disputes.length, 1)
+  assert.equal(disputes[0]?.hard, true)
+})
+
+test('verdicts apply the accepted, drop the rejected, and keep the unheard', () => {
+  const plan = { upserts: [], retire: ['a', 'b', 'c'], skills: [], notes: '' }
+  const disputes = [
+    { id: 'a', scope: 'global' as const, action: 'retire' as const, title: 'a', reason: 'r', before: 'x', after: '' },
+    { id: 'b', scope: 'global' as const, action: 'retire' as const, title: 'b', reason: 'r', before: 'x', after: '' },
+    { id: 'c', scope: 'global' as const, action: 'retire' as const, title: 'c', reason: 'r', before: 'x', after: '' },
+  ]
+  const safe = { upserts: [], retire: [] as string[] }
+  const remaining = applyVerdicts(safe, plan, disputes, [
+    { id: 'a', accept: true, confidence: 0.9, reason: 'carried over' },
+    { id: 'b', accept: false, confidence: 0.8, reason: 'no replacement visible' },
+    { id: 'c', accept: true, confidence: 0.3, reason: 'unsure' },
+  ], 0.7)
+  assert.deepEqual(safe.retire, ['a'], 'only the confident accept is applied')
+  assert.deepEqual(remaining.map((row) => row.id), ['c'], 'a low-confidence verdict is not an answer')
 })
