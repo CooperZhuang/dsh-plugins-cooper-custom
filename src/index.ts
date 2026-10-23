@@ -2172,6 +2172,9 @@ export class MemoriesRuntime {
     // that had never been mined.
     const sessionRoot = await this.projectRoot(parent.session)
     if (this.state.getJob(CONSOLIDATE_JOB) === undefined) this.enqueueConsolidation(Date.now(), true, sessionRoot)
+    // A forced pass ignores the background backoff: the retry ladder exists for a
+    // pass that keeps failing, and a person asking for one now is not that.
+    if (options.force === true) this.state.clearJobBackoff(CONSOLIDATE_JOB)
     const token = `consolidate-${process.pid}-${Date.now().toString(36)}`
     const job = this.state.claimJob(CONSOLIDATE_JOB, token, 600_000)
     if (job === undefined) return undefined

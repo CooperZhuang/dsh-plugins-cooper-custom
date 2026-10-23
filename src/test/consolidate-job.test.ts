@@ -82,3 +82,24 @@ test('consolidation is a no-op without a subagent seam', async (t) => {
   assert.equal(await runtime.consolidateNow({ session: stubSession('s', process.cwd()) } as never), undefined)
   assert.equal(runtime.state.getJob('global'), undefined)
 })
+test('a stale backoff cannot refuse a pass a person asked for', async (t) => {
+  const { runtime } = await fixture(t)
+  // The row left behind by a pass that kept failing: queued, backed off for
+  // hours, and still carrying the old error.
+  runtime.state.putJob({
+    key: 'global',
+    enqueuedAt: 1_000,
+    notBefore: 10_000_000,
+    retries: 6,
+    lastError: 'subagent descriptor is not losslessly JSON-serializable',
+  })
+  assert.equal(runtime.state.claimJob('global', 'token-a', 1_000, 2_000), undefined, 'the backoff still gates the background pass')
+
+  runtime.state.clearJobBackoff('global')
+  const job = runtime.state.getJob('global')
+  assert.equal(job?.notBefore, 0, 'the backoff is gone')
+  assert.equal(job?.retries, 0, 'and the retry count with it')
+  assert.equal(job?.lastError, undefined, 'and the failure message')
+  assert.equal(job?.root, undefined, 'while the rest of the row survives')
+  assert.ok(runtime.state.claimJob('global', 'token-b', 1_000, 2_000) !== undefined, 'a forced pass can now claim it')
+})
