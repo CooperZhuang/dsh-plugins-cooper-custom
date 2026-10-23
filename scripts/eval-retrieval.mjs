@@ -57,7 +57,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseEntry } from '../lib/storage.js'
-import { matchCredit, relevanceOf, scoreEntry, searchMemories } from '../lib/search.js'
+import { hubTerms, matchCredit, relevanceOf, scoreEntry, searchMemories } from '../lib/search.js'
 
 /**
  * The recall gate's defaults, as `settings.yaml` ships them.
@@ -164,6 +164,8 @@ const here = fileURLToPath(new URL('..', import.meta.url))
 const probePath = flags.probes ?? join(here, 'eval', 'retrieval.local.json')
 const top = Number(flags.top ?? 3)
 const now = flags.now === undefined ? Date.now() : Number(flags.now)
+/** Document-frequency ceiling for the recall gate; `0` reproduces the old gate. */
+const maxDf = flags['max-df'] === undefined ? 0.25 : Number(flags['max-df'])
 if (!existsSync(probePath)) {
   console.error(`No probe file at ${probePath}.`)
   console.error('Copy eval/retrieval.example.json to eval/retrieval.local.json and label it against your own store.')
@@ -234,10 +236,18 @@ for (const probe of probes) {
     detail.push(`    ${config.name.padEnd(8)} rank=${JSON.stringify(ranked[config.name].at)} top=${JSON.stringify(ranked[config.name].ids)}`)
   }
   // The other promise: would the injector's gate admit it, whatever its rank?
+  //
+  // The gate now discounts words that are common in these scopes, so the eval
+  // has to apply the same discount or it measures a gate that no longer ships.
+  // `--max-df=0` restores the old one, which is how the change was measured.
+  const hub = maxDf <= 0 ? undefined : hubTerms(entries, maxDf)
   const gate = wanted.map((id) => {
     const entry = entries.find((candidate) => candidate.id === id)
     if (entry === undefined) return { id, about: false, relevance: 0, terms: 0 }
-    const credit = matchCredit(entry, probe.query, RECALL_MIN_SCORE, RECALL_MIN_TERMS, { now })
+    const credit = matchCredit(entry, probe.query, RECALL_MIN_SCORE, RECALL_MIN_TERMS, {
+      now,
+      ...hub === undefined ? {} : { hub },
+    })
     return { id, about: credit.about, relevance: credit.relevance, terms: credit.evidence.strongTerms }
   })
   const reachable = gate.length > 0 && gate.every((item) => item.about)

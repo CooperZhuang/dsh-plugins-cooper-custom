@@ -15,12 +15,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { MemoriesRuntime } from '../index.js'
-import { matchCredit } from '../search.js'
+import { hubTerms, matchCredit } from '../search.js'
 import { Logger } from '@deepseek-ai/cordis'
 import { MEMORY_SOURCE_KIND } from '../types.js'
 import type { MemoriesConfig } from '../config.js'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
+import type { MemoryEntry } from '../types.js'
 
 /** A context stand-in exposing only what the runtime touches. */
 const stubContext = {
@@ -372,4 +373,48 @@ test('resetInjection re-arms both the summary and the delta budget', async (t) =
 
   runtime.resetInjection(session)
   assert.ok(await runtime.recallFor(agent) !== undefined, 'a cleared conversation may see the memory again')
+})
+test('a hub term does not count as one of the two pieces of evidence', () => {
+  // Two entries share the hub word `dsh`; only one is about the logger.
+  const make = (id: string, title: string, tags: string[]): MemoryEntry => ({
+    id, scope: 'global', kind: 'fact', title, body: 'body text', tags, keys: [],
+    createdAt: 0, updatedAt: 0, uses: 0, lastUsedAt: 0, lastSurfacedAt: 0, source: 'auto',
+  })
+  const store = [
+    make('logger', 'dsh plugin logger threshold', ['dsh', 'plugin']),
+    make('other', 'dsh install path', ['dsh']),
+    make('unrelated', 'surge proxy helpers', ['surge']),
+  ]
+  const hub = hubTerms(store, 0.5)   // 2 of 3 entries carry `dsh`
+  assert.equal(hub('dsh'), true, 'a word in two thirds of the store is a hub')
+  assert.equal(hub('plugin'), false)
+
+  const entry = store[0] as MemoryEntry
+  const query = 'dsh plugin'
+  // `singleTerm: false` is how the summary's topical tier calls this; the recall
+  // path leaves the one-strong-term escape hatch on, which would admit the entry
+  // on relevance alone and hide what the discount did to the evidence count.
+  const without = matchCredit(entry, query, 9, 2, { singleTerm: false })
+  const withHub = matchCredit(entry, query, 9, 2, { singleTerm: false, hub })
+  assert.equal(without.about, true, 'two terms with no discount')
+  assert.equal(withHub.about, false, 'the hub word leaves one real term')
+  assert.equal(without.evidence.strongTerms, 2)
+  assert.equal(withHub.evidence.strongTerms, 1, 'the hub word is not counted')
+  assert.equal(withHub.relevance, without.relevance, 'the discount changes evidence, not relevance')
+  assert.equal(withHub.score, without.score, 'and not the ranking score either')
+})
+
+test('a query with two real terms still clears the gate when a hub word is present', () => {
+  const make = (id: string, title: string, tags: string[]): MemoryEntry => ({
+    id, scope: 'global', kind: 'fact', title, body: 'body text', tags, keys: [],
+    createdAt: 0, updatedAt: 0, uses: 0, lastUsedAt: 0, lastSurfacedAt: 0, source: 'auto',
+  })
+  const store = [
+    make('logger', 'dsh plugin logger threshold', ['dsh']),
+    make('other', 'dsh install path', ['dsh']),
+    make('third', 'dsh random note', ['dsh']),
+  ]
+  const hub = hubTerms(store, 0.5)
+  const entry = store[0] as MemoryEntry
+  assert.equal(matchCredit(entry, 'dsh plugin logger', 9, 2, { hub }).about, true)
 })
