@@ -398,6 +398,8 @@ export const Config = z.object({
   petBubbleMs: z.number().default(8000).description('How long the pet keeps a notice bubble on screen, in milliseconds.').volatile(),
   /** Windows during which nothing is delivered. */
   noticeQuietHours: z.string().default('').description('Local-time windows during which notices are held rather than delivered, for example "22:00-08:00". Empty means always allowed. Held notices fire when the window ends; they are not dropped.').volatile(),
+  /** Whether the weekly reflection pass may run. */
+  reflectionEnabled: z.boolean().default(true).description('Once a week, synthesize a few observations from the memory store that no single memory states — patterns across projects, habits, things the user keeps getting burned by. Every observation must cite the memories behind it or it is dropped. Written as dated markdown under memories/reflections, never injected into conversations.').volatile(),
   /** Whether a model decides if a judgement-based notice is worth an interruption. */
   noticeGate: z.boolean().default(true).description('Before raising a notice that has no rule behind it (an undated promise that has been sitting for days), ask a model whether it is worth interrupting for. The default answer is silence: a gate that cannot run, or that fails, suppresses the notice. Rule-based notices (daily digest, backlog warning, a promise whose deadline passed) are never gated.').volatile(),
   /** Byte budget for the persona block injected ahead of the memory summary. */
@@ -466,6 +468,8 @@ export interface MemoriesSettings {
   personaMaxBytes: number
   /** Whether a model gates judgement-based notices. */
   noticeGate: boolean
+  /** Whether the weekly reflection pass may run. */
+  reflectionEnabled: boolean
   /** Whether the plugin may speak without being asked. */
   noticesEnabled: boolean
   /** Pet id, or empty to read it from the pet's config. */
@@ -536,6 +540,7 @@ export const MEMORIES_SETTINGS_DEFAULTS: MemoriesSettings = {
   autoDecideMinConfidence: 0.7,
   personaMaxBytes: 1200,
   noticeGate: true,
+  reflectionEnabled: true,
   noticesEnabled: true,
   petId: '',
   petRouteId: '7340',
@@ -685,6 +690,7 @@ export function normalizeSettings(input: Partial<MemoriesSettings> | undefined):
     autoDecideMinConfidence: clampUnit(value.autoDecideMinConfidence, 0.7),
     personaMaxBytes: positive(value.personaMaxBytes, 1200, 0),
     noticeGate: value.noticeGate ?? true,
+    reflectionEnabled: value.reflectionEnabled ?? true,
     noticesEnabled: value.noticesEnabled ?? true,
     petId: value.petId ?? '',
     petRouteId: (value.petRouteId ?? '7340').trim() || '7340',

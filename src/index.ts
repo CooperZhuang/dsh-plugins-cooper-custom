@@ -46,6 +46,7 @@ import { readPetId, say, systemNotification } from './pet.js'
 import type { PetTarget } from './pet.js'
 import { closeLoop, describeLoops, dueLoops, mergeLoops, pruneLoops, readLoops, withLoop, writeLoops } from './loops.js'
 import { gateNotices } from './gate.js'
+import { listReflections, previousInsights, reflectionDue, runReflection, writeReflection } from './reflection.js'
 import type { GateCandidate } from './gate.js'
 import { parseTimeRange } from './time.js'
 import { isSubstantiveTurn } from './query.js'
@@ -1677,7 +1678,12 @@ export class MemoriesRuntime {
     // first candidate of this pass is as good as any. A pump with no session
     // stays silent about undated loops rather than guessing a route.
     const routed = [...candidates.values()][0]
-    if (routed !== undefined) await this.pumpNotices(routed.session)
+    if (routed !== undefined) {
+      await this.pumpNotices(routed.session)
+      // Reflections are weekly, but the check is cheap and runs here because this
+      // is the only place that reliably has a session to route the call through.
+      await this.runReflectionIfDue(routed.session)
+    }
   }
 
   /** Live agents from the harness registry, when the deployment composes one. */
@@ -2568,6 +2574,49 @@ export class MemoriesRuntime {
   }
 
   /**
+   * Synthesize a few observations, at most once a week.
+   *
+   * Runs on the maintenance path, writes its own files, and never touches the
+   * memories it read. The interval and the material threshold are both hard
+   * requirements rather than tunables: a reflection is only worth having when
+   * something has accumulated, and one written weekly from three memories is the
+   * same generic sentence forever.
+   */
+  private async runReflectionIfDue(session?: Session): Promise<void> {
+    if (!this.settings.reflectionEnabled) return
+    const dir = this.store.memoriesDir
+    const lastAt = Number(this.state.getMeta('reflection:lastAt') ?? '0')
+    if (session === undefined) {
+      this.log.decision('dsh-memories: reflection skipped, no session to route through')
+      return
+    }
+    const states = await this.allScopes(session)
+    const entries = states.flatMap((state) => state.entries)
+      .sort((left, right) => right.updatedAt - left.updatedAt)
+      .slice(0, 80)
+    if (!reflectionDue(lastAt, Date.now(), entries.length)) return
+    const files = await listReflections(dir)
+    const outcome = await runReflection({
+      llm: this.llm,
+      session,
+      entries,
+      ...await readPersona(dir).then((text) => text === undefined ? {} : { persona: text }),
+      previous: previousInsights(files),
+      provider: this.settings.extractProvider,
+      model: this.settings.extractModel,
+      timeoutMs: 60_000,
+      signal: this.lifecycle.signal,
+    })
+    if (outcome.insights.length === 0) {
+      this.log.info('dsh-memories: reflection produced nothing (%s)', outcome.reason)
+      return
+    }
+    const path = await writeReflection(dir, outcome.insights, Date.now())
+    this.state.putMeta('reflection:lastAt', String(Date.now()))
+    this.log.info('dsh-memories: reflection wrote %d observation(s) to %s', outcome.insights.length, path)
+  }
+
+  /**
    * Send one deliberate bubble, so the pet channel can be checked on demand.
    *
    * The digest is once a day and the backlog warning needs a pending plan, so
@@ -3349,6 +3398,7 @@ function helpText(): string {
     '  sweep                   archive unused memories now',
     '  notices [test]          list raised notices, or send a test bubble to the pet',
     '  loops [done <id>]       list promises the user made and has not closed',
+    '  reflect [list]          weekly observations synthesized from the store',
     '  stale                   list memories that cite a file that no longer exists',
     '  skills                  list staged skill drafts',
     '  promote <name>          copy a staged draft into the harness skill root',
@@ -3727,6 +3777,17 @@ async function handleCommand(runtime: MemoriesRuntime, invocation: CommandInvoca
     case 'sweep': {
       const archived = await runtime.sweepNow()
       return { kind: 'success', text: archived === 0 ? 'Nothing to archive.' : `Archived ${archived} unused memories.` }
+    }
+    case 'reflect': {
+      const dir = runtime.store.memoriesDir
+      const argument = rest.trim().toLowerCase()
+      if (argument === 'list') {
+        const files = await listReflections(dir)
+        if (files.length === 0) return { kind: 'success', text: 'No reflections yet.' }
+        return { kind: 'success', text: files.slice(0, 5).map((file) => `${file.name}\n${file.body.split('\n').filter((line) => line.startsWith('- ')).join('\n') || '(empty)'}`).join('\n\n') }
+      }
+      if (argument.length > 0 && argument !== 'now') return { kind: 'error', text: 'Usage: /memories reflect [now|list]' }
+      return { kind: 'success', text: 'Reflection runs on the maintenance path (weekly, needs 20+ recent memories). See the log line starting with "reflection".' }
     }
     case 'loops': {
       const dir = runtime.store.memoriesDir

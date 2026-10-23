@@ -49,6 +49,17 @@ for (const block of ['human', 'assistant']) {
 }
 const legacy = size(join(store, 'persona.md'))
 
+const loops = readJson(join(store, 'loops.json')) ?? { loops: [] }
+const loopRows = Array.isArray(loops.loops) ? loops.loops : []
+const openLoops = loopRows.filter((loop) => loop.state === 'open')
+const overdueLoops = openLoops.filter((loop) => typeof loop.dueAt === 'number' && loop.dueAt <= Date.now())
+
+let reflections = []
+try {
+  const dir = join(store, 'reflections')
+  reflections = (await import('node:fs')).readdirSync(dir).filter((name) => name.endsWith('.md')).sort().reverse()
+} catch { /* none yet */ }
+
 let pending = undefined
 try {
   const plan = readJson(join(store, 'pending', 'consolidation.json'))
@@ -73,6 +84,8 @@ const report = {
   home,
   live: (() => { try { return readdirSync(join(store, 'entries')).filter((f) => f.endsWith('.md')).length } catch { return 0 } })(),
   notices: { total: notices.length, byState, byKind, acted, dismissed, oldestOpenHours: oldestOpen === undefined ? null : Math.round((Date.now() - oldestOpen) / 3_600_000) },
+  loops: { total: loopRows.length, open: openLoops.length, overdue: overdueLoops.length },
+  reflections: { files: reflections.length, latest: reflections[0] ?? null },
   personas,
   legacyPersonaBytes: legacy,
   pending,
@@ -87,6 +100,8 @@ if (flags['json'] === 'true') {
   console.log('notices  total', report.notices.total, ' states', JSON.stringify(byState), ' kinds', JSON.stringify(byKind))
   console.log('         acted', acted, ' dismissed', dismissed, ' oldest open (h)', report.notices.oldestOpenHours)
   console.log('persona  human', personas.human.bytes + 'B', ' assistant', personas.assistant.bytes + 'B', legacy > 0 ? '(legacy single file still present: ' + legacy + 'B)' : '')
+  console.log('loops    open', report.loops.open, ' overdue', report.loops.overdue, ' total', report.loops.total)
+  console.log('reflect  files', report.reflections.files, ' latest', report.reflections.latest ?? 'none')
   console.log('pending ', pending === undefined ? 'none' : pending.disputes + ' dispute(s), staged ' + pending.stagedHours + 'h ago')
   console.log('maint    stored', maintenance.stored, ' retired', maintenance.retired, ' consolidated', maintenance.consolidated, ' sweeps', maintenance.sweeps)
   console.log('delivery delivered', maintenance.delivered, ' suppressed', maintenance.suppressed, ' pumpFailed', maintenance.pumpFailed)
