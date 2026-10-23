@@ -851,7 +851,9 @@ export class MemoriesRuntime {
     if (pending !== undefined) {
       lines.push(`Pending consolidation proposal for ${pending.label}: ${pending.plan.upserts.length} to write, ${pending.plan.retire.length} to retire — review with /memories plan, then /memories apply or /memories reject.`)
     }
-    const drafts = await listDrafts(this.store.memoriesDir).catch(() => [])
+    // `dshHome` filters out drafts whose promoted copy is byte-identical: the
+    // banner used to report already-promoted skills as pending forever.
+    const drafts = await listDrafts(this.store.memoriesDir, this.deployment.dshHome).catch(() => [])
     if (drafts.length > 0) {
       const names = drafts.slice(0, 3).map((draft) => draft.name).join(', ')
       const more = drafts.length > 3 ? `, +${drafts.length - 3} more` : ''
@@ -2750,7 +2752,7 @@ export class MemoriesRuntime {
   /** A one-line status used by `/memories` and diagnostics. */
   async stats(session: Session): Promise<string> {
     const states = await this.allScopes(session)
-    const drafts = await listDrafts(this.store.memoriesDir).catch(() => [])
+    const drafts = await listDrafts(this.store.memoriesDir, this.deployment.dshHome).catch(() => [])
     const lines = [
       `memory home: ${this.store.memoriesDir}`,
       ...states.map((scope) => `${scope.label}: ${scope.entries.length} memories`),
@@ -2845,9 +2847,9 @@ export class MemoriesRuntime {
     return renderScopeListing({ scope: state.scope, label: state.label, entries: state.entries })
   }
 
-  /** List the staged skill drafts. */
+  /** List the staged skill drafts that still need a person. */
   async skills(): Promise<string> {
-    const drafts = await listDrafts(this.store.memoriesDir)
+    const drafts = await listDrafts(this.store.memoriesDir, this.deployment.dshHome)
     if (drafts.length === 0) return 'No skill drafts staged.'
     return [
       `${drafts.length} staged skill ${drafts.length === 1 ? 'draft' : 'drafts'}:`,

@@ -111,12 +111,21 @@ export interface StagedSkill {
 }
 
 /**
- * List the staged drafts.
+ * List the staged drafts that still need a human.
+ *
+ * `promote` copies rather than moves, so the draft outlives the promotion on
+ * purpose — it is the provenance. The cost was the notice: the banner kept
+ * counting promoted skills as pending, and on a real store it read "4 pending"
+ * when three of them had been live for a week. A draft whose promoted copy is
+ * byte-identical is not waiting for anybody, so it is not listed.
+ *
  * @param memoriesDir - the memory store root.
- * @returns the drafts, name-sorted.
+ * @param dshHome - the harness home; when given, already-promoted drafts are skipped.
+ * @returns the drafts still pending, name-sorted.
  */
-export async function listDrafts(memoriesDir: string): Promise<StagedSkill[]> {
+export async function listDrafts(memoriesDir: string, dshHome?: string): Promise<StagedSkill[]> {
   const root = draftRoot(memoriesDir)
+  const promoted = dshHome === undefined ? undefined : promotionRoot(dshHome)
   let names: string[]
   try {
     const dirents = await readdir(root, { withFileTypes: true })
@@ -130,6 +139,10 @@ export async function listDrafts(memoriesDir: string): Promise<StagedSkill[]> {
     const path = join(root, name, 'SKILL.md')
     if (!(await exists(path))) continue
     const text = await readFile(path, 'utf8')
+    if (promoted !== undefined) {
+      const live = await readFile(join(promoted, name, 'SKILL.md'), 'utf8').catch(() => undefined)
+      if (live === text) continue
+    }
     staged.push({ name, description: descriptionOf(text), path })
   }
   return staged
@@ -166,22 +179,42 @@ function descriptionOf(text: string): string {
  * Copy one staged draft into the harness's skill root.
  *
  * Copies rather than moves, so the memory store keeps the provenance and the
- * promoted file is an independent artifact a human can edit. Re-promoting
- * overwrites, which is what makes it a safe retry.
+ * promoted file is an independent artifact a human can edit. Re-promoting an
+ * unchanged draft is a no-op, which is what makes it a safe retry.
+ *
+ * It REFUSES one case: overwriting a promoted copy that is newer than the draft.
+ * A draft is staged once and then forgotten while the promoted skill keeps being
+ * edited, so "re-promote" is the one action that can silently roll a live skill
+ * back — measured on a real store, one draft was four days older than its
+ * promoted copy and still said "must restart the host 2.0.17" where the live
+ * skill said "2.0.18-beta.1 can hot-mount".
  *
  * @param memoriesDir - the memory store root.
  * @param dshHome - the harness home whose `skills/` the loader scans.
  * @param name - the draft to promote.
  * @returns the absolute path of the promoted skill, or `undefined` when no such draft exists.
+ * @throws when the promoted copy is newer than the draft it would replace.
  */
 export async function promote(memoriesDir: string, dshHome: string, name: string): Promise<string | undefined> {
   const normalized = normalizeSkillName(name)
   if (normalized === undefined) return undefined
   const source = join(draftRoot(memoriesDir), normalized, 'SKILL.md')
   if (!(await exists(source))) return undefined
+  const text = await readFile(source, 'utf8')
   const target = join(promotionRoot(dshHome), normalized, 'SKILL.md')
+  const live = await readFile(target, 'utf8').catch(() => undefined)
+  if (live === text) return target
+  if (live !== undefined) {
+    const [sourceTime, liveTime] = await Promise.all([
+      stat(source).then((info) => info.mtimeMs).catch(() => 0),
+      stat(target).then((info) => info.mtimeMs).catch(() => 0),
+    ])
+    if (liveTime > sourceTime) {
+      throw new Error(`dsh-memories: refusing to overwrite \`${normalized}\`: the promoted copy is newer than the staged draft, and re-promoting would roll the live skill back. Run /memories discard ${normalized} instead.`)
+    }
+  }
   await mkdir(dirname(target), { recursive: true })
-  await writeFile(target, await readFile(source, 'utf8'), 'utf8')
+  await writeFile(target, text, 'utf8')
   return target
 }
 
