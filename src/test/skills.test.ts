@@ -9,7 +9,7 @@
  * @module dsh-memories/test/skills.test
  */
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -115,4 +115,31 @@ test('discard removes one staged draft and reports the truth', async (t) => {
 test('staging an invalid name is refused', async (t) => {
   const { memoriesDir } = await roots(t)
   await assert.rejects(() => writeDraft(memoriesDir, { ...DRAFT, name: '!!!' }), /invalid skill name/u)
+})
+test('a draft whose promoted copy is identical is not reported as pending', async (t) => {
+  const { memoriesDir, dshHome } = await roots(t)
+  await writeDraft(memoriesDir, DRAFT)
+  // Before promotion it is pending; without the harness home the filter is off.
+  assert.deepEqual((await listDrafts(memoriesDir)).map((draft) => draft.name), ['release-check'])
+  assert.deepEqual((await listDrafts(memoriesDir, dshHome)).map((draft) => draft.name), ['release-check'])
+
+  await promote(memoriesDir, dshHome, 'release-check')
+  assert.deepEqual(await listDrafts(memoriesDir, dshHome), [], 'a promoted skill is not waiting for anybody')
+  assert.deepEqual((await listDrafts(memoriesDir)).map((draft) => draft.name), ['release-check'], 'the draft itself is still there as provenance')
+})
+
+test('promote refuses to roll a newer live skill back', async (t) => {
+  const { memoriesDir, dshHome } = await roots(t)
+  await writeDraft(memoriesDir, DRAFT)
+  await promote(memoriesDir, dshHome, 'release-check')
+  // A human edits the live skill afterwards; the draft is now stale.
+  const live = join(promotionRoot(dshHome), 'release-check', 'SKILL.md')
+  await writeFile(live, (await readFile(live, 'utf8')).replace('Ship a release safely', 'Ship it with the newer process'), 'utf8')
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  await assert.rejects(() => promote(memoriesDir, dshHome, 'release-check'), /refusing to overwrite/u)
+
+  // And an unchanged draft is a no-op rather than a rewrite.
+  await writeDraft(memoriesDir, { ...DRAFT, description: 'edited draft' })
+  await promote(memoriesDir, dshHome, 'release-check')
+  assert.match(await readFile(live, 'utf8'), /edited draft/u)
 })
