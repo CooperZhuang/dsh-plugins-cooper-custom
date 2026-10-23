@@ -563,24 +563,39 @@ const RECALL_INTRO = 'Possibly relevant memories for this turn. This is durable 
  *
  * @param entries - the memories worth surfacing right now, best first.
  * @param maxBytes - hard UTF-8 byte budget for the framed block.
+ * @param archived - retired memories that still answer the turn, offered only
+ *   when nothing live did; rendered with an explicit marker so the model can
+ *   tell "this is current" from "this is what we used to say".
  * @returns the framed block, or `undefined` when nothing fits.
  */
-export function renderRecall(entries: readonly MemoryEntry[], maxBytes: number): string | undefined {
-  if (entries.length === 0 || maxBytes <= 0) return undefined
+export function renderRecall(
+  entries: readonly MemoryEntry[],
+  maxBytes: number,
+  archived: readonly MemoryEntry[] = [],
+): string | undefined {
+  if (entries.length === 0 && archived.length === 0) return undefined
+  if (maxBytes <= 0) return undefined
   const head = [RECALL_OPEN, RECALL_INTRO, '']
   const tail = [RECALL_CLOSE]
   // The frame alone has to fit, or the block is not worth emitting.
   if (bytes([...head, ...tail].join('\n')) > maxBytes) return undefined
   const lines = [...head]
+  const push = (alternatives: readonly string[]): boolean => {
+    const fitted = alternatives.find((candidate) => bytes([...lines, candidate, ...tail].join('\n')) <= maxBytes)
+    if (fitted === undefined) return false
+    lines.push(fitted)
+    return true
+  }
   for (const entry of entries) {
     const tags = entry.tags.length > 0 ? ` [${entry.tags.slice(0, 4).join(', ')}]` : ''
     const prefix = `- [${entry.kind}] ${entry.title}${tags} — `
     // Try progressively shorter previews so an entry is either complete or
     // absent; a half-printed body reads as corruption rather than as a summary.
-    const candidates = [200, 120, 60, 24].map((maxChars) => `${prefix}${preview(entry.body, maxChars)}`)
-    const fitted = candidates.find((line) => bytes([...lines, line, ...tail].join('\n')) <= maxBytes)
-    if (fitted === undefined) break
-    lines.push(fitted)
+    if (!push([200, 120, 60, 24].map((maxChars) => `${prefix}${preview(entry.body, maxChars)}`))) break
+  }
+  for (const entry of archived) {
+    const prefix = `- [archived] ${entry.title} — 这条已归档，以前是这么说的：`
+    if (!push([200, 120, 60, 24].map((maxChars) => `${prefix}${preview(entry.body, maxChars)}`))) break
   }
   if (lines.length === head.length) return undefined
   return [...lines, ...tail].join('\n')
