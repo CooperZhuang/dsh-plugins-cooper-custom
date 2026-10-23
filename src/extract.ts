@@ -76,6 +76,11 @@ export const EXTRACT_SYSTEM = [
   '- Record the SUBSTANCE faithfully but in the form that will be found and understood later: rewrite for clarity when their sentence was context-bound, and keep their exact phrasing only where the wording itself carries the rule (a threshold, a condition, a turn of phrase they will repeat). The voice field records whose claim it is, not a transcript.',
   '- omit the field (the default) when the memory is your own conclusion, an observation about the code, or a fact you looked up.',
   'Never attribute your own conclusion to the user. A profile of this person is rebuilt from the "user" entries, so a misattributed guess becomes a false belief about them.',
+  '',
+  'Also return "loops": things the USER said they would do or asked to be reminded of, and that are still not done ("我明天发出去", "下周再看", "周五前给你"). These are not memories — they are obligations with a deadline and a lifecycle, and the only thing that can justify speaking up without being asked.',
+  '- One short sentence each, in the user\'s framing, naming the object ("把报价单发出去", not "邮件相关").',
+  '- "dueAt" only when a deadline was actually said, as ISO date or date-time. Never invent one: a loop without a deadline is a note, and nagging somebody about a note turns help into supervision.',
+  '- Skip what the session shows as already done, and skip the assistant\'s own to-dos. An empty array is the normal result.',
   'Prefer few high-value memories over many trivial ones. Return at most the requested number.',
   'Reply with JSON only, no prose and no code fence: {"memories":[{"scope":"global"|"project","kind":string,"title":string,"body":string,"tags":string[],"appliesTo":string}],"summary":string}',
   'Write the "memories" array first and the "summary" paragraph last: the reply is capped, and a summary written first can spend the whole budget before the first memory is complete.',
@@ -115,9 +120,48 @@ export const EXTRACT_JSON_SCHEMA = {
         },
       },
     },
+    loops: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['text'],
+        properties: {
+          text: { type: 'string' },
+          dueAt: { type: 'string' },
+        },
+      },
+    },
     summary: { type: 'string' },
   },
 } as const
+
+/**
+ * Parse the open-loop list of one reply.
+ *
+ * Deliberately strict about deadlines: an unparseable `dueAt` is dropped rather
+ * than defaulted to "now", because a fake deadline is a reminder the user never
+ * asked for. The text is the only required field.
+ *
+ * @param value - the raw `loops` field.
+ * @returns at most ten loops, duplicates removed.
+ */
+function parseLoops(value: unknown): { text: string; dueAt?: number }[] {
+  if (!Array.isArray(value)) return []
+  const loops: { text: string; dueAt?: number }[] = []
+  const seen = new Set<string>()
+  for (const item of value) {
+    if (loops.length >= 10) break
+    if (typeof item !== 'object' || item === null) continue
+    const record = item as Record<string, unknown>
+    const text = typeof record['text'] === 'string' ? record['text'].replace(/\s+/gu, ' ').trim().slice(0, 200) : ''
+    if (text.length < 4 || seen.has(text)) continue
+    seen.add(text)
+    const parsed = typeof record['dueAt'] === 'string' ? Date.parse(record['dueAt']) : Number.NaN
+    loops.push(Number.isFinite(parsed) ? { text, dueAt: parsed } : { text })
+  }
+  return loops
+}
 
 /** Patterns that look like credentials and must never enter the memory store. */
 const SECRET_PATTERNS: readonly RegExp[] = [
@@ -251,8 +295,8 @@ export function resolveLlmRoute(
  * @param sessionId - session the drafts came from, recorded as provenance.
  * @returns the drafts, the evidence summary, and how many were over the cap.
  */
-export function parseExtraction(text: string, maxMemories: number, sessionId: string): { drafts: MemoryDraft[]; summary: string; dropped: number } {
-  const result = { drafts: [] as MemoryDraft[], summary: '', dropped: 0 }
+export function parseExtraction(text: string, maxMemories: number, sessionId: string): { drafts: MemoryDraft[]; loops: { text: string; dueAt?: number }[]; summary: string; dropped: number } {
+  const result = { drafts: [] as MemoryDraft[], loops: [] as { text: string; dueAt?: number }[], summary: '', dropped: 0 }
   const trimmed = text.trim().replace(/^```(?:json)?\s*/iu, '').replace(/```$/u, '').trim()
   const start = trimmed.indexOf('{')
   const end = trimmed.lastIndexOf('}')
@@ -264,7 +308,7 @@ export function parseExtraction(text: string, maxMemories: number, sessionId: st
     return result
   }
   if (typeof parsed !== 'object' || parsed === null || !('memories' in parsed)) return result
-  const envelope = parsed as { memories: unknown; summary?: unknown }
+  const envelope = parsed as { memories: unknown; loops?: unknown; summary?: unknown }
   if (typeof envelope.summary === 'string') {
     result.summary = redactSecrets(envelope.summary.replace(/\s+/gu, ' ').trim()).slice(0, 1_200)
   }
@@ -312,6 +356,7 @@ export function parseExtraction(text: string, maxMemories: number, sessionId: st
   }
   result.drafts = usable.slice(0, Math.max(0, maxMemories))
   result.dropped = usable.length - result.drafts.length
+  result.loops = parseLoops(envelope.loops)
   return result
 }
 
@@ -372,6 +417,8 @@ export type ExtractionOutcome =
   | {
     readonly kind: 'memories'
     readonly drafts: readonly MemoryDraft[]
+    /** Promises the user made that are still open. */
+    readonly loops: readonly { text: string; dueAt?: number }[]
     /** What the session was about, stored as the evidence behind the drafts. */
     readonly summary: string
     /** Usable drafts the reply offered beyond `maxMemories`, reported to the caller. */
@@ -489,6 +536,7 @@ export async function runExtraction(llm: LlmRuntime, request: ExtractionRequest)
       return {
         kind: 'memories',
         drafts: salvaged.drafts,
+        loops: salvaged.loops,
         summary: salvaged.summary,
         dropped: salvaged.dropped,
         route,
@@ -500,7 +548,7 @@ export async function runExtraction(llm: LlmRuntime, request: ExtractionRequest)
   }
   const parsed = parseExtraction(text, request.maxMemories, request.session.id)
   if (parsed.drafts.length === 0) return { kind: 'none', reason: 'empty-reply', route, ...usage === undefined ? {} : { usage } }
-  return { kind: 'memories', drafts: parsed.drafts, summary: parsed.summary, dropped: parsed.dropped, route, ...usage === undefined ? {} : { usage } }
+  return { kind: 'memories', drafts: parsed.drafts, loops: parsed.loops, summary: parsed.summary, dropped: parsed.dropped, route, ...usage === undefined ? {} : { usage } }
 }
 
 /**
