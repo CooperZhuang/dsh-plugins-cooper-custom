@@ -310,19 +310,33 @@ export interface ConsolidateRequest {
  * without one the child inherits the parent's composition, so a "restricted"
  * child would quietly get the parent's tools back.
  */
+export interface ActivationSpec {
+  provider: string
+  /**
+   * The child's label.
+   *
+   * The kernel writes this field into the child's continuable descriptor
+   * UNCONDITIONALLY (`label: input.label`) and then validates the whole
+   * descriptor with `snapshotJsonValue`, which rejects `undefined`. Omitting
+   * it therefore does not mean "no label" — it means "this descriptor cannot be
+   * serialized", and the pass dies with `subagent descriptor is not losslessly
+   * JSON-serializable`. Every consolidation attempt failed that way from
+   * 2026-10-20 until this field was declared here.
+   */
+  label: string
+  request: {
+    prompt: { type: 'text'; text: string }[]
+    parent: Agent
+    signal: AbortSignal
+    agentOptions?: { provider?: string; model?: string }
+    outputSchema?: unknown
+    maxDepth?: number
+    agentPreset?: string
+  }
+}
+
 export interface SubagentSeam {
-  startActivation?: (spec: {
-    provider: string
-    request: {
-      prompt: { type: 'text'; text: string }[]
-      parent: Agent
-      signal: AbortSignal
-      agentOptions?: { provider?: string; model?: string }
-      outputSchema?: unknown
-      maxDepth?: number
-      agentPreset?: string
-    }
-  }) => Promise<{ result: Promise<{ output: readonly unknown[]; structured?: unknown; stopReason?: { kind: string } }> }>
+  startActivation?: (spec: ActivationSpec) => Promise<{ result: Promise<{ output: readonly unknown[]; structured?: unknown; stopReason?: { kind: string } }> }>
   start?: (name: string, request: {
     prompt: { type: 'text'; text: string }[]
     parent: Agent
@@ -348,6 +362,15 @@ const MAX_SKILL_DRAFTS = 2
  * have. This preset carries no tool rows at all, so the child can only answer.
  */
 export const CONSOLIDATE_PRESET_ID = 'memories-consolidator'
+
+/**
+ * Label every consolidation child runs under.
+ *
+ * A plain constant, never derived from anything that can be `undefined`: see
+ * {@link ActivationSpec.label} for what a missing label does to the child's
+ * descriptor.
+ */
+export const CONSOLIDATE_LABEL = '记忆合并'
 
 /** Output token cap for the direct (no-subagent) consolidation path. */
 export const DEFAULT_CONSOLIDATE_MAX_OUTPUT_TOKENS = 8192
@@ -398,6 +421,52 @@ export async function runConsolidation(seam: SubagentSeam, request: ConsolidateR
 }
 
 /**
+ * Build the spec the 0.2.1-rc.2 seam takes.
+ *
+ * Extracted so a test can inspect it without a kernel: the one bug this shape
+ * can carry — a missing `label` — is invisible from the seam's type unless the
+ * type declares the field, and the failure it causes happens inside the
+ * kernel's descriptor validator, three calls away from here. See
+ * {@link ActivationSpec.label}.
+ *
+ * @param request - route, preset and lineage parent.
+ * @param prompt - the child's single user message.
+ * @param timeout - the child's deadline.
+ * @returns the spec, with every optional field absent rather than `undefined`.
+ */
+export function buildActivationSpec(
+  request: ConsolidateRequest,
+  prompt: { type: 'text'; text: string }[],
+  timeout: AbortSignal,
+): ActivationSpec {
+  const agentOptions = request.provider !== undefined && request.model !== undefined
+    ? { provider: request.provider, model: request.model }
+    : undefined
+  return {
+    provider: request.subagentProvider ?? 'spawn',
+    // Never optional, never derived: a missing label fails the kernel's
+    // descriptor validator BEFORE the child starts, and the symptom is a
+    // silently dead consolidation pass rather than a start error.
+    label: CONSOLIDATE_LABEL,
+    request: {
+      prompt,
+      parent: request.parent,
+      signal: timeout,
+      ...agentOptions !== undefined ? { agentOptions } : {},
+      outputSchema: CONSOLIDATE_JSON_SCHEMA,
+      // The child may not delegate further: it returns a plan, nothing else.
+      //
+      // `maxDepth` is the cap on the CHILD's depth, and DSH counts depth from
+      // 1 (a top-level agent is 0, its child is 1). So 1 admits this child and
+      // rejects any grandchild — 0 would reject the child itself, which is how
+      // this line was wrong the first time.
+      maxDepth: 1,
+      ...request.agentPreset !== undefined ? { agentPreset: request.agentPreset } : {},
+    },
+  }
+}
+
+/**
  * Ask the seam for one restricted child and return its answer as text.
  *
  * The 0.2.1-rc.2 seam is preferred, but only with a preset: a child that names
@@ -420,24 +489,7 @@ async function runChild(
     ? { provider: request.provider, model: request.model }
     : undefined
   if (typeof seam.startActivation === 'function' && request.agentPreset !== undefined) {
-    const run = await seam.startActivation({
-      provider: request.subagentProvider ?? 'spawn',
-      request: {
-        prompt,
-        parent: request.parent,
-        signal: timeout,
-        ...agentOptions !== undefined ? { agentOptions } : {},
-        outputSchema: CONSOLIDATE_JSON_SCHEMA,
-        // The child may not delegate further: it returns a plan, nothing else.
-        //
-        // `maxDepth` is the cap on the CHILD's depth, and DSH counts depth from
-        // 1 (a top-level agent is 0, its child is 1). So 1 admits this child and
-        // rejects any grandchild — 0 would reject the child itself, which is how
-        // this line was wrong the first time.
-        maxDepth: 1,
-        agentPreset: request.agentPreset,
-      },
-    })
+    const run = await seam.startActivation(buildActivationSpec(request, prompt, timeout))
     return textOf(await run.result)
   }
   if (typeof seam.start === 'function') {
