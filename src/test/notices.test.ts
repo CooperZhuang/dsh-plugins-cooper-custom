@@ -12,6 +12,7 @@ import test from 'node:test'
 import { admitNotice, dueNotices, pruneNotices, quietHoursEnd, readNotices, withNotice, writeNotices, NOTICE_TTL_MS } from '../notices.js'
 import type { Notice, NoticeQueue } from '../notices.js'
 import { say } from '../pet.js'
+import { gateNotices, parseGateReply } from '../gate.js'
 
 const NOW = Date.parse('2026-10-23T12:00:00Z')
 const policy = { now: NOW, quietHours: '', dailyCap: 3, minSpacingHours: 6 }
@@ -127,4 +128,25 @@ test('the broadcast URL keeps its path before the token and carries the renderer
   assert.match(seenUrl, /token=tok123/u)
   assert.match(seenUrl, /surface=any/u, 'the pet refuses a broadcast without a surface')
   assert.equal(seenHeaders['x-dsh-desktop-renderer'], 'cap', 'the desktop gate needs the renderer capability')
+})
+test('the gate only authorises ids it was shown, and fails to silence', async () => {
+  const candidates = [
+    { id: 'loop-a', title: '还挂着：把报销单交给财务', detail: '说了 4 天' },
+    { id: 'loop-b', title: '还挂着：看看部署脚本', detail: '说了 9 天' },
+  ]
+  const parsed = parseGateReply('{"deliver":["loop-a","loop-made-up"],"reason":"a 有硬期限"}', candidates)
+  assert.equal(parsed.failed, false)
+  assert.deepEqual([...parsed.deliver], ['loop-a'], 'an invented id is not permission')
+  assert.equal(parsed.reason, 'a 有硬期限')
+
+  assert.equal(parseGateReply('not json at all', candidates).failed, true, 'garbage is not permission')
+  const fenced = parseGateReply('```json\n{"deliver":[],"reason":"都可以等"}\n```', candidates)
+  assert.equal(fenced.deliver.size, 0)
+  assert.equal(fenced.reason, '都可以等')
+
+  const noLlm = await gateNotices({ llm: undefined, session: undefined, candidates, timeoutMs: 1000, signal: new AbortController().signal })
+  assert.equal(noLlm.deliver.size, 0)
+  assert.equal(noLlm.skipped, 'no-llm')
+  const nothing = await gateNotices({ llm: undefined, session: undefined, candidates: [], timeoutMs: 1000, signal: new AbortController().signal })
+  assert.equal(nothing.deliver.size, 0)
 })

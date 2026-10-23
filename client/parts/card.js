@@ -92,6 +92,11 @@ const FIELDS = [
     hint: { zh: '一条记忆要被按需补注，除了达到相关度下限，还必须在标题、别名、标签或「何时有用」里命中这么多个不同的提问词。中文提问尤其需要：只共用「插件」「日志」这类常见词不算证据，共享两个词才算。设为 1 就只按相关度打分判断（会明显更容易误补）。', en: 'Distinct query terms that must land in the title, keys, tags, or appliesTo before a memory may be recalled. This is what stops a Chinese turn from recalling everything that shares a common word; set it to 1 to gate on relevance alone.' },
   },
   {
+    field: 'noticeGate', kind: 'boolean',
+    label: { zh: '没规矩的提醒先问 AI', en: 'Gate judgement notices' },
+    hint: { zh: '有硬规则的提醒（日报、积压、到期承诺）不过闸门。只有「没有截止日期、躺了好几天」这类需要判断的，才先问一次模型值不值得打扰——答不上来就不打扰。', en: 'Rule-based notices (digest, backlog, a passed deadline) bypass the gate. Only judgement calls — an undated promise sitting for days — go to a model first, and a failure means silence.' },
+  },
+  {
     field: 'noticesEnabled', kind: 'boolean',
     label: { zh: '允许它主动开口', en: 'Let it speak first' },
     hint: { zh: '每天一条整理简报、待裁决积压超时提醒。先走桌宠气泡，桌宠不在时退回系统通知。关掉则只在你问的时候回答。', en: 'A daily digest of maintenance and a warning when decisions have waited too long. Desktop pet bubble first, system notification as fallback. Off means it only answers.' },
