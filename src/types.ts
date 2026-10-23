@@ -76,6 +76,22 @@ export interface MemoryEntry {
   /** When a `snapshot` was measured; ignored for `durable`. */
   readonly asOf?: number
   /**
+   * Never retire this memory on its own.
+   *
+   * Deliberately separate from `pinned`: a pin answers "show this in every
+   * session", which costs one of the summary's few slots, while permanence
+   * answers "do not lose this", which costs nothing. Fusing the two meant a rule
+   * could only be safe by also being always-injected — and three such rules were
+   * enough to squeeze the global summary down to one free slot.
+   *
+   * Permanent entries are skipped by retention, by the per-scope cap, and by
+   * unattended consolidation (a plan that would rewrite or retire one becomes a
+   * question for a person instead). Only `/memories forget` removes one, and the
+   * title-identity rule still lets the same title be rewritten in place — which
+   * is how a changed mind is meant to be expressed.
+   */
+  readonly permanent?: boolean
+  /**
    * Keep this memory in the injected summary whenever it fits.
    *
    * The summary lists a handful of entries out of hundreds, so which ones appear
@@ -231,6 +247,8 @@ export interface MemoryDraft {
   readonly asOf?: number
   /** Whether the injected summary must list this memory whenever it fits. */
   readonly pinned?: boolean
+  /** Whether this memory is kept until a person decides otherwise; see {@link MemoryEntry.permanent}. */
+  readonly permanent?: boolean
   /** Id of a memory this one replaces. */
   readonly supersedes?: string
   /** Session the draft came from, recorded as {@link MemoryEntry.sourceSession}. */
