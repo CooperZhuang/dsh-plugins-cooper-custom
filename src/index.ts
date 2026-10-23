@@ -37,7 +37,7 @@ import { Config as ConfigSchema, consolidationRouteOf, readTunables, resolveConf
 import type { MemoriesConfig, MemoriesSettings, ResolvedConfig } from './config.js'
 import { MemoryStore, slugify } from './storage.js'
 import { StateStore, importLegacyState, statePath } from './state.js'
-import { browseMemories, EXPAND_SEEDS, matchCredit, QUALIFIED_SCORE_FACTOR, relatedHits, searchMemories } from './search.js'
+import { browseMemories, EXPAND_SEEDS, hubTerms, matchCredit, QUALIFIED_SCORE_FACTOR, relatedHits, searchMemories } from './search.js'
 import type { MatchCredit, ScopeEntries } from './search.js'
 import { parseTimeRange } from './time.js'
 import { isSubstantiveTurn } from './query.js'
@@ -264,6 +264,8 @@ export class MemoriesRuntime {
    */
   private consolidatePresetReady = false
   private readonly rootCache = new WeakMap<Session, Promise<string | undefined>>()
+  /** Hub-term predicates by store signature; see `hubFor`. */
+  private readonly hubCache = new Map<string, (term: string) => boolean>()
   /** Sessions whose conversation already carries the memory block. */
   private readonly injected = new WeakSet<Session>()
   /** Recall deltas already injected into each conversation. */
@@ -1029,18 +1031,48 @@ export class MemoriesRuntime {
     if (query === undefined || !isSubstantiveTurn(query)) return
     const root = await this.projectRoot(session)
     const states = await this.allScopes(session)
+    const hub = this.hubFor(states)
     for (const state of states) {
       for (const entry of state.entries) {
         if (!pending.includes(entry.id)) continue
         // The same gate the recall path uses, so an injected memory is only
         // credited as "used" under the evidence a recall would have demanded.
-        const why = matchCredit(entry, query, this.settings.recallMinScore, this.settings.recallMinTerms)
+        const why = matchCredit(entry, query, this.settings.recallMinScore, this.settings.recallMinTerms, {
+          ...hub === undefined ? {} : { hub },
+        })
         if (!why.about) continue
         credited.add(entry.id)
         this.log.decision('dsh-memories: injected memory %s was used by the conversation (relevance %d)', entry.id, why.relevance)
         await this.touchEntry(entry, state.scope === 'project' ? root : undefined)
       }
     }
+  }
+
+  /**
+   * Which query terms are too common in these scopes to count as evidence.
+   *
+   * Cached against a signature of the store (entry count plus newest update), so
+   * a turn costs one comparison and the document-frequency sweep runs only when
+   * something was written. Disabled below 20 entries: with a handful of memories
+   * "more than a quarter of the scope" is not a meaningful claim about a word.
+   *
+   * @param states - the scopes this turn can see.
+   * @returns the predicate, or `undefined` when the discount is off.
+   */
+  private hubFor(states: readonly ScopeState[]): ((term: string) => boolean) | undefined {
+    const maxDf = this.settings.evidenceMaxDf
+    if (maxDf <= 0) return undefined
+    const entries = states.flatMap((state) => state.entries)
+    if (entries.length < 20) return undefined
+    let newest = 0
+    for (const entry of entries) if (entry.updatedAt > newest) newest = entry.updatedAt
+    const signature = `${entries.length}:${newest}`
+    const cached = this.hubCache.get(signature)
+    if (cached !== undefined) return cached
+    const hub = hubTerms(entries, maxDf)
+    this.hubCache.clear()
+    this.hubCache.set(signature, hub)
+    return hub
   }
 
   /**
@@ -1075,6 +1107,9 @@ export class MemoriesRuntime {
     const states = await this.allScopes(session)
     // Resolved once for the turn: this loop scores every entry in the store.
     const window = parseTimeRange(query)
+    // Which words are too common in these scopes to prove anything. Computed
+    // once for the turn and cached until the store changes.
+    const hub = this.hubFor(states)
     const eligible: (MatchCredit & { entry: MemoryEntry })[] = []
     let near: { id: string; relevance: number; terms: number } | undefined
     for (const state of states) {
@@ -1083,7 +1118,10 @@ export class MemoriesRuntime {
         // One gate, two questions — see `matchCredit`. The floor is the caller's
         // knob; the credit rule is structural and is what keeps a Chinese turn
         // from recalling every memory that shares a common word like 插件 or 日志.
-        const why = matchCredit(entry, query, this.settings.recallMinScore, this.settings.recallMinTerms, { range: window ?? null })
+        const why = matchCredit(entry, query, this.settings.recallMinScore, this.settings.recallMinTerms, {
+          range: window ?? null,
+          ...hub === undefined ? {} : { hub },
+        })
         if (!why.about) {
           // Remember the closest miss, so "why was nothing recalled?" has an
           // answer in the log instead of being a silence.

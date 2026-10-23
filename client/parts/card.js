@@ -92,6 +92,11 @@ const FIELDS = [
     hint: { zh: '一条记忆要被按需补注，除了达到相关度下限，还必须在标题、别名、标签或「何时有用」里命中这么多个不同的提问词。中文提问尤其需要：只共用「插件」「日志」这类常见词不算证据，共享两个词才算。设为 1 就只按相关度打分判断（会明显更容易误补）。', en: 'Distinct query terms that must land in the title, keys, tags, or appliesTo before a memory may be recalled. This is what stops a Chinese turn from recalling everything that shares a common word; set it to 1 to gate on relevance alone.' },
   },
   {
+    field: 'evidenceMaxDf', kind: 'number', min: 0, max: 1, step: 0.05,
+    label: { zh: '算作「常见词」的库占比', en: 'Share of the store that makes a word common' },
+    hint: { zh: '一个提问词若出现在该作用域超过这个比例的记忆里，就不算补注所需的「证据词」。默认 0.15 是在真实库上量出来的：只命中一个词（dsh，占 22%），把「dsh 插件 配置」这类泛问的误纳入从 37 条降到 9 条，10 条标注探针一条不变。设为 0 关闭折扣。', en: 'A query term appearing in more than this share of one scope stops counting as recall evidence. 0.15 is measured on a real store: it catches one word (dsh, 22%) and takes a generic turn from 37 admitted memories to 9 while all ten labelled probes keep their verdict. 0 disables it.' },
+  },
+  {
     field: 'maxEntriesPerScope', kind: 'number', min: 1, step: 1,
     label: { zh: '每作用域保留条数', en: 'Stored memories per scope' },
     hint: { zh: '超过后归档最久未使用的记忆（可用 /memories restore 取回）。', en: 'Past this cap the least recently used memories are archived; /memories restore brings one back.' },

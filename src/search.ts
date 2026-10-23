@@ -282,7 +282,11 @@ function matches(field: string, fieldWords: ReadonlySet<string>, term: string): 
  * @param normalized - one lowercased, trimmed query string.
  * @returns the score and the evidence behind it.
  */
-function matchOne(entry: MemoryEntry, normalized: string): { score: number; evidence: MatchEvidence } {
+function matchOne(
+  entry: MemoryEntry,
+  normalized: string,
+  hub?: (term: string) => boolean,
+): { score: number; evidence: MatchEvidence } {
   const fields = searchable(entry)
   let score = 0
   // The whole query as a phrase. CJK quirk: `tags`/`keys` hold several values in
@@ -340,7 +344,7 @@ function matchOne(entry: MemoryEntry, normalized: string): { score: number; evid
       score += TERM_WEIGHTS.appliesTo * weight
       strongHit = true
     }
-    if (strongHit) {
+    if (strongHit && hub?.(term) !== true) {
       if (CJK.test(term)) {
         if (cjkBacked.has(term)) strong.add(term)
       } else if (term.length >= 3) {
@@ -387,14 +391,14 @@ interface TurnMatch {
 }
 
 /** Score every candidate query of a turn and keep the strongest. */
-function bestMatch(entry: MemoryEntry, query: string): TurnMatch {
+function bestMatch(entry: MemoryEntry, query: string, hub?: (term: string) => boolean): TurnMatch {
   const messages = queryMessages(query)
   let bestScore = 0
   let bestEvidence: MatchEvidence = { strongTerms: 0, phrase: false }
   let best = ''
   let mentions = 0
   for (const message of messages) {
-    const { score, evidence } = matchOne(entry, message)
+    const { score, evidence } = matchOne(entry, message, hub)
     if (score > 0) mentions += 1
     if (score > bestScore || (score === bestScore && evidence.strongTerms > bestEvidence.strongTerms)) {
       bestScore = score
@@ -710,6 +714,17 @@ export interface CreditOptions {
    * passes the result here.
    */
   readonly range?: TimeRange | null
+  /**
+   * Whether one query term is too common in this scope to be evidence.
+   *
+   * `minTerms` asks for two pieces of *evidence*, but a word present in half the
+   * store is evidence of nothing: measured here, `dsh` appears in 100 of 176
+   * entries and any turn mentioning it primes dozens of memories to pass the
+   * two-term rule on `dsh` plus one more common word. Dropping hub terms from the
+   * count leaves the relevance floor, the phrase rule and the single-term escape
+   * hatch untouched — this only changes what "two terms" means.
+   */
+  readonly hub?: (term: string) => boolean
 }
 
 /**
@@ -752,7 +767,7 @@ export function matchCredit(
   const now = options.now ?? Date.now()
   const singleTerm = options.singleTerm ?? true
   const window = options.range === undefined ? parseTimeRange(query, now) : options.range ?? undefined
-  const match = bestMatch(entry, query)
+  const match = bestMatch(entry, query, options.hub)
   const distinctive = match.relevance >= minScore * QUALIFIED_SCORE_FACTOR
   const credited = match.evidence.phrase
     || match.evidence.strongTerms >= minTerms
@@ -766,6 +781,44 @@ export function matchCredit(
     evidence: match.evidence,
     score: match.relevance * importanceOf(entry) * decayOf(entry, now) * timeBoost(entry, window),
   }
+}
+
+/**
+ * Query terms too common in one scope to count as evidence.
+ *
+ * Document frequency, computed over the same strong fields the evidence rule
+ * reads (title, keys, tags, `appliesTo`) so the two agree on what "this memory is
+ * about the term" means. A term present in more than `maxDf` of the scope is a
+ * hub: `dsh` in a DSH-plugin store, `插件` in any store written by an agent that
+ * keeps talking about its own plugins.
+ *
+ * This is deliberately NOT the ranking's document-frequency discount the README
+ * records as measured-and-rejected. That one tried to change which memory wins;
+ * this one only decides what counts as evidence, and the two failures are
+ * different: a hub term never made a bad memory rank first, it made two unrelated
+ * memories look like two independent signals.
+ *
+ * @param entries - every entry in the scope.
+ * @param maxDf - share of the scope above which a term is a hub; `0` disables.
+ * @returns a predicate over lowercase terms.
+ */
+export function hubTerms(entries: readonly MemoryEntry[], maxDf: number): (term: string) => boolean {
+  if (maxDf <= 0 || entries.length === 0) return () => false
+  const counts = new Map<string, number>()
+  for (const entry of entries) {
+    const seen = new Set<string>()
+    for (const field of [entry.title, ...entry.keys, ...entry.tags, entry.appliesTo ?? '']) {
+      for (const term of tokenize(field)) {
+        if (isNoise(term)) continue
+        seen.add(term)
+      }
+    }
+    for (const term of seen) counts.set(term, (counts.get(term) ?? 0) + 1)
+  }
+  const limit = Math.max(1, Math.ceil(entries.length * Math.min(1, maxDf)))
+  const hubs = new Set<string>()
+  for (const [term, count] of counts) if (count >= limit) hubs.add(term)
+  return (term: string) => hubs.has(term)
 }
 
 /** Filter options accepted by {@link searchMemories}. */

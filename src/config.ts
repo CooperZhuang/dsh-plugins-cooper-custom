@@ -257,6 +257,19 @@ export const DEFAULT_LOG_LEVEL = 'info' as const
 export const DEFAULT_TRACE_MAINTENANCE = false
 
 /**
+ * Share of a scope above which a query term stops being recall evidence.
+ *
+ * Measured on the real 200-entry global scope: `dsh` sits in 44 of 200 strong
+ * fields (22%), `mac` in 24 (12%), then a long tail below 11%. At 0.15 exactly
+ * one term qualifies — the one the README singles out — and the effect is
+ * large and one-sided: the turn "dsh 插件 配置" admits 37 memories without the
+ * discount and 9 with it, "dsh 版本" 35 → 4, while "插件 内核 版本" and
+ * "mac 代理 端口" are unchanged and all ten labelled retrieval probes keep their
+ * gate verdict.
+ */
+export const DEFAULT_EVIDENCE_MAX_DF = 0.15
+
+/**
  * Default peak-hours spec: none.
  *
  * Deliberately empty rather than pre-filled with one provider's timetable: this
@@ -364,6 +377,8 @@ export const Config = z.object({
   logLevel: z.string().default(DEFAULT_LOG_LEVEL).description('How much dsh-memories writes to its log file: off, error, warn, info, or debug. info keeps errors, warnings, and pass summaries; debug adds per-entry decisions.').volatile(),
   /** Whether maintenance decisions are logged at info, where a stock logLevel keeps them. */
   traceMaintenance: z.boolean().default(DEFAULT_TRACE_MAINTENANCE).description('Log every retention, recall, and selection decision at info instead of debug. Off keeps the file to one line per pass.').volatile(),
+  /** Share of a scope above which a query term stops counting as recall evidence. */
+  evidenceMaxDf: z.number().default(DEFAULT_EVIDENCE_MAX_DF).description('A query term that appears in more than this share of one scope does not count towards the recall gate\'s evidence requirement. 0.15 is measured on a real 200-entry store: it catches exactly one term (dsh, 22% of entries) and cuts false admissions by three quarters without changing any of ten labelled probes. 0 disables the discount and restores the pre-2026-10-23 behaviour.').volatile(),
   /** Local-time windows whose tokens are the expensive ones. */
   peakHours: z.string().default(DEFAULT_PEAK_HOURS).description('Local-time peak windows to keep the plugin\'s model calls out of, for example "Mon-Fri 09:00-12:00, Mon-Fri 14:00-18:00" (DeepSeek charges double then, Beijing time). Background extraction and consolidation are deferred to the next off-peak moment; /memories mine and /memories consolidate ignore this. Empty disables the restriction.').volatile(),
 })
@@ -429,6 +444,7 @@ export interface MemoriesSettings {
   /** This plugin's own log file and how much it records. */
   logLevel: string
   traceMaintenance: boolean
+  evidenceMaxDf: number
   peakHours: string
 }
 
@@ -484,6 +500,7 @@ export const MEMORIES_SETTINGS_DEFAULTS: MemoriesSettings = {
   enableCommand: true,
   logLevel: DEFAULT_LOG_LEVEL,
   traceMaintenance: DEFAULT_TRACE_MAINTENANCE,
+  evidenceMaxDf: DEFAULT_EVIDENCE_MAX_DF,
   peakHours: DEFAULT_PEAK_HOURS,
 }
 
@@ -621,6 +638,7 @@ export function normalizeSettings(input: Partial<MemoriesSettings> | undefined):
     enableCommand: value.enableCommand ?? true,
     logLevel: toLogLevel(value.logLevel, DEFAULT_LOG_LEVEL),
     traceMaintenance: value.traceMaintenance ?? false,
+    evidenceMaxDf: clampUnit(value.evidenceMaxDf, DEFAULT_EVIDENCE_MAX_DF),
     peakHours: (value.peakHours ?? '').replace(/\s+/gu, ' ').trim(),
   }
 }
