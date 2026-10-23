@@ -37,7 +37,7 @@ import { Config as ConfigSchema, consolidationRouteOf, readTunables, resolveConf
 import type { MemoriesConfig, MemoriesSettings, ResolvedConfig } from './config.js'
 import { MemoryStore, slugify } from './storage.js'
 import { StateStore, importLegacyState, statePath } from './state.js'
-import { browseMemories, EXPAND_SEEDS, hubTerms, matchCredit, QUALIFIED_SCORE_FACTOR, relatedHits, searchMemories } from './search.js'
+import { browseMemories, EXPAND_SEEDS, hubTerms, matchCredit, prefilterEntries, QUALIFIED_SCORE_FACTOR, relatedHits, searchMemories } from './search.js'
 import type { MatchCredit, ScopeEntries } from './search.js'
 import { readFile } from 'node:fs/promises'
 import { readPersona, renderPersonaBlock, writePersona } from './persona.js'
@@ -1093,7 +1093,10 @@ export class MemoriesRuntime {
     for (const state of states) {
       const retired = await this.store.listArchived(state.scope, state.scope === 'project' ? root : undefined)
         .catch(() => [] as readonly MemoryEntry[])
-      for (const entry of retired) {
+      // Archive hits are rare and the list only grows, so this is the first place
+      // the inverted index pays for itself: score the entries that share a token
+      // with the turn instead of every retired memory ever written.
+      for (const entry of prefilterEntries(retired, query)) {
         const why = matchCredit(entry, query, this.settings.recallMinScore, this.settings.recallMinTerms, {
           range: window ?? null,
           ...hub === undefined ? {} : { hub },
@@ -1170,7 +1173,11 @@ export class MemoriesRuntime {
     const eligible: (MatchCredit & { entry: MemoryEntry })[] = []
     let near: { id: string; relevance: number; terms: number } | undefined
     for (const state of states) {
-      for (const entry of state.entries) {
+      // The index narrows the scan to entries that share a token with the turn.
+      // It is a superset of anything the matcher can accept, and it falls back to
+      // the full list when too few candidates remain — so a recall can be slower
+      // than it needs to be, never wrong.
+      for (const entry of prefilterEntries(state.entries, query)) {
         if (seen.has(entry.id)) continue
         // One gate, two questions — see `matchCredit`. The floor is the caller's
         // knob; the credit rule is structural and is what keeps a Chinese turn

@@ -270,6 +270,75 @@ function matches(field: string, fieldWords: ReadonlySet<string>, term: string): 
 }
 
 /**
+ * Below this many candidates the prefilter is skipped.
+ *
+ * The index is a superset of what can match, so a narrow result is not proof of
+ * a narrow answer: a turn of two common bigrams can leave a handful of entries
+ * whose *combinations* would have cleared the gate. Scanning everything in that
+ * case costs nothing (the store is small by definition when the candidate set
+ * is) and removes the only path by which the index could lose a recall.
+ */
+const PREFILTER_FLOOR = 12
+
+/**
+ * A term → entry-index map, cached against the array it was built from.
+ *
+ * Built from the same two primitives the matcher uses — {@link matches} for CJK
+ * asks `field.includes(term)`, Latin asks word membership — so the index is a
+ * superset of anything that could match. Single CJK characters are indexed too,
+ * because a one-character query tokenizes to exactly that character.
+ */
+const termIndexCache = new WeakMap<readonly MemoryEntry[], Map<string, number[]>>()
+
+/**
+ * Build (or reuse) the term index for one entry array.
+ *
+ * @param entries - entries from one scope, in list order.
+ * @returns term → ascending entry indexes.
+ */
+export function termIndex(entries: readonly MemoryEntry[]): Map<string, number[]> {
+  const cached = termIndexCache.get(entries)
+  if (cached !== undefined) return cached
+  const index = new Map<string, number[]>()
+  const add = (term: string, at: number): void => {
+    const list = index.get(term)
+    if (list === undefined) index.set(term, [at])
+    else if (list[list.length - 1] !== at) list.push(at)
+  }
+  entries.forEach((entry, at) => {
+    const fields = searchable(entry)
+    for (const text of [fields.title, fields.body, fields.keys, fields.tags, fields.appliesTo]) {
+      for (const term of tokenize(text)) add(term, at)
+      // A single CJK character is only reachable through `includes`, which a
+      // bigram-only index would miss.
+      for (const char of text.match(CJK_CHAR) ?? []) add(char, at)
+    }
+  })
+  termIndexCache.set(entries, index)
+  return index
+}
+
+/**
+ * The entries that share at least one token with the query.
+ *
+ * @param entries - the scope's entries.
+ * @param query - the turn's text.
+ * @returns candidates, or the whole array when the prefilter would be unreliable.
+ */
+export function prefilterEntries(entries: readonly MemoryEntry[], query: string): readonly MemoryEntry[] {
+  if (entries.length <= PREFILTER_FLOOR) return entries
+  const index = termIndex(entries)
+  const hits = new Set<number>()
+  for (const term of tokenize(query)) {
+    const found = index.get(term)
+    if (found === undefined) continue
+    for (const at of found) hits.add(at)
+  }
+  if (hits.size < PREFILTER_FLOOR) return entries
+  return entries.filter((_entry, at) => hits.has(at))
+}
+
+/**
  * Score one entry against one already-extracted query string, with evidence.
  *
  * Exact and per-term hits are counted in the title, keys, tags, `appliesTo`,
