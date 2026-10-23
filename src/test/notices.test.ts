@@ -106,3 +106,24 @@ test('the pet channel reports failure instead of throwing', async () => {
   assert.equal(broken.ok, false)
   assert.match(broken.reason ?? '', /ECONNREFUSED/u)
 })
+test('the broadcast URL keeps its path before the token and carries the renderer header', async () => {
+  let seenUrl = ''
+  let seenHeaders: Record<string, string> = {}
+  const capture = (async (url: string, init: { headers?: Record<string, string> }) => {
+    seenUrl = url
+    seenHeaders = init.headers ?? {}
+    return new Response('{"ok":true}', { status: 200 })
+  }) as unknown as typeof fetch
+  const result = await say(
+    { origin: 'http://127.0.0.1:43120', token: 'tok123', rendererHeader: { name: 'x-dsh-desktop-renderer', value: 'cap' }, petId: 'main', routeId: '7340' },
+    { text: 'hi', duration: 1 },
+    capture,
+  )
+  assert.equal(result.ok, true)
+  // Regression: the authenticated URL ends in ?token=..., so appending a path puts
+  // it inside the token value and the request never reaches the pet route.
+  assert.match(seenUrl, /^http:\/\/127\.0\.0\.1:43120\/dsh-pet-7340\/broadcast\?/u)
+  assert.match(seenUrl, /pet=main/u)
+  assert.match(seenUrl, /token=tok123/u)
+  assert.equal(seenHeaders['x-dsh-desktop-renderer'], 'cap', 'the desktop gate needs the renderer capability')
+})

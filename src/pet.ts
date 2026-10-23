@@ -20,8 +20,29 @@ import { join } from 'node:path'
 
 /** Where one pet is reachable. */
 export interface PetTarget {
-  /** Authenticated origin, e.g. `http://127.0.0.1:43120/token`; no trailing slash. */
+  /** Clean origin, e.g. `http://127.0.0.1:43120`; no path, no query. */
   readonly origin: string
+  /**
+   * Process launch token, when the host requires one.
+   *
+   * `connection.authenticatedUrl()` appends it as a QUERY parameter, so its result
+   * cannot be used as a path prefix: appending a path puts it inside the token
+   * value (`...?token=abc/dsh-pet-7340/broadcast`) and the request is rejected.
+   * The token therefore travels separately, on the request's own query string.
+   */
+  readonly token?: string
+  /**
+   * The Desktop renderer capability header, when the host has one.
+   *
+   * This is the ONLY credential the desktop loopback accepts: a request reaches
+   * the host routes when it carries `x-dsh-desktop-renderer: <43 base64url>` (the
+   * renderer's own session adds it) or when the user has enabled ordinary browser
+   * access. A plain loopback fetch is rejected with 403 — measured — and the
+   * `connection.authenticatedUrl` token is unrelated (it mints a web-app cookie,
+   * it does not open this gate). The value is read from the host's own
+   * `desktopBrowserAccess` service, which is what the gate itself consults.
+   */
+  readonly rendererHeader?: { readonly name: string; readonly value: string }
   /** Pet id the pet's own config declares, e.g. `main`. */
   readonly petId: string
   /** Route id baked into the pet's registered prefix (`/dsh-pet-<routeId>`). */
@@ -85,15 +106,27 @@ export async function say(
   bubble: Bubble,
   fetchImpl: typeof fetch = fetch,
 ): Promise<DeliveryResult> {
-  const url = `${target.origin}/dsh-pet-${target.routeId}/broadcast?pet=${encodeURIComponent(target.petId)}`
+  // The path is built on the clean origin and the token is set afterwards: the
+  // host appends its token as a QUERY parameter, so a path concatenated onto the
+  // authenticated URL ends up inside the token value and the request is rejected.
+  const url = new URL(`/dsh-pet-${target.routeId}/broadcast`, target.origin)
+  url.searchParams.set('pet', target.petId)
+  if (target.token !== undefined && target.token.length > 0) url.searchParams.set('token', target.token)
   try {
-    const response = await fetchImpl(url, {
+    const response = await fetchImpl(url.href, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', origin: target.origin },
+      headers: {
+        'content-type': 'application/json',
+        origin: target.origin,
+        ...target.rendererHeader === undefined ? {} : { [target.rendererHeader.name]: target.rendererHeader.value },
+      },
       body: JSON.stringify({ text: bubble.text, duration: bubble.duration }),
       signal: AbortSignal.timeout(5_000),
     })
-    if (!response.ok) return { ok: false, reason: `pet responded ${response.status}` }
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '')
+      return { ok: false, reason: `pet responded ${response.status}${detail.trim().length > 0 ? ': ' + detail.trim().slice(0, 80) : ''}` }
+    }
     const payload = (await response.json().catch(() => ({}))) as { ok?: unknown; reason?: unknown; message?: unknown }
     if (payload.ok === false) {
       return { ok: false, reason: `pet refused: ${String(payload.reason ?? payload.message ?? 'unknown')}` }
