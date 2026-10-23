@@ -44,6 +44,7 @@ import { readPersona, renderPersonaBlock, writePersona } from './persona.js'
 import { admitNotice, dueNotices, pruneNotices, readNotices, withNotice, writeNotices } from './notices.js'
 import { readPetId, say, systemNotification } from './pet.js'
 import type { PetTarget } from './pet.js'
+import { closeLoop, describeLoops, dueLoops, mergeLoops, pruneLoops, readLoops, withLoop, writeLoops } from './loops.js'
 import { parseTimeRange } from './time.js'
 import { isSubstantiveTurn } from './query.js'
 import { MEMORY_OPEN, rankForSummary, renderEntry, renderHit, renderMemorySummaryResult, renderRecall, renderScopeListing, selectForSummary } from './render.js'
@@ -2090,6 +2091,7 @@ export class MemoriesRuntime {
         }).catch((error: unknown) => {
           this.log.warn('dsh-memories: could not write the evidence note for session %s: %o', key, error)
         })
+        await this.recordLoops(key, outcome.loops)
         this.log.info('dsh-memories: stored %d memories from session %s (%s)%s%s', outcome.drafts.length, key, stored.join(', '), spend,
           outcome.truncated === true ? ` — the reply hit the ${this.settings.extractMaxOutputTokens}-token cap and was salvaged; raise extractMaxOutputTokens to keep the rest` : '')
         // A pass that always lands on the cap is a pass whose ceiling is the
@@ -2427,8 +2429,40 @@ export class MemoriesRuntime {
         if (admitted.ok) queue = { ...queue, notices: [admitted.notice, ...queue.notices] }
         else this.log.decision('dsh-memories: notice suppressed (%s)', admitted.reason)
       }
+      // 3. Open loops whose deadline has passed. This is the trigger that makes
+      // the assistant pro-active rather than reactive: it needs no question to
+      // answer, only a promise the user made and has not closed.
+      const loopNow = pruneLoops(await readLoops(dir), now)
+      const raised: string[] = []
+      for (const loop of dueLoops(loopNow, now)) {
+        const admitted = admitNotice(queue, {
+          kind: 'loop',
+          createdAt: now,
+          dueAt: now,
+          title: `还欠着：${loop.text}`,
+          body: loop.dueAt === undefined
+            ? loop.text
+            : `${loop.text}\n截止：${new Date(loop.dueAt).toISOString().slice(0, 10)}（${loop.remindCount ?? 0} 次提醒后自动放弃）`,
+          evidence: [loop.id],
+          dedupeKey: `loop:${loop.id}`,
+        }, policy)
+        if (admitted.ok) {
+          queue = { ...queue, notices: [admitted.notice, ...queue.notices] }
+          raised.push(loop.id)
+        } else {
+          this.log.decision('dsh-memories: loop notice suppressed (%s)', admitted.reason)
+        }
+      }
+      if (raised.length > 0) {
+        let ledger = loopNow
+        for (const id of raised) {
+          const loop = ledger.loops.find((item) => item.id === id)
+          if (loop !== undefined) ledger = withLoop(ledger, id, { remindedAt: now, remindCount: (loop.remindCount ?? 0) + 1 })
+        }
+        await writeLoops(dir, ledger)
+      }
       const before = JSON.stringify(queue)
-      // 3. Deliver what is due: pet first, system notification as fallback.
+      // 4. Deliver what is due: pet first, system notification as fallback.
       const target = this.petTarget()
       let next = queue
       for (const notice of dueNotices(queue, now)) {
@@ -2449,6 +2483,28 @@ export class MemoriesRuntime {
       if (JSON.stringify(next) !== before) await writeNotices(dir, next)
     } catch (error) {
       this.log.warn('dsh-memories: notice pump failed: %s', error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  /**
+   * Fold the promises one extraction found into the open-loop ledger.
+   *
+   * Kept separate from `persist` because a loop is not a memory: it has a
+   * lifecycle and a deadline, it is never recalled by retrieval, and its id must
+   * stay stable across rewrites so one promise cannot become three reminders.
+   */
+  private async recordLoops(sessionKey: string, candidates: readonly { text: string; dueAt?: number }[]): Promise<void> {
+    if (candidates.length === 0) return
+    try {
+      const dir = this.store.memoriesDir
+      const now = Date.now()
+      const current = pruneLoops(await readLoops(dir), now)
+      const next = mergeLoops(current, candidates, now, sessionKey)
+      await writeLoops(dir, next)
+      this.log.info('dsh-memories: open loops now %d (from %d candidate(s))',
+        next.loops.filter((loop) => loop.state === 'open').length, candidates.length)
+    } catch (error) {
+      this.log.warn('dsh-memories: could not record open loops: %s', error instanceof Error ? error.message : String(error))
     }
   }
 
@@ -3233,6 +3289,7 @@ function helpText(): string {
     '  reject                  discard every waiting decision',
     '  sweep                   archive unused memories now',
     '  notices [test]          list raised notices, or send a test bubble to the pet',
+    '  loops [done <id>]       list promises the user made and has not closed',
     '  stale                   list memories that cite a file that no longer exists',
     '  skills                  list staged skill drafts',
     '  promote <name>          copy a staged draft into the harness skill root',
@@ -3611,6 +3668,19 @@ async function handleCommand(runtime: MemoriesRuntime, invocation: CommandInvoca
     case 'sweep': {
       const archived = await runtime.sweepNow()
       return { kind: 'success', text: archived === 0 ? 'Nothing to archive.' : `Archived ${archived} unused memories.` }
+    }
+    case 'loops': {
+      const dir = runtime.store.memoriesDir
+      const ledger = await readLoops(dir)
+      const argument = rest.trim()
+      if (argument.startsWith('done ')) {
+        const closed = closeLoop(ledger, argument.slice(5).trim())
+        if (closed.closed === undefined) return { kind: 'error', text: closed.reason ?? 'could not close that loop' }
+        await writeLoops(dir, closed.store)
+        return { kind: 'success', text: `Closed: ${closed.closed.text}` }
+      }
+      if (argument.length > 0 && argument !== 'list') return { kind: 'error', text: 'Usage: /memories loops [done <id>]' }
+      return { kind: 'success', text: describeLoops(ledger, Date.now()) }
     }
     case 'notices': {
       // `rest` is the remainder of the line as ONE STRING, not argv: indexing it
