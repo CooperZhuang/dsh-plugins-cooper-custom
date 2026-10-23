@@ -264,6 +264,8 @@ export class MemoriesRuntime {
    */
   private consolidatePresetReady = false
   private readonly rootCache = new WeakMap<Session, Promise<string | undefined>>()
+  /** Why the last `consolidateNow` declined to run, for the command's report. */
+  private consolidateSkip: string | undefined
   /** Hub-term predicates by store signature; see `hubFor`. */
   private readonly hubCache = new Map<string, (term: string) => boolean>()
   /** Sessions whose conversation already carries the memory block. */
@@ -2151,8 +2153,17 @@ export class MemoriesRuntime {
    * @param options - `apply` writes the result; the default only proposes it.
    * @returns a human-readable summary, or `undefined` when nothing ran.
    */
+  /** Why the last {@link consolidateNow} declined, for `/memories consolidate` to report. */
+  get consolidateSkipReason(): string | undefined {
+    return this.consolidateSkip
+  }
+
   async consolidateNow(parent: Agent, options: { apply?: boolean; force?: boolean } = {}): Promise<string | undefined> {
-    if (!this.settings.consolidate) return undefined
+    this.consolidateSkip = undefined
+    if (!this.settings.consolidate) {
+      this.consolidateSkip = 'consolidate is turned off in settings (consolidate: false)'
+      return undefined
+    }
     // A proposal is a question, and a background pass must not spend a model call
     // to overwrite one nobody has answered yet. Inside the window it leaves the
     // pending question alone; past it the store has moved on and a fresh proposal
@@ -2177,10 +2188,16 @@ export class MemoriesRuntime {
     if (options.force === true) this.state.clearJobBackoff(CONSOLIDATE_JOB)
     const token = `consolidate-${process.pid}-${Date.now().toString(36)}`
     const job = this.state.claimJob(CONSOLIDATE_JOB, token, 600_000)
-    if (job === undefined) return undefined
+    if (job === undefined) {
+      this.consolidateSkip = 'the job is leased by another process, or its backoff has not expired'
+      return undefined
+    }
     // A paused account skips the pass and leaves the job in place: the cooldown
     // is the right place to retry, not this turn.
-    if (this.backgroundPaused()) return undefined
+    if (this.backgroundPaused()) {
+      this.consolidateSkip = 'background passes are paused by a provider quota cooldown'
+      return undefined
+    }
     // The job's recorded root wins: consolidation is process-level, so the
     // session that happens to run the pass must not decide whose project
     // memories get consolidated.
@@ -2198,11 +2215,13 @@ export class MemoriesRuntime {
         entries.length, unreviewed, parent.session.id, entries.map((entry) => entry.id).join(', '))
       if (entries.length < 2) {
         this.state.deleteJob(CONSOLIDATE_JOB)
+        this.consolidateSkip = `only ${entries.length} memories are eligible for a pass`
         return undefined
       }
       const plan = await this.runConsolidationPass(parent, entries, root)
       if (plan === undefined) {
         this.state.deleteJob(CONSOLIDATE_JOB)
+        this.consolidateSkip = 'the pass produced no plan; the warn line above names the reason'
         return undefined
       }
       // The pass runs unattended; what it may do unattended is the question
@@ -3286,7 +3305,9 @@ async function handleCommand(runtime: MemoriesRuntime, invocation: CommandInvoca
       return { kind: 'success', text: runtime.setSessionMode(session, 'off') }
     case 'consolidate': {
       const summary = await runtime.consolidateNow(invocation.agent, { apply: false, force: true })
-      return { kind: 'success', text: summary ?? 'Nothing to consolidate (cooldown active, too few memories, or no subagent support).' }
+      // The old fallback listed three causes and named the real one only by luck;
+      // every silent path now records why it declined.
+      return { kind: 'success', text: summary ?? `Nothing to consolidate: ${runtime.consolidateSkipReason ?? 'unknown reason'}` }
     }
     case 'plan': {
       const pending = await runtime.pendingPlan()
