@@ -110,6 +110,8 @@ export const STORE_GITIGNORE = [
   'state.db-wal',
   'index.json',
   '**/index.json',
+  '# a project descriptor records THIS machine\'s checkout path',
+  '**/project.json',
   'pending/',
   '*.log',
   '.DS_Store',
