@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Open in DSH",
+    "description": "Windows Explorer context-menu entry that opens a folder as a DSH workspace and lands in a blank session."
+  }
+}

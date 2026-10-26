@@ -1,0 +1,29 @@
+# dsh-open-in-dsh bundle patch: mount the host-plane plugin row.
+#
+# The row is also what puts the browser half on the page: a bundle whose
+# package.json declares `dsh.client.platform: web` is mounted in the Client
+# tree by the same entry, so the Client half never needs its own row.
+#
+# `alwaysNewSession` is read back by the browser half over the plugin's own
+# HTTP surface (`GET /dsh-open-in-dsh/api/v1/events`), because a Client plugin
+# is applied as `apply(ctx)` and never receives this config block.
+- insert:
+    - id: open-in-dsh
+      name: dsh-open-in-dsh
+      config:
+        enabled: true
+        # Loopback only. The route makes the browser open an arbitrary local
+        # directory as a Workspace, which is a code-execution surface. Kernel
+        # 0.2.1 refuses wildcard bind addresses (0.0.0.0 / ::), but a concrete
+        # interface address is still reachable from the network, so this must
+        # stay false unless a trusted machine on the network is meant to drive
+        # this one.
+        allowNonLoopback: false
+        # false -> an existing blank Session for that Workspace is reused
+        # true  -> every request lands in a brand-new blank Session, which
+        #          piles up empty Sessions when the same folder is opened twice
+        alwaysNewSession: false
+        # How long an unanswered request stays replayable for a page that was
+        # not open yet (cold start). Also bounds duplicate handling in a second
+        # window opened later.
+        backlogTtlMs: 60000
