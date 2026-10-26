@@ -118,9 +118,17 @@ export const STORE_GITIGNORE = [
   '',
 ].join('\n')
 
-/** Whether a repository-relative path is an entry file this module can merge. */
+/**
+ * Whether a repository-relative path is one memory this module can merge.
+ *
+ * One memory is one file, in the live tree or in the archive: both carry the same
+ * frontmatter, so the same arbitration applies. Persona, session notes and staged
+ * skills are prose with a different shape — a conflict there aborts the rebase
+ * instead of being guessed at.
+ */
 export function isEntryPath(path: string): boolean {
-  return path.endsWith('.md') && /(^|\/)entries\//u.test(path)
+  if (!path.endsWith('.md')) return false
+  return /(^|\/)(entries|archive)\//u.test(path)
 }
 
 /** The updated stamp of one entry text, or 0 when it cannot be parsed. */

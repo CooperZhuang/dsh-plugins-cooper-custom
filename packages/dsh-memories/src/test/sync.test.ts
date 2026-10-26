@@ -98,6 +98,10 @@ test('machine state is kept out of the repository', async () => {
 test('only entry paths are auto-resolved, and the newer revision wins without a resolver', () => {
   assert.equal(isEntryPath('entries/shared.md'), true)
   assert.equal(isEntryPath('projects/alpha/entries/shared.md'), true)
+  assert.equal(isEntryPath('archive/old-fact.md'), true)
+  assert.equal(isEntryPath('projects/alpha/archive/old-fact.md'), true)
+  assert.equal(isEntryPath('persona.md'), false)
+  assert.equal(isEntryPath('sessions/note.md'), false)
   assert.equal(isEntryPath('projects/alpha/project.json'), false)
   assert.equal(isEntryPath('persona.md'), false)
   const older = entryText('shared', 'old', '2026-01-01T00:00:00.000Z')
