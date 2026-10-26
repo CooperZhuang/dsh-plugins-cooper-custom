@@ -1,0 +1,38 @@
+# dsh-session-toolbox bundle patch: mount the single host-plane plugin row.
+#
+# 合并包：一个插件行同时提供原先两个插件的能力。
+#   - 删除（原 dsh-session-admin）：HTTP /session-admin/api，模型工具 session_admin，
+#     右栏「会话管理」页签，会话标题栏垃圾桶图标，设置页「会话清理」卡片。
+#   - 搬迁（原 dsh-session-move）：HTTP /session-move/api，模型工具 session_move，
+#     右栏「会话归位」页签（含左栏底部入口）。
+# 两个半边共用本行的这一份配置；插件页上本行的「配置」卡片就是合并后的那张（7 个旋钮）。
+#
+# 从旧的两个插件行迁过来时，配置键要改写（旧 allowHosts 语义不同，已拆成两个键）：
+#   dsh-session-admin 行：enabled→enabled, allowHosts→adminAllowHosts,
+#     headerDeleteButton/allowWorkspaceSessions/allowLiveSessions/maxBatch 同名保留。
+#   dsh-session-move 行：enabled→enabled, allowHosts→moveAllowHosts,
+#     root/refuseRunning/maxSessions/memoryFollow 同名保留。
+# 注意：enabled 从「每半一个」变成一个（总开关）。旧 profile 里残留的 allowHosts
+# 不会被任何栅栏读取（schemastery 容忍未知键，不会报错），也就是会**静默失效**——
+# 需要 LAN 访问的话，必须把它改写成 adminAllowHosts / moveAllowHosts。
+#
+# 安全默认（一字未变）：
+#   admin/headerDeleteButton=true（垃圾桶是图标 + 两步确认，不是带标签的按钮）
+#   admin/allowWorkspaceSessions=false, admin/allowLiveSessions=false, admin/maxBatch=200
+#   move/refuseRunning=true, move/maxSessions=2000, move/memoryFollow=off
+- insert:
+    - id: session-toolbox
+      name: dsh-session-toolbox
+      config:
+        enabled: true
+        root: ''
+        adminAllowHosts: []
+        moveAllowHosts: []
+        headerDeleteButton: true
+        allowWorkspaceSessions: false
+        allowLiveSessions: false
+        maxBatch: 200
+        refuseRunning: true
+        maxSessions: 2000
+        # off（默认）| copy | move —— 见原 dsh-session-move 的 README「记忆」一节。
+        memoryFollow: off

@@ -1,0 +1,10 @@
+# node_modules is linked from the DSH installation / sibling repos during development
+# (dsh-session-store, @deepseek-ai/schemastery); never committed.
+node_modules/
+
+# `lib/` is hand-written SOURCE in this repo, not build output — do not ignore it.
+
+# Local editor and OS noise.
+.DS_Store
+Thumbs.db
+*.log
