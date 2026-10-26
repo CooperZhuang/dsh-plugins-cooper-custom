@@ -1,0 +1,36 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.11.0
+collected 30 items
+
+tests/test_x.py::test_1 PASSED                                 [ 3%]
+tests/test_x.py::test_2 PASSED                                 [ 6%]
+tests/test_x.py::test_3 PASSED                                 [ 9%]
+tests/test_x.py::test_4 PASSED                                 [ 12%]
+tests/test_x.py::test_5 PASSED                                 [ 15%]
+tests/test_x.py::test_6 PASSED                                 [ 18%]
+tests/test_x.py::test_7 PASSED                                 [ 21%]
+tests/test_x.py::test_8 PASSED                                 [ 24%]
+tests/test_x.py::test_9 PASSED                                 [ 27%]
+tests/test_x.py::test_10 PASSED                                [ 30%]
+tests/test_x.py::test_11 PASSED                                [ 33%]
+tests/test_x.py::test_12 PASSED                                [ 36%]
+tests/test_x.py::test_13 PASSED                                [ 39%]
+tests/test_x.py::test_14 PASSED                                [ 42%]
+tests/test_x.py::test_15 PASSED                                [ 45%]
+tests/test_x.py::test_16 PASSED                                [ 48%]
+tests/test_x.py::test_17 PASSED                                [ 51%]
+tests/test_x.py::test_18 PASSED                                [ 54%]
+tests/test_x.py::test_19 PASSED                                [ 57%]
+tests/test_x.py::test_20 PASSED                                [ 60%]
+tests/test_x.py::test_21 PASSED                                [ 63%]
+tests/test_x.py::test_22 PASSED                                [ 66%]
+tests/test_x.py::test_23 PASSED                                [ 69%]
+tests/test_x.py::test_24 PASSED                                [ 72%]
+tests/test_x.py::test_25 PASSED                                [ 75%]
+tests/test_x.py::test_26 PASSED                                [ 78%]
+tests/test_x.py::test_27 PASSED                                [ 81%]
+tests/test_x.py::test_28 PASSED                                [ 84%]
+tests/test_x.py::test_29 PASSED                                [ 87%]
+tests/test_x.py::test_30 PASSED                                [ 90%]
+
+============================== 30 passed in 1.44s ==============================
