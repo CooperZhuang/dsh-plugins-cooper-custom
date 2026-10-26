@@ -1,0 +1,19 @@
+# The dsh-folder-path bundle patch: one row over the profile root.
+#
+# The row name resolves from the profile's own node_modules, where
+# `dsh plugin --profile web add <path>` installed this package. Both halves of
+# the plugin ride this one row: the host half registers the clipboard route, and
+# the browser half (`dsh.client.platform: web` in package.json) is served as a
+# client bundle the module system loads at boot.
+#
+# Every knob is optional. `enabled: false` mounts the host half inert; the
+# browser half then keeps its hands off folder pastes and DSH behaves as before.
+- insert:
+    - id: folder-path
+      name: dsh-folder-path
+      # config:
+      #   enabled: true
+      #   timeoutMs: 5000
+      #   # PowerShell used for the clipboard probe (default: powershell.exe).
+      #   # The probe needs Windows Forms; set this to a pwsh that has it.
+      #   powershell: powershell.exe
