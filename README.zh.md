@@ -48,7 +48,6 @@ DeepSeek Harness (DSH) 的**会话工具箱**：把原先两个独立插件合�
 
 - 页签 kind：`dsh-session-admin:manager`、`dsh-session-move:panel`
   （装 dsh-better-sidebar 时分别是 `…:manager-via-better-sidebar` / `…:panel-via-better-sidebar`）；
-- 左栏入口：`sidebar.footer.action` id `dsh-session-move:open`；
 - 标题栏垃圾桶：`dsh-session-admin:delete-current`（图标形态 + 两步确认，开关是
   `headerDeleteButton`，默认开）；
 - 设置页 section：id 从 `session-admin` 改成 `session-toolbox`（标签「会话工具」）。**保留**，
