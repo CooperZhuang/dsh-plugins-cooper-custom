@@ -309,6 +309,31 @@ const FIELDS = [
     hint: { zh: '本插件日志文件的详细程度。默认 info：错误、警告，以及每轮抽取/合并摘要。debug 还会记录每条归档、补注、复审决策。文件路径见 /memories stats。', en: 'How much this plugin writes to its own log file. info keeps errors, warnings, and one line per pass; debug adds every retention, recall, and review decision. /memories stats prints the path.' },
   },
   {
+    field: 'syncRemote', kind: 'text',
+    label: { zh: '记忆库同步远端（Git）', en: 'Memory store remote (Git)' },
+    hint: { zh: '记忆库本身就是一个 git 仓库，这里填一台私有仓库的地址（如 git@github.com:you/dsh-memories-store.git），多台机器就会共用同一份记忆。留空则只在本机提交历史、不联网。写入路径只做本地提交，拉取与推送在后台按间隔进行。', en: 'The store is a git repository; point this at one private repository and every machine shares the same memories. Empty keeps local history only. Writes commit locally; fetch and push happen in the background.' },
+  },
+  {
+    field: 'syncIntervalMinutes', kind: 'number', min: 0, step: 5,
+    label: { zh: '后台同步间隔（分钟）', en: 'Background sync interval (minutes)' },
+    hint: { zh: '每隔这么久拉取、变基并推送一次。0 停止定时同步，只保留本地提交。', en: 'How often to fetch, rebase and push in the background. 0 stops the timer and keeps local commits only.' },
+  },
+  {
+    field: 'syncDebounceSeconds', kind: 'number', min: 0, step: 1,
+    label: { zh: '写入合并窗口（秒）', en: 'Write debounce (seconds)' },
+    hint: { zh: '一串连续写入会在这么长时间内合并成一次提交，避免每条记忆一个 commit。真实网络动作永远不在写入路径上。', en: 'A burst of writes is folded into one commit within this window. Network work never runs on the write path.' },
+  },
+  {
+    field: 'syncConflictProvider', kind: 'text',
+    label: { zh: '冲突解析 Provider', en: 'Conflict resolver provider' },
+    hint: { zh: '两台机器改了同一条记忆时，用来合并两次改动的模型提供方。留空回落到抽取路由；两者都没有时按 updated 取新版本，旧版本留在 git 历史里。', en: 'Provider used to merge two revisions of the same memory. Empty falls back to the extraction route; with neither, the newer updated wins and the older revision stays in git history.' },
+  },
+  {
+    field: 'syncConflictModel', kind: 'text',
+    label: { zh: '冲突解析 Model', en: 'Conflict resolver model' },
+    hint: { zh: '合并冲突时使用的模型。留空回落到抽取模型。', en: 'Model used to merge a conflicting memory. Empty falls back to the extraction model.' },
+  },
+  {
     field: 'traceMaintenance', kind: 'boolean',
     label: { zh: '记录维护决策明细', en: 'Trace maintenance decisions' },
     hint: { zh: '把归档、按需补注、复审选择等决策提升到 info，默认等级就能看到；关闭时它们只在 debug 等级出现。', en: 'Log retention, recall, and selection decisions at info so a stock log level records them; off keeps them at debug.' },

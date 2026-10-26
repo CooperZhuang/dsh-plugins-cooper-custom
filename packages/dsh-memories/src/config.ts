@@ -34,6 +34,12 @@ export const ENTRY_ID = 'memories'
 /** Default child-name markers that identify a workspace root. */
 export const DEFAULT_PROJECT_ROOT_MARKERS = ['.git'] as const
 
+/** Default background sync interval, in minutes. */
+export const DEFAULT_SYNC_INTERVAL_MINUTES = 10
+
+/** Default debounce before a burst of memory writes becomes one commit, in seconds. */
+export const DEFAULT_SYNC_DEBOUNCE_SECONDS = 2
+
 /** Default byte budget for the injected memory summary. */
 export const DEFAULT_MAX_SUMMARY_BYTES = 4096
 
@@ -305,6 +311,14 @@ export const Config = z.object({
   projectRootMarkers: z.array(z.string()).default([...DEFAULT_PROJECT_ROOT_MARKERS]),
   /** Plugin log file; defaults to `<dshHome>/logs/dsh-memories.log`. Empty disables file logging. */
   logFile: z.string(),
+  /** Git remote the memory store syncs through; empty keeps the repository local-only. */
+  syncConflictProvider: z.string().default('').description('Provider used to merge two conflicting revisions of the same memory. Empty falls back to the extraction route; when neither is configured the newer revision wins and the older one stays in git history.').volatile(),
+  syncConflictModel: z.string().default('').description('Model used to merge two conflicting revisions of the same memory. Empty falls back to the extraction model.').volatile(),
+  syncRemote: z.string().default('').description('Git remote the memory store pushes to and pulls from. Empty leaves the store a local repository: writes are still committed, nothing leaves the machine. Point it at one private repository shared by every machine you use, e.g. git@github.com:<you>/dsh-memories-store.git.').volatile(),
+  /** Background sync interval in minutes; 0 disables the timer. */
+  syncIntervalMinutes: z.number().default(DEFAULT_SYNC_INTERVAL_MINUTES).description('How often the store fetches, rebases and pushes in the background. 0 keeps the repository but stops the timer, so only a manual sync moves it.').volatile(),
+  /** Debounce before a memory write is committed locally. */
+  syncDebounceSeconds: z.number().default(DEFAULT_SYNC_DEBOUNCE_SECONDS).description('How long a burst of memory writes is folded into one commit. The commit is local and cheap; the network never runs on the write path.').volatile(),
   /** Byte budget for the injected summary. `0` disables injection. */
   maxSummaryBytes: z.number().default(DEFAULT_MAX_SUMMARY_BYTES).description('Byte budget for the memory summary injected once per conversation. 0 disables injection and leaves only the memory tool.').volatile(),
   /** Max entries listed per scope in the injected summary. */
@@ -460,6 +474,16 @@ export interface MemoriesSettings {
   minIdleHours: number
   maxAgeDays: number
   maxSessionsPerPass: number
+  /** Git remote the store syncs through; empty keeps it local-only. */
+  syncRemote: string
+  /** Provider for AI conflict resolution; empty falls back to the extraction route. */
+  syncConflictProvider: string
+  /** Model for AI conflict resolution; empty falls back to the extraction route. */
+  syncConflictModel: string
+  /** Background sync interval in minutes; 0 disables the timer. */
+  syncIntervalMinutes: number
+  /** Debounce before a memory write becomes one commit, in seconds. */
+  syncDebounceSeconds: number
   /** Consolidation: the restricted sub-agent pass that merges new memories. */
   consolidate: boolean
   consolidateCooldownHours: number
@@ -540,6 +564,11 @@ export const MEMORIES_SETTINGS_DEFAULTS: MemoriesSettings = {
   minIdleHours: DEFAULT_MIN_IDLE_HOURS,
   maxAgeDays: DEFAULT_MAX_AGE_DAYS,
   maxSessionsPerPass: DEFAULT_MAX_SESSIONS_PER_PASS,
+  syncRemote: '',
+  syncConflictProvider: '',
+  syncConflictModel: '',
+  syncIntervalMinutes: DEFAULT_SYNC_INTERVAL_MINUTES,
+  syncDebounceSeconds: DEFAULT_SYNC_DEBOUNCE_SECONDS,
   consolidate: true,
   consolidateCooldownHours: DEFAULT_CONSOLIDATE_COOLDOWN_HOURS,
   consolidateProposalMaxAgeHours: DEFAULT_CONSOLIDATE_PROPOSAL_MAX_AGE_HOURS,
@@ -690,6 +719,11 @@ export function normalizeSettings(input: Partial<MemoriesSettings> | undefined):
     minIdleHours: decimal(value.minIdleHours, DEFAULT_MIN_IDLE_HOURS),
     maxAgeDays: positive(value.maxAgeDays, DEFAULT_MAX_AGE_DAYS, 0),
     maxSessionsPerPass: positive(value.maxSessionsPerPass, DEFAULT_MAX_SESSIONS_PER_PASS),
+    syncRemote: value.syncRemote?.trim() ?? '',
+    syncConflictProvider: value.syncConflictProvider?.trim() ?? '',
+    syncConflictModel: value.syncConflictModel?.trim() ?? '',
+    syncIntervalMinutes: positive(value.syncIntervalMinutes, DEFAULT_SYNC_INTERVAL_MINUTES, 0),
+    syncDebounceSeconds: positive(value.syncDebounceSeconds, DEFAULT_SYNC_DEBOUNCE_SECONDS, 0),
     consolidate: value.consolidate ?? true,
     consolidateCooldownHours: decimal(value.consolidateCooldownHours, DEFAULT_CONSOLIDATE_COOLDOWN_HOURS),
     consolidateProposalMaxAgeHours: decimal(value.consolidateProposalMaxAgeHours, DEFAULT_CONSOLIDATE_PROPOSAL_MAX_AGE_HOURS, 0),
