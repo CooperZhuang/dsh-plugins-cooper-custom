@@ -2,3 +2,7 @@ packages:
   - packages/*
 
 nodeLinker: hoisted
+# 插件把内核包（@deepseek-ai/*）声明为 peerDependencies：它们由 DSH 宿主提供，
+# 不能从 npm 装（dsh-session-store 这类自研共享包也不在 npm 上）。关掉自动安装 peer，
+# 自研共享包由根 devDependencies 的 link: 指向本仓库内的包。
+autoInstallPeers: false
