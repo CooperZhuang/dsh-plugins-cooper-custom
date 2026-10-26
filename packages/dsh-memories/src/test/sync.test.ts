@@ -13,7 +13,8 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { MemorySync, STORE_GITIGNORE, entryStamp, isEntryPath, newerEntry } from '../sync.js'
+import { MemorySync, STORE_GITIGNORE, entryStamp, isEntryPath, newerEntry, nextClockDelay } from '../sync.js'
+import { applyConflictPlan } from '../sync-runtime.js'
 import type { EntryConflict } from '../sync.js'
 
 /** A logger that swallows everything; tests assert on git state, not log text. */
@@ -156,4 +157,39 @@ test('an unparsable resolver answer is discarded rather than written', async () 
 
   assert.equal(outcome.resolvedByTime, 1, 'the timestamp rule took over')
   assert.match(await readFile(join(right.dir, 'entries', 'shared.md'), 'utf8'), /left newer/u)
+})
+
+test('the clock schedule picks the next local time, and wraps to tomorrow', () => {
+  const noon = new Date(2026, 9, 26, 12, 0, 0).getTime()
+  assert.equal(nextClockDelay(['12:05'], noon), 5 * 60_000, 'five minutes after noon')
+  const past = new Date(2026, 9, 26, 12, 6, 0).getTime()
+  assert.equal(nextClockDelay(['12:05'], past), 86_400_000 - 60_000, 'the same time tomorrow')
+  const afternoon = new Date(2026, 9, 26, 13, 0, 0).getTime()
+  assert.equal(nextClockDelay(['18:05', '12:05'], afternoon), (18 * 60 + 5 - 13 * 60) * 60_000)
+  assert.equal(nextClockDelay(['nope'], noon), undefined, 'an unparsable clock arms nothing')
+})
+
+test('a conflict merge is accepted only through the consolidation plan rules', () => {
+  const ours = entryText('shared', 'left fact', '2026-02-01T00:00:00.000Z')
+  const theirs = entryText('shared', 'right fact', '2026-03-01T00:00:00.000Z')
+  const reply = JSON.stringify({ memories: [{ id: 'shared', scope: 'global', kind: 'fact', title: 'shared', body: 'left fact and right fact', tags: [] }], summary: 'merged both revisions' })
+  const applied = applyConflictPlan(reply, ours, theirs)
+  assert.ok('merged' in applied, 'the plan was accepted')
+  assert.match(applied.text, /left fact and right fact/u)
+  assert.match(applied.text, /updated: 2026-03-01/u, 'the newer revision stamps the merge')
+})
+
+test('a merge that drops an anchor is returned as a dispute instead of written', () => {
+  const ours = entryText('shared', 'keeps src/app/main.ts as the anchor', '2026-02-01T00:00:00.000Z')
+  const reply = JSON.stringify({ memories: [{ id: 'shared', scope: 'global', kind: 'fact', title: 'shared', body: 'no anchors at all', tags: [] }], summary: '' })
+  const applied = applyConflictPlan(reply, ours, ours)
+  assert.ok(!('merged' in applied), 'nothing is written')
+  assert.ok((applied as { disputes: unknown[] }).disputes.length > 0, 'the loss shows up as a question')
+})
+
+test('a reply that is not a plan leaves the timestamp rule in charge', () => {
+  const ours = entryText('shared', 'x', '2026-02-01T00:00:00.000Z')
+  const applied = applyConflictPlan('not json at all', ours, ours)
+  assert.ok(!('merged' in applied))
+  assert.deepEqual((applied as { disputes: unknown[] }).disputes, [])
 })

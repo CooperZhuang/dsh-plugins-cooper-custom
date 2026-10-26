@@ -86,8 +86,10 @@ export interface MemorySyncOptions {
   readonly memoriesDir: string
   /** Git remote to pull from and push to. Empty keeps the repository local. */
   readonly remote: string
-  /** Background interval in milliseconds; 0 disables the timer. */
+  /** Background interval in milliseconds; 0 disables the interval timer. */
   readonly intervalMs: number
+  /** Local clock times to sync at ("HH:MM"); takes precedence over `intervalMs`. */
+  readonly clock?: readonly string[]
   /** Debounce before a queued write is committed, in milliseconds. */
   readonly debounceMs: number
   /** Timeout for one non-network git command. */
@@ -146,6 +148,39 @@ export function newerEntry(ours: string, theirs: string): { text: string; oursWo
   return entryStamp(theirs) > entryStamp(ours)
     ? { text: theirs, oursWon: false }
     : { text: ours, oursWon: true }
+}
+
+/** Parse one "HH:MM" clock entry into minutes past midnight, or undefined. */
+export function parseClockTime(value: string): number | undefined {
+  const match = /^([01]?\d|2[0-3]):([0-5]\d)$/u.exec(value.trim())
+  if (match === null) return undefined
+  return Number(match[1]) * 60 + Number(match[2])
+}
+
+/**
+ * Milliseconds from `now` until the next configured clock time.
+ *
+ * The schedule is local time, so a machine in another timezone syncs at its own
+ * 12:05 — which is the point: off-peak pricing and "when nobody is working" are
+ * local facts, not UTC ones.
+ *
+ * @param clock - "HH:MM" entries; unparsable ones are ignored.
+ * @param now - clock.
+ * @returns the delay, or undefined when no entry parses.
+ */
+export function nextClockDelay(clock: readonly string[], now: number): number | undefined {
+  const minutes = clock.map(parseClockTime).filter((value): value is number => value !== undefined)
+  if (minutes.length === 0) return undefined
+  const today = new Date(now)
+  const midnight = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()
+  const elapsed = now - midnight
+  let best: number | undefined
+  for (const minute of minutes) {
+    let at = minute * 60_000
+    if (at <= elapsed + 1_000) at += 86_400_000
+    if (best === undefined || at < best) best = at
+  }
+  return best === undefined ? undefined : best - elapsed
 }
 
 /** Run one git command and return its stdout. */
@@ -217,9 +252,21 @@ export class MemorySync {
     }
   }
 
-  /** Start the background timer, if an interval is configured. */
+  /**
+   * Start the background timer.
+   *
+   * A clock schedule wins over an interval: two fixed local times are what the
+   * owner asked for (sync right after off-peak pricing starts, when a conflict
+   * merge costs least), while an interval is the fallback for anyone who wants
+   * continuous convergence.
+   */
   start(): void {
     this.stop()
+    const clock = this.options.clock ?? []
+    if (clock.length > 0) {
+      this.armClock(clock)
+      return
+    }
     if (!(this.options.intervalMs > 0)) return
     this.timer = setInterval(() => {
       void this.run('timer').catch((error: unknown) => {
@@ -227,6 +274,24 @@ export class MemorySync {
       })
     }, this.options.intervalMs)
     this.timer.unref?.()
+  }
+
+  /** Arms the next clock run; each run arms the following one. */
+  private armClock(clock: readonly string[]): void {
+    const delay = nextClockDelay(clock, Date.now())
+    if (delay === undefined) return
+    this.timer = setTimeout(() => {
+      void this.run('clock')
+        .catch((error: unknown) => {
+          this.options.log.warn('dsh-memories: 记忆库同步失败：%o', error)
+        })
+        .finally(() => {
+          if (this.timer !== undefined) this.armClock(clock)
+        })
+    }, delay)
+    this.timer.unref?.()
+    this.options.log.info('dsh-memories: 下一次记忆库同步在 %s 之后（%s）',
+      Math.round(delay / 60_000) + ' 分钟', clock.join(', '))
   }
 
   /** Stop the background timer and any queued commit. */
