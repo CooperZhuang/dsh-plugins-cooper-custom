@@ -154,14 +154,15 @@ async function mount({ betterSidebar } = {}) {
 const paneTabKeys = (state) =>
   state.registered.filter((entry) => entry.options?.name === 'sidebar.right.pane.tab').map((entry) => entry.options.key)
 
-test('两半的右栏页签、左栏入口、设置页 section 与插件页配置槽都注册上（原生路径）', async () => {
+test('两半的右栏页签、设置页 section 与插件页配置槽都注册上，左栏入口已移除（原生路径）', async () => {
   fetched = []
   configReply = { headerDeleteButton: true }
   const { plugin, state } = await mount()
   assert.deepEqual(plugin.inject, ['slots', 'sessions', 'configForms'], 'inject 是两半的并集（+ 配置卡片要的 configForms）')
 
   const surfaces = state.registered.map((entry) => entry.surface ?? entry.definition?.kind)
-  assert.ok(surfaces.includes('sidebar.footer.action'), `missing footer entry: ${surfaces.join(',')}`)
+  // 2026-10-26 起左栏底部的 ⇄ 入口不再注册：会话归位只保留右栏页签（回归护栏）。
+  assert.ok(!surfaces.includes('sidebar.footer.action'), `footer entry should be gone: ${surfaces.join(',')}`)
   assert.ok(surfaces.includes('sidebar.right.pane.tab'), `missing pane body: ${surfaces.join(',')}`)
   assert.ok(surfaces.includes('sidebar.right.pane.tab.title'), `missing pane title: ${surfaces.join(',')}`)
   // 设置页那一项是**清理面板页**（不是配置菜单），因此保留。
@@ -179,10 +180,6 @@ test('两半的右栏页签、左栏入口、设置页 section 与插件页配�
     state.registered.filter((entry) => entry.options?.name === 'sidebar.right.pane.tab.title').map((entry) => entry.options.key).sort(),
     ['dsh-session-admin:manager', 'dsh-session-move:panel'],
   )
-  // 左栏入口的 id 保持搬迁半边原样。
-  const footer = state.registered.find((entry) => entry.surface === 'sidebar.footer.action')
-  assert.equal(footer.options.id, 'dsh-session-move:open')
-  assert.equal(footer.options.label(), '会话归位')
 })
 
 test('装了 better-sidebar 时两半都改走它的 registerTab', async () => {
