@@ -150,7 +150,9 @@ export function newerEntry(ours: string, theirs: string): { text: string; oursWo
 
 /** Run one git command and return its stdout. */
 async function git(dir: string, args: readonly string[], timeout: number): Promise<string> {
-  const { stdout } = await run('git', ['-C', dir, ...args], {
+  // core.quotePath=false: a non-ASCII path must come back as itself, not as a
+  // C-quoted string, or the conflict resolver cannot tell it is an entry file.
+  const { stdout } = await run('git', ['-c', 'core.quotePath=false', '-C', dir, ...args], {
     timeout,
     maxBuffer: 16 * 1024 * 1024,
     env: { ...process.env, GIT_EDITOR: 'true', GIT_TERMINAL_PROMPT: '0' },
