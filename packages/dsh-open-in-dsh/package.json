@@ -1,0 +1,56 @@
+{
+  "name": "dsh-open-in-dsh",
+  "version": "0.2.0",
+  "private": true,
+  "description": "在 Windows 资源管理器里右键文件夹（或文件夹空白处）→「通过 DSH 打开」：DSH 把该目录作为工作区切入，并新建一个空白会话。Explorer context-menu entry that opens a folder as a DSH workspace with a blank session.",
+  "type": "module",
+  "main": "lib/index.js",
+  "icon": "./assets/icon.svg",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "lib",
+    "client",
+    "scripts",
+    "assets",
+    "locale",
+    "cordis.patch.yml",
+    "README.md",
+    "README.zh.md"
+  ],
+  "scripts": {
+    "build": "node scripts/build-client.mjs",
+    "test": "node --check lib/index.js && node --check lib/client.js && node --test test/host.test.mjs test/routes.test.mjs test/scripts.test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.5"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "explorer",
+    "context-menu",
+    "workspace"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  }
+}
