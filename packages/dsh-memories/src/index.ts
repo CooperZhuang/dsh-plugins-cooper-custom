@@ -41,6 +41,7 @@ import { browseMemories, EXPAND_SEEDS, hubTerms, matchCredit, prefilterEntries, 
 import type { MatchCredit, ScopeEntries } from './search.js'
 import { readFile } from 'node:fs/promises'
 import { readPersona, renderPersonaBlock, writePersona } from './persona.js'
+import { StoreSyncService } from './sync-runtime.js'
 import { admitNotice, dueNotices, pruneNotices, readNotices, withNotice, writeNotices } from './notices.js'
 import { readPetId, say, systemNotification } from './pet.js'
 import type { PetTarget } from './pet.js'
@@ -334,6 +335,14 @@ export class MemoriesRuntime {
     this.llmAtActivation = ctx.get('llm') as LlmRuntime | undefined
     this.subagentsAtActivation = ctx.get('subagents') as SubagentSeam | undefined
     this.log = new MemoryLog(pluginLogger(ctx.logger), () => this.settings.traceMaintenance)
+    // The store's git transport. Constructed here so every later call sees the
+    // logger; started by the composition once the settings are known.
+    this.storeSync = new StoreSyncService({
+      memoriesDir: this.deployment.memoriesDir,
+      settings: () => this.settings,
+      llm: () => this.llm,
+      log: this.log,
+    })
   }
 
   /**
@@ -392,6 +401,7 @@ export class MemoriesRuntime {
   /** Abort every owned background activity and release the state store. */
   dispose(): void {
     this.stopPeriodicExtraction()
+    this.storeSync.stop()
     this.lifecycle.abort(new Error('dsh-memories disposed'))
     this.state.close()
   }
@@ -558,14 +568,24 @@ export class MemoriesRuntime {
       if (owner !== undefined) {
         this.log.decision('dsh-memories: global draft %s names %s, storing it there instead',
           draft.title, this.store.target('project', owner).label)
-        return await this.store.upsert({ ...draft, scope: 'project' }, owner, source)
+        const stored = await this.store.upsert({ ...draft, scope: 'project' }, owner, source)
+        this.markStoreChanged()
+        return stored
       }
-      return await this.store.upsert(draft, undefined, source)
+      const stored = await this.store.upsert(draft, undefined, source)
+      this.markStoreChanged()
+      return stored
     }
     const root = await this.projectRoot(session)
-    if (root !== undefined) return await this.store.upsert(draft, root, source)
+    if (root !== undefined) {
+      const stored = await this.store.upsert(draft, root, source)
+      this.markStoreChanged()
+      return stored
+    }
     this.log.decision('dsh-memories: session %s has no workspace, storing %s as global', session.id, draft.title)
-    return await this.store.upsert({ ...draft, scope: 'global' }, undefined, source)
+    const stored = await this.store.upsert({ ...draft, scope: 'global' }, undefined, source)
+    this.markStoreChanged()
+    return stored
   }
 
   /**
@@ -1514,6 +1534,7 @@ export class MemoriesRuntime {
     // most once per interval, and leaving it in flight makes the pass's side
     // effects land after the caller thinks the pass is over.
     await this.sweepIfDue()
+    this.markStoreChanged()
     // The consolidation pass spends a model call through the subagent seam, so it
     // can fail in ways this file does not enumerate. It is fired and forgotten
     // (the job lease owns its retry), which makes an unguarded rejection here an
@@ -1562,8 +1583,26 @@ export class MemoriesRuntime {
     this.periodicTimer = undefined
   }
 
+  /** Start (or restart) the store's background git sync from the current settings. */
+  startPeriodicSync(): void {
+    this.storeSync.start()
+  }
+
+  /** Stop the store's background sync. */
+  stopPeriodicSync(): void {
+    this.storeSync.stop()
+  }
+
+  /** Record that a memory changed; the commit and the network happen later. */
+  private markStoreChanged(): void {
+    this.storeSync.markChanged()
+  }
+
   /** The periodic check's timer, when one is armed. */
   private periodicTimer: NodeJS.Timeout | undefined
+
+  /** The store's git transport; see {@link StoreSyncService}. */
+  private readonly storeSync: StoreSyncService
 
   /**
    * Mine every open session that has something new, in slices.
@@ -3524,9 +3563,11 @@ export function apply(ctx: Context, config: MemoriesConfig = {}): void {
   })
   onSettingsCommit = () => {
     runtime.startPeriodicExtraction()
+    runtime.startPeriodicSync()
     runtime.reportSettingsIssues()
   }
   runtime.startPeriodicExtraction()
+  runtime.startPeriodicSync()
   runtime.reportSettingsIssues()
 
   // The Memories page reads and edits memories through the Typert gateway, so
