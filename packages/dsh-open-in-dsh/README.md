@@ -122,11 +122,12 @@ packages/dsh-open-in-dsh/scripts/macos/install-macos.sh install
 # 卸载：… uninstall     查看当前状态与「点一下会发生什么」：… status
 ```
 
-装完两样东西：
+装完这些：
 
 | 位置 | 是什么 |
 |---|---|
 | `~/Library/Services/通过 DSH 打开.workflow` | Automator 快速操作，只收文件夹。Finder 里右键文件夹 → **快速操作** → 通过 DSH 打开；可以多选，也可以给它配快捷键 |
+| `~/Library/Services/通过 DSH 打开 (QSpace).workflow` | 同一个标签、同一个脚本，作用域是 QSpace Pro（`com.jinghaoshe.qspace.pro`）。QSpace 右键 → **服务** → 通过 DSH 打开 |
 | `~/bin/dsh-open` | 终端命令；不带参数就是当前目录 |
 
 启动器（`scripts/macos/open-in-dsh`）只做三件事：把路径规范化（软链、相对路径、结尾斜杠、
@@ -148,6 +149,25 @@ mode=desktop app=/Applications/DSH Desktop Beta.app exe=… running=1 path=/User
 ```
 
 带参数再启动一次：**0.57 s 退出、进程数不变**。
+
+### 为什么 QSpace 要单独一个 workflow
+
+macOS 的「服务」按 `NSRequiredContext` 过滤：一个服务只有在声明允许某个 app 时，才会出现在
+那个 app 的「服务」菜单里。Finder 快速操作声明的是 `com.apple.finder`，所以它在 QSpace 里
+**永远不会出现**——这不是 QSpace 的毛病，是服务机制本身。于是安装器写第二个 bundle，换个
+作用域但共用同一个标签和脚本。
+
+QSpace 的右键菜单本身就是一份可排序清单（`~/Library/Application Support/com.jinghaoshe.qspace.pro/context_menu/conf.json`），
+清单里已经有内建的「服务」子菜单（`com.jinghaoshe.qspace.services`），所以装上就能在
+**服务 → 通过 DSH 打开** 里点到。想要**顶层条目**：QSpace 设置 → 右键菜单，把左侧「服务」
+列表里的这一项拖到上面即可（用它自己的 UI 拖，别手改 conf.json——QSpace 运行时会覆盖）。
+
+`--qspace` 可以改这个行为：
+
+```sh
+… install --qspace off    # 不装 QSpace 那个 bundle
+… install --qspace any    # 去掉作用域，任何 app 都看得到（QSpace 若不认 app 作用域时的退路）
+```
 
 限制：
 
@@ -340,7 +360,7 @@ bundle 自带的 `cordis.patch.yml` 是默认值；profile 的 `cordis.patch.yml
 
 ```powershell
 npm test        # 24 个测试
-node --test test/macos.test.mjs   # macOS：11 个测试（不需要装 node_modules）
+node --test test/macos.test.mjs   # macOS：13 个测试（不需要装 node_modules）
 ```
 
 - `test/host.test.mjs`：序号/回放/宿主重启回退 + `%V` 的各种形态。

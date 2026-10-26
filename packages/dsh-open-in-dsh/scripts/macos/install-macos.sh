@@ -1,25 +1,38 @@
 #!/bin/sh
 #
-# install-macos.sh — install "通过 DSH 打开" as a Finder Quick Action, plus the
-# dsh-open command for a terminal.
+# install-macos.sh — install "通过 DSH 打开" as a Finder Quick Action, as a
+# service for QSpace Pro's context menu, and the dsh-open command for a
+# terminal.
 #
-# A Finder context-menu entry has two possible homes on macOS:
+# Finder: a Quick Action (~/Library/Services/<label>.workflow, an Automator
+# workflow). Appears under right-click a folder → 快速操作 → the label. No code
+# signing, no Xcode, no privileged helper; it is a file tree this script can
+# write, lint and remove. It cannot be a *top-level* menu item — that needs a
+# Finder Sync app extension (Xcode project + signature + a re-sign on every
+# Desktop update), which is not worth one menu entry.
 #
-#   * a Quick Action (~/Library/Services/<label>.workflow, an Automator
-#     workflow). Appears under Finder → right-click a folder → 快速操作
-#     (Quick Actions) → the label. Needs no code signing, no Xcode and no
-#     privileged helper, and it is a file tree this script can write, lint and
-#     remove again. It cannot be a *top-level* menu item.
-#   * a Finder Sync app extension. That is the only way to get a top-level
-#     item, but it needs an Xcode-built .appex inside a signed app bundle, and
-#     every DSH Desktop update would need a re-sign. Not worth it for one menu
-#     entry, so this installer does not do it.
+# QSpace Pro: its context menu is an ordered list, and one built-in entry is the
+# standard macOS "服务" (Services) submenu. A service is only valid in an app
+# when its NSRequiredContext allows that app, so the Finder Quick Action (scoped
+# to com.apple.finder) never shows up inside QSpace. This installer therefore
+# writes a *second* workflow with the same label and script, scoped to QSpace's
+# bundle id. QSpace's own settings pane (设置 → 右键菜单) can then drag it out of
+# the "服务" list onto the top level.
+#
+# POSIX sh has no `local`, so every helper prefixes its variables; a shared name
+# silently lets one helper overwrite another's argument (this file had exactly
+# that bug: the QSpace bundle came out scoped to com.apple.finder).
 #
 # Usage: install-macos.sh [install|uninstall|status] [options]
 #   --launcher <path>   launcher baked into the workflow
 #   --services-dir <d>  where the .workflow lives (default ~/Library/Services)
 #   --bin-dir <d>       where the dsh-open symlink lands (default ~/bin)
 #   --label <text>      menu label / workflow name (default 通过 DSH 打开)
+#   --qspace <auto|off|any|BUNDLE_ID>
+#                       extra service scoped to QSpace (default auto: the
+#                       bundle id when QSpace is installed, off otherwise).
+#                       "any" drops the scope, the fallback if QSpace turns out
+#                       to ignore an app-scoped service.
 #
 # The workflow calls the launcher by absolute path rather than by name: the
 # shell Automator runs does not necessarily share the user's PATH.
@@ -31,6 +44,7 @@ bin_dir=$HOME/bin
 here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
 launcher=$here/open-in-dsh
 action='install'
+qspace='auto'
 
 while [ $# -gt 0 ]; do
   case $1 in
@@ -43,24 +57,30 @@ while [ $# -gt 0 ]; do
     --bin-dir=*) bin_dir=${1#*=} ;;
     --label) label=$2; shift ;;
     --label=*) label=${1#*=} ;;
-    -h|--help) sed -n '3,25p' "$0" | sed -e 's/^# \{0,1\}//'; exit 0 ;;
+    --qspace) qspace=$2; shift ;;
+    --qspace=*) qspace=${1#*=} ;;
+    -h|--help) sed -n '3,40p' "$0" | sed -e 's/^# \{0,1\}//'; exit 0 ;;
     *) printf 'install-macos.sh: unknown argument: %s\n' "$1" >&2; exit 64 ;;
   esac
   shift
 done
 
 workflow="$services_dir/$label.workflow"
-workflow_plist="$workflow/Contents/Info.plist"
-workflow_document="$workflow/Contents/document.wflow"
+qspace_workflow="$services_dir/$label (QSpace).workflow"
 cli_link="$bin_dir/dsh-open"
 
-# XML-escape one line of text, so a label or a path with &, < or > cannot break
-# the plist. The input is expected to be a single line.
+# XML-escape one line of text, so a label, a path or a bundle id with &, < or >
+# cannot break the plist. The input is expected to be a single line.
 xml_escape() {
   printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
 }
 
+# Write a service bundle's Info.plist.
+#   $1 target path   $2 menu label   $3 app scope ("any" = every app, else a bundle id)
 write_info_plist() {
+  _wipl_target=$1
+  _wipl_label=$2
+  _wipl_scope=$3
   {
     cat <<'HEAD'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -70,22 +90,17 @@ write_info_plist() {
 	<key>NSServices</key>
 	<array>
 		<dict>
-			<key>NSMenuItem</key>
-			<dict>
-				<key>default</key>
-				<string>
 HEAD
-    xml_escape "$label"
+    # The label and the scope go in as single-line values. A heredoc that
+    # opens the string tag and closes it on a later line leaves a literal
+    # newline in the value, and that newline becomes part of the menu title:
+    # pbs then reports it as a leading newline and the menu shows a gap.
+    printf '\t\t\t<key>NSMenuItem</key>\n\t\t\t<dict>\n\t\t\t\t<key>default</key>\n\t\t\t\t<string>%s</string>\n\t\t\t</dict>\n' "$(xml_escape "$_wipl_label")"
+    printf '\t\t\t<key>NSMessage</key>\n\t\t\t<string>runWorkflowAsService</string>\n'
+    if [ -n "$_wipl_scope" ] && [ "$_wipl_scope" != 'any' ]; then
+      printf '\t\t\t<key>NSRequiredContext</key>\n\t\t\t<dict>\n\t\t\t\t<key>NSApplicationIdentifier</key>\n\t\t\t\t<string>%s</string>\n\t\t\t</dict>\n' "$(xml_escape "$_wipl_scope")"
+    fi
     cat <<'TAIL'
-</string>
-			</dict>
-			<key>NSMessage</key>
-			<string>runWorkflowAsService</string>
-			<key>NSRequiredContext</key>
-			<dict>
-				<key>NSApplicationIdentifier</key>
-				<string>com.apple.finder</string>
-			</dict>
 			<key>NSSendFileTypes</key>
 			<array>
 				<string>public.folder</string>
@@ -95,13 +110,17 @@ HEAD
 </dict>
 </plist>
 TAIL
-  } >"$workflow_plist"
+  } >"$_wipl_target"
 }
 
+# Write the Automator document that runs the launcher once per selected folder.
+#   $1 target path   $2 the app the service is registered for (Automator metadata)
 write_document() {
+  _wd_target=$1
+  _wd_service_app=$2
   # Selected items arrive as arguments (inputMethod=1), one per argument, and
   # the launcher accepts any number of folders, so multi-select works.
-  _script="for f in \"\$@\"; do
+  _wd_script="for f in \"\$@\"; do
   \"$launcher\" \"\$f\" || exit \$?
 done"
   {
@@ -145,7 +164,7 @@ done"
 				<dict>
 					<key>COMMAND_STRING</key><string>
 HEAD
-    printf '%s' "$_script" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+    printf '%s' "$_wd_script" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
     cat <<'TAIL'
 </string>
 					<key>CheckedForUserDefaultShell</key><true/>
@@ -181,7 +200,7 @@ HEAD
 		<key>outputTypeIdentifier</key><string>com.apple.Automator.nothing</string>
 		<key>presentationMode</key><integer>15</integer>
 		<key>processesInput</key><integer>0</integer>
-		<key>serviceApplicationBundleID</key><string>com.apple.finder</string>
+		<key>serviceApplicationBundleID</key><string>@SERVICE_APP@</string>
 		<key>serviceApplicationPath</key><string>/System/Library/CoreServices/Finder.app</string>
 		<key>serviceInputTypeIdentifier</key><string>com.apple.Automator.fileSystemObject.folder</string>
 		<key>serviceOutputTypeIdentifier</key><string>com.apple.Automator.nothing</string>
@@ -192,14 +211,69 @@ HEAD
 </dict>
 </plist>
 TAIL
-  } >"$workflow_document"
-  # BSD sed wants an explicit empty backup suffix; three separate patterns so a
+  } >"$_wd_target"
+  # BSD sed wants an explicit empty backup suffix; separate patterns so a
   # replacement can never contain its own placeholder.
   sed -i '' \
+    -e "s|@SERVICE_APP@|$_wd_service_app|" \
     -e "s|@UUID_IN@|$(uuidgen)|" \
     -e "s|@UUID_OUT@|$(uuidgen)|" \
     -e "s|@UUID@|$(uuidgen)|" \
-    "$workflow_document"
+    "$_wd_target"
+}
+
+# Install one service bundle.
+#   $1 bundle path   $2 label   $3 app scope ("any" = every app, else a bundle id)
+install_bundle() {
+  _ib_bundle=$1
+  _ib_scope=$3
+  _ib_automator_app='com.apple.finder'
+  if [ -n "$_ib_scope" ] && [ "$_ib_scope" != 'any' ]; then
+    _ib_automator_app=$_ib_scope
+  fi
+  rm -rf "$_ib_bundle"
+  mkdir -p "$_ib_bundle/Contents" || return 1
+  write_info_plist "$_ib_bundle/Contents/Info.plist" "$2" "$_ib_scope"
+  write_document "$_ib_bundle/Contents/document.wflow" "$_ib_automator_app"
+  plutil -lint "$_ib_bundle/Contents/Info.plist" "$_ib_bundle/Contents/document.wflow" >/dev/null
+}
+
+# The QSpace bundle id of an installed app, or nothing.
+detect_qspace() {
+  for _dq_bundle in \
+    '/Applications/QSpace Pro.app' \
+    '/Applications/QSpace.app' \
+    "$HOME/Applications/QSpace Pro.app" \
+    "$HOME/Applications/QSpace.app"; do
+    if [ -d "$_dq_bundle" ]; then
+      _dq_id=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$_dq_bundle/Contents/Info.plist" 2>/dev/null) || _dq_id=''
+      if [ -n "$_dq_id" ]; then
+        printf '%s' "$_dq_id"
+        return 0
+      fi
+    fi
+  done
+  for _dq_id in com.jinghaoshe.qspace.pro com.jinghaoshe.qspace; do
+    _dq_hit=$(mdfind "kMDItemCFBundleIdentifier == '$_dq_id'" 2>/dev/null | head -n 1)
+    if [ -n "$_dq_hit" ] && [ -d "$_dq_hit" ]; then
+      printf '%s' "$_dq_id"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Resolve --qspace into the scope of the extra bundle: "off", "any", or an id.
+resolve_qspace_scope() {
+  case $qspace in
+    off|none|no) printf 'off' ;;
+    any|all) printf 'any' ;;
+    auto)
+      _rq_detected=$(detect_qspace) || _rq_detected=''
+      if [ -n "$_rq_detected" ]; then printf '%s' "$_rq_detected"; else printf 'off'; fi
+      ;;
+    *) printf '%s' "$qspace" ;;
+  esac
 }
 
 refresh_services() {
@@ -208,41 +282,70 @@ refresh_services() {
   fi
 }
 
+# One line of "is this bundle installed, and with which scope".
+describe_bundle() {
+  _db_bundle=$1
+  if [ ! -f "$_db_bundle/Contents/document.wflow" ]; then
+    printf 'workflow   %s (not installed)\n' "$_db_bundle"
+    return 0
+  fi
+  _db_scope=$(/usr/libexec/PlistBuddy -c 'Print :NSServices:0:NSRequiredContext:NSApplicationIdentifier' "$_db_bundle/Contents/Info.plist" 2>/dev/null) || _db_scope=''
+  [ -n "$_db_scope" ] || _db_scope='any app'
+  if plutil -lint "$_db_bundle/Contents/Info.plist" "$_db_bundle/Contents/document.wflow" >/dev/null 2>&1; then
+    printf 'workflow   %s (scope: %s, plists OK)\n' "$_db_bundle" "$_db_scope"
+  else
+    printf 'workflow   %s (scope: %s, plists INVALID)\n' "$_db_bundle" "$_db_scope"
+  fi
+}
+
 install() {
   if [ ! -x "$launcher" ]; then
     printf 'install-macos.sh: launcher is not executable: %s\n' "$launcher" >&2
     exit 3
   fi
+  _in_scope=$(resolve_qspace_scope)
   mkdir -p "$services_dir" || exit 3
-  rm -rf "$workflow"
-  mkdir -p "$workflow/Contents" || exit 3
-  write_info_plist
-  write_document
-  if ! plutil -lint "$workflow_plist" "$workflow_document" >/dev/null; then
-    printf 'install-macos.sh: generated workflow is not a valid plist\n' >&2
+  if ! install_bundle "$workflow" "$label" 'com.apple.finder'; then
+    printf 'install-macos.sh: generated Finder workflow is not valid\n' >&2
     exit 3
+  fi
+  printf 'installed\n'
+  printf '  finder    %s (right-click a folder -> 快速操作)\n' "$workflow"
+  if [ "$_in_scope" = 'off' ]; then
+    rm -rf "$qspace_workflow"
+    printf '  qspace    skipped (QSpace not found; --qspace any forces it on)\n'
+  else
+    if ! install_bundle "$qspace_workflow" "$label" "$_in_scope"; then
+      printf 'install-macos.sh: generated QSpace workflow is not valid\n' >&2
+      exit 3
+    fi
+    printf '  qspace    %s (scope: %s)\n' "$qspace_workflow" "$_in_scope"
   fi
   mkdir -p "$bin_dir" || exit 3
   ln -sfn "$launcher" "$cli_link"
   refresh_services
-  printf 'installed\n'
-  printf '  workflow  %s\n' "$workflow"
   printf '  command   %s -> %s\n' "$cli_link" "$launcher"
   printf '\n'
   printf 'Finder: right-click a folder -> 快速操作 -> %s\n' "$label"
+  if [ "$_in_scope" != 'off' ]; then
+    printf 'QSpace: right-click a folder -> 服务 -> %s\n' "$label"
+    printf '        想要顶层条目：QSpace 设置 -> 右键菜单，把它从“服务”列表拖到左侧。\n'
+    printf '        没出现就重启一次 QSpace（新注册的服务它要重新读）。\n'
+  fi
   printf 'Terminal: dsh-open <folder>   (or just dsh-open for the current folder)\n'
-  printf 'If the entry does not appear: killall Finder, or log out and back in.\n'
+  printf 'If the Finder entry does not appear: killall Finder, or log out and back in.\n'
   printf 'Visibility / shortcut: 系统设置 -> 键盘 -> 键盘快捷键 -> 服务\n'
 }
 
 uninstall() {
-  rm -rf "$workflow"
+  rm -rf "$workflow" "$qspace_workflow"
   if [ -L "$cli_link" ]; then
     rm -f "$cli_link"
   fi
   refresh_services
   printf 'removed\n'
-  printf '  workflow  %s\n' "$workflow"
+  printf '  finder    %s\n' "$workflow"
+  printf '  qspace    %s\n' "$qspace_workflow"
   printf '  command   %s\n' "$cli_link"
 }
 
@@ -252,16 +355,8 @@ status() {
   else
     printf 'launcher   %s (MISSING)\n' "$launcher"
   fi
-  if [ -f "$workflow_document" ]; then
-    printf 'workflow   %s\n' "$workflow"
-    if plutil -lint "$workflow_plist" "$workflow_document" >/dev/null 2>&1; then
-      printf 'plists     OK\n'
-    else
-      printf 'plists     INVALID\n'
-    fi
-  else
-    printf 'workflow   NOT INSTALLED (%s)\n' "$workflow"
-  fi
+  describe_bundle "$workflow"
+  describe_bundle "$qspace_workflow"
   if [ -L "$cli_link" ]; then
     printf 'command    %s -> %s\n' "$cli_link" "$(readlink "$cli_link")"
   elif [ -e "$cli_link" ]; then

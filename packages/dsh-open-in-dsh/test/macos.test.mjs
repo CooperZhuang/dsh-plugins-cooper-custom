@@ -148,11 +148,26 @@ test('--port pins the legacy dsh web route even with the app installed', { skip:
   assert.equal(report.path, realpathSync(tmp))
 })
 
-/** Install the workflow against a probe launcher that records its arguments. */
-function installProbe(services, bin, probe, argsFile) {
+/**
+ * Install the workflow against a probe launcher that records its arguments.
+ *
+ * The extra service defaults to off so these cases do not depend on what is
+ * installed on the machine; the QSpace cases below pass the scope explicitly.
+ */
+function installProbe(services, bin, probe, argsFile, extra = ['--qspace', 'off']) {
   writeFileSync(probe, '#!/bin/sh\nprintf "%s\\n" "$@" >>"' + argsFile + '"\n')
   chmodSync(probe, 0o755)
-  return spawnSync(installer, ['install', '--launcher', probe, '--services-dir', services, '--bin-dir', bin], { encoding: 'utf8' })
+  return spawnSync(
+    installer,
+    ['install', '--launcher', probe, '--services-dir', services, '--bin-dir', bin, ...extra],
+    { encoding: 'utf8' },
+  )
+}
+
+/** The plist value at one key path, or '' when the key is absent. */
+function plistValue(plist, keyPath) {
+  const result = spawnSync('/usr/libexec/PlistBuddy', ['-c', `Print :${keyPath}`, plist], { encoding: 'utf8' })
+  return result.status === 0 ? result.stdout.trim() : ''
 }
 
 test('the installer writes a lint-clean workflow that calls the launcher it was given', { skip: !darwin }, () => {
@@ -190,18 +205,60 @@ test('the generated workflow actually delivers a folder to the launcher', { skip
   assert.equal(readFileSync(argsFile, 'utf8').trim(), folder)
 })
 
+test('QSpace gets its own service: same label and script, scoped to its bundle id', { skip: !darwin }, () => {
+  const tmp = scratch()
+  const services = join(tmp, 'Services')
+  const bin = join(tmp, 'bin')
+  const probe = join(tmp, 'probe-launcher')
+  const install = installProbe(services, bin, probe, join(tmp, 'probe-args.txt'), ['--qspace', 'com.jinghaoshe.qspace.pro'])
+  assert.equal(install.status, 0, install.stderr)
+
+  // The Finder Quick Action cannot be reused inside QSpace: AppKit only offers a
+  // service whose NSRequiredContext allows the frontmost app, so a second bundle
+  // is the only way to get a 服务 entry there.
+  const qspace = join(services, '通过 DSH 打开 (QSpace).workflow')
+  const info = join(qspace, 'Contents/Info.plist')
+  assert.equal(spawnSync('plutil', ['-lint', info, join(qspace, 'Contents/document.wflow')]).status, 0, 'QSpace plists do not lint')
+  assert.equal(plistValue(info, 'NSServices:0:NSRequiredContext:NSApplicationIdentifier'), 'com.jinghaoshe.qspace.pro')
+  assert.equal(plistValue(info, 'NSServices:0:NSMenuItem:default'), '通过 DSH 打开')
+  assert.equal(plistValue(join(services, '通过 DSH 打开.workflow/Contents/Info.plist'), 'NSServices:0:NSRequiredContext:NSApplicationIdentifier'), 'com.apple.finder')
+  // The menu title is read from the plist value verbatim; a stray newline in
+  // there becomes a gap before the label (pbs reported "\n通过 DSH 打开").
+  assert.ok(!/<string>\s*\n/.test(readFileSync(info, 'utf8')), 'menu label starts with a newline')
+  assert.ok(readFileSync(join(qspace, 'Contents/document.wflow'), 'utf8').includes(probe))
+})
+
+test('--qspace off installs no extra bundle, --qspace any drops the scope', { skip: !darwin }, () => {
+  const tmp = scratch()
+  const services = join(tmp, 'Services')
+  const bin = join(tmp, 'bin')
+  const probe = join(tmp, 'probe-launcher')
+  const extra = join(services, '通过 DSH 打开 (QSpace).workflow')
+
+  const off = installProbe(services, bin, probe, join(tmp, 'args.txt'), ['--qspace', 'off'])
+  assert.equal(off.status, 0, off.stderr)
+  assert.equal(existsSync(extra), false, '--qspace off still installed a bundle')
+
+  const any = installProbe(services, bin, probe, join(tmp, 'args.txt'), ['--qspace', 'any'])
+  assert.equal(any.status, 0, any.stderr)
+  const info = join(extra, 'Contents/Info.plist')
+  assert.equal(plistValue(info, 'NSServices:0:NSRequiredContext:NSApplicationIdentifier'), '')
+  assert.equal(plistValue(info, 'NSServices:0:NSMenuItem:default'), '通过 DSH 打开')
+})
+
 test('uninstall removes the workflow and the command, and leaves other files alone', { skip: !darwin }, () => {
   const tmp = scratch()
   const services = join(tmp, 'Services')
   const bin = join(tmp, 'bin')
   const probe = join(tmp, 'probe-launcher')
-  const install = installProbe(services, bin, probe, join(tmp, 'probe-args.txt'))
+  const install = installProbe(services, bin, probe, join(tmp, 'probe-args.txt'), ['--qspace', 'com.jinghaoshe.qspace.pro'])
   assert.equal(install.status, 0, install.stderr)
   const unrelated = join(bin, 'keep-me')
   writeFileSync(unrelated, 'x')
   const uninstall = spawnSync(installer, ['uninstall', '--launcher', probe, '--services-dir', services, '--bin-dir', bin], { encoding: 'utf8' })
   assert.equal(uninstall.status, 0, uninstall.stderr)
   assert.equal(existsSync(join(services, '通过 DSH 打开.workflow')), false)
+  assert.equal(existsSync(join(services, '通过 DSH 打开 (QSpace).workflow')), false)
   assert.equal(existsSync(join(bin, 'dsh-open')), false)
   assert.equal(existsSync(unrelated), true)
 })

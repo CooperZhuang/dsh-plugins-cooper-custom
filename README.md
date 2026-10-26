@@ -12,7 +12,7 @@ DeepSeek Harness 自研插件集合。每个插件仍是独立的 npm 包（各�
 | `packages/dsh-session-toolbox` | 会话删除 + 会话归位（右栏两个页签 + `session_admin` / `session_move` 工具） | 0.2.1-rc.2 / rc.3 |
 | `packages/dsh-session-store` | 会话存储共享库（项目目录 key 编解码、jsonl.zstd 帧、workspace registry）；被 toolbox 依赖 | 内核无关 |
 | `packages/dsh-folder-path` | 粘贴文件夹路径而不是尝试上传（功能仅 Windows） | 0.2.1-rc.2 |
-| `packages/dsh-open-in-dsh` | 「通过 DSH 打开」：Windows 资源管理器右键动词；macOS 是 Finder 快速操作 + `dsh-open`（桌面外壳启动参数交接，不经插件 HTTP 路由） | 0.2.1-rc.2 |
+| `packages/dsh-open-in-dsh` | 「通过 DSH 打开」：Windows 资源管理器右键动词；macOS 是 Finder 快速操作 + QSpace「服务」项 + `dsh-open`（桌面外壳启动参数交接，不经插件 HTTP 路由） | 0.2.1-rc.2 |
 
 ## 目录与历史
 
