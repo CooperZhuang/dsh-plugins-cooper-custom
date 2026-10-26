@@ -34,8 +34,11 @@ export const ENTRY_ID = 'memories'
 /** Default child-name markers that identify a workspace root. */
 export const DEFAULT_PROJECT_ROOT_MARKERS = ['.git'] as const
 
-/** Default background sync interval, in minutes. */
+/** Default background sync interval, in minutes; used when no clock times are set. */
 export const DEFAULT_SYNC_INTERVAL_MINUTES = 10
+
+/** Default clock times: just after DeepSeek off-peak pricing starts (12:00 and 18:00 local). */
+export const DEFAULT_SYNC_CLOCK = '12:05,18:05'
 
 /** Default debounce before a burst of memory writes becomes one commit, in seconds. */
 export const DEFAULT_SYNC_DEBOUNCE_SECONDS = 2
@@ -315,6 +318,8 @@ export const Config = z.object({
   syncConflictProvider: z.string().default('').description('Provider used to merge two conflicting revisions of the same memory. Empty falls back to the extraction route; when neither is configured the newer revision wins and the older one stays in git history.').volatile(),
   syncConflictModel: z.string().default('').description('Model used to merge two conflicting revisions of the same memory. Empty falls back to the extraction model.').volatile(),
   syncRemote: z.string().default('').description('Git remote the memory store pushes to and pulls from. Empty leaves the store a local repository: writes are still committed, nothing leaves the machine. Point it at one private repository shared by every machine you use, e.g. git@github.com:<you>/dsh-memories-store.git.').volatile(),
+  /** Local clock times to sync at, e.g. `12:05,18:05`; wins over the interval. */
+  syncClock: z.string().default(DEFAULT_SYNC_CLOCK).description('Local clock times (HH:MM, comma separated) at which the store syncs. Defaults to 12:05 and 18:05 — a few minutes after DeepSeek off-peak pricing starts, when a conflict merge is cheapest. Empty falls back to syncIntervalMinutes.').volatile(),
   /** Background sync interval in minutes; 0 disables the timer. */
   syncIntervalMinutes: z.number().default(DEFAULT_SYNC_INTERVAL_MINUTES).description('How often the store fetches, rebases and pushes in the background. 0 keeps the repository but stops the timer, so only a manual sync moves it.').volatile(),
   /** Debounce before a memory write is committed locally. */
@@ -480,6 +485,8 @@ export interface MemoriesSettings {
   syncConflictProvider: string
   /** Model for AI conflict resolution; empty falls back to the extraction route. */
   syncConflictModel: string
+  /** Local clock times to sync at, comma separated `HH:MM`; wins over the interval. */
+  syncClock: string
   /** Background sync interval in minutes; 0 disables the timer. */
   syncIntervalMinutes: number
   /** Debounce before a memory write becomes one commit, in seconds. */
@@ -567,7 +574,8 @@ export const MEMORIES_SETTINGS_DEFAULTS: MemoriesSettings = {
   syncRemote: '',
   syncConflictProvider: '',
   syncConflictModel: '',
-  syncIntervalMinutes: DEFAULT_SYNC_INTERVAL_MINUTES,
+  syncClock: DEFAULT_SYNC_CLOCK,
+  syncIntervalMinutes: 0,
   syncDebounceSeconds: DEFAULT_SYNC_DEBOUNCE_SECONDS,
   consolidate: true,
   consolidateCooldownHours: DEFAULT_CONSOLIDATE_COOLDOWN_HOURS,
@@ -722,6 +730,7 @@ export function normalizeSettings(input: Partial<MemoriesSettings> | undefined):
     syncRemote: value.syncRemote?.trim() ?? '',
     syncConflictProvider: value.syncConflictProvider?.trim() ?? '',
     syncConflictModel: value.syncConflictModel?.trim() ?? '',
+    syncClock: value.syncClock?.trim() ?? DEFAULT_SYNC_CLOCK,
     syncIntervalMinutes: positive(value.syncIntervalMinutes, DEFAULT_SYNC_INTERVAL_MINUTES, 0),
     syncDebounceSeconds: positive(value.syncDebounceSeconds, DEFAULT_SYNC_DEBOUNCE_SECONDS, 0),
     consolidate: value.consolidate ?? true,

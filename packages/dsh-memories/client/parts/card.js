@@ -314,6 +314,11 @@ const FIELDS = [
     hint: { zh: '记忆库本身就是一个 git 仓库，这里填一台私有仓库的地址（如 git@github.com:you/dsh-memories-store.git），多台机器就会共用同一份记忆。留空则只在本机提交历史、不联网。写入路径只做本地提交，拉取与推送在后台按间隔进行。', en: 'The store is a git repository; point this at one private repository and every machine shares the same memories. Empty keeps local history only. Writes commit locally; fetch and push happen in the background.' },
   },
   {
+    field: 'syncClock', kind: 'text',
+    label: { zh: '定时同步时刻（本地时间）', en: 'Scheduled sync times (local)' },
+    hint: { zh: '逗号分隔的 HH:MM，例如 12:05,18:05——默认在 DeepSeek 谷时开始后几分钟，冲突合并的模型调用最便宜。留空则改按下面的间隔同步。', en: 'Comma separated HH:MM, e.g. 12:05,18:05 — a few minutes after DeepSeek off-peak pricing starts, when a conflict merge costs least. Empty falls back to the interval below.' },
+  },
+  {
     field: 'syncIntervalMinutes', kind: 'number', min: 0, step: 5,
     label: { zh: '后台同步间隔（分钟）', en: 'Background sync interval (minutes)' },
     hint: { zh: '每隔这么久拉取、变基并推送一次。0 停止定时同步，只保留本地提交。', en: 'How often to fetch, rebase and push in the background. 0 stops the timer and keeps local commits only.' },
