@@ -1,0 +1,46 @@
+   Compiling foo v0.1.0
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.2s
+     Running tests/lib.rs
+running 40 tests
+test t1 ... ok
+test t2 ... ok
+test t3 ... ok
+test t4 ... ok
+test t5 ... ok
+test t6 ... ok
+test t7 ... FAILED
+test t8 ... ok
+test t9 ... ok
+test t10 ... ok
+test t11 ... ok
+test t12 ... ok
+test t13 ... ok
+test t14 ... ok
+test t15 ... ok
+test t16 ... ok
+test t17 ... ok
+test t18 ... ok
+test t19 ... ok
+test t20 ... ok
+test t21 ... ok
+test t22 ... ok
+test t23 ... ok
+test t24 ... ok
+test t25 ... ok
+test t26 ... ok
+test t27 ... ok
+test t28 ... ok
+test t29 ... ok
+test t30 ... ok
+test t31 ... ok
+test t32 ... ok
+test t33 ... ok
+test t34 ... ok
+test t35 ... ok
+test t36 ... ok
+test t37 ... ok
+test t38 ... ok
+test t39 ... ok
+test t40 ... ok
+
+test result: FAILED. 39 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
