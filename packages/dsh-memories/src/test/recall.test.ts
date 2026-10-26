@@ -1,0 +1,439 @@
+/**
+ * Tests for on-demand recall and the per-session memory switch.
+ *
+ * The once-per-conversation summary is cheap but static; a recall delta is what
+ * answers a memory that only becomes relevant ten turns in. These tests pin the
+ * three bounds that keep it from becoming a second, unbounded injection path —
+ * a score threshold, a per-conversation cap, and never repeating an entry — and
+ * the switch that turns the whole thing off for one session.
+ *
+ * @module dsh-memories/test/recall.test
+ */
+import assert from 'node:assert/strict'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import test from 'node:test'
+import { MemoriesRuntime } from '../index.js'
+import { renderRecall } from '../render.js'
+import { hubTerms, matchCredit } from '../search.js'
+import { Logger } from '@deepseek-ai/cordis'
+import { MEMORY_SOURCE_KIND } from '../types.js'
+import type { MemoriesConfig } from '../config.js'
+import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { Session } from '@deepseek-ai/dsh-session'
+import type { MemoryEntry } from '../types.js'
+
+/** A context stand-in exposing only what the runtime touches. */
+const stubContext = {
+  get: () => undefined,
+  logger: { info: () => undefined, warn: () => undefined, debug: () => undefined },
+} as never
+
+/**
+ * A session stand-in whose surface carries at most one user message.
+ *
+ * The id is unique per call: state (usage counters, memory mode) is keyed by
+ * session id on disk, and node:test runs tests in the same file concurrently, so
+ * a shared id would let one test's writes change another's recall ranking.
+ */
+let sessionCounter = 0
+function stubSession(cwd: string, userText = '', id = `test-session-${++sessionCounter}`): Session {
+  return {
+    id,
+    header: { version: 0, id, createdAt: 0, cwd, isSeeded: false },
+    seq: 1,
+    requestHeader: () => undefined,
+    deriveMessages: () => userText.length === 0
+      ? []
+      : [{ role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: userText }] }],
+  } as unknown as Session
+}
+
+/** An agent stand-in. */
+function stubAgent(session: Session): Agent {
+  return { id: session.id, session, status: 'idle' } as unknown as Agent
+}
+
+/** A runtime over a temp store. */
+async function fixture(
+  t: { after: (fn: () => void | Promise<void>) => void },
+  settings: Partial<MemoriesConfig> = {},
+) {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-memories-recall-'))
+  const runtime = new MemoriesRuntime(stubContext, { memoriesDir: dir, autoExtract: false, ...settings })
+  t.after(() => {
+    runtime.dispose()
+    return rm(dir, { recursive: true, force: true })
+  })
+  return { dir, runtime }
+}
+
+/** The text of one message's content blocks. */
+function textOf(message: { content: unknown } | undefined): string {
+  return JSON.stringify(message?.content ?? '')
+}
+
+/** The raw text of the single memory block in one message. */
+function blockText(message: { content: unknown } | undefined): string {
+  const blocks = (message?.content ?? []) as readonly { type: string; text?: string }[]
+  return blocks.filter((block) => block.type === 'text').map((block) => block.text ?? '').join('')
+}
+
+/** A runtime over a temp store, with every log line captured. */
+async function loggedFixture(
+  t: { after: (fn: () => void | Promise<void>) => void },
+  settings: Partial<MemoriesConfig> = {},
+) {
+  const lines: string[] = []
+  // Rendered through the host's OWN formatter, not a hand-rolled stand-in: the
+  // point is to see the line the plugin's log file would actually contain, and a
+  // stub that skipped formatting would have hidden the very bug this covers.
+  const context = {
+    get: () => undefined,
+    logger: {
+      info: (...args: unknown[]) => void lines.push(render('info', args)),
+      warn: (...args: unknown[]) => void lines.push(render('warn', args)),
+      debug: (...args: unknown[]) => void lines.push(render('debug', args)),
+      error: (...args: unknown[]) => void lines.push(render('error', args)),
+    },
+  } as never
+  function render(type: 'error' | 'warn' | 'info' | 'debug', args: unknown[]): string {
+    return Logger.format({} as never, { ts: Date.now(), type, name: 'dsh-memories', args } as never)
+  }
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-memories-recall-'))
+  const runtime = new MemoriesRuntime(context, { memoriesDir: dir, autoExtract: false, ...settings })
+  t.after(() => {
+    runtime.dispose()
+    return rm(dir, { recursive: true, force: true })
+  })
+  return { runtime, lines }
+}
+
+test('a recall that fires, and a near miss that is refused, both reach the log', async (t) => {
+  // A stock `logLevel` keeps `info` and drops `debug`, and this plugin has
+  // already paid for a 32-hour background stall that was invisible for exactly
+  // that reason. A delta fires at most `recallMaxPerConversation` times, so it
+  // is never worth suppressing.
+  const { runtime, lines } = await loggedFixture(t)
+  const session = stubSession(process.cwd(), 'pnpm')
+  await runtime.write(session, { scope: 'global', title: 'Prefer pnpm', body: 'Use pnpm, not npm.', tags: [] }, 'tool')
+  await runtime.recallFor(stubAgent(session))
+  assert.ok(lines.some((line) => line.includes('recalled')), `a fired delta is logged at info, got: ${lines.join(' | ')}`)
+  // The refusal that hides a mis-tuned gate: the memory CLEARS the relevance
+  // floor and is still turned away by the evidence gate. Reported once per
+  // conversation so it cannot become noise on a long session.
+  const { runtime: other, lines: otherLines } = await loggedFixture(t)
+  const gated = stubSession(process.cwd(), '该插件是否有日志')
+  // Tagged with the shared word, so the turn really does clear the relevance
+  // floor: that is what makes the refusal the evidence gate's doing, and what
+  // makes it worth a line in the log.
+  await other.write(gated, { scope: 'global', title: '插件注册顺序', body: '插件在启动时注册。'.repeat(6), tags: ['插件'] }, 'tool')
+  await other.recallFor(stubAgent(gated))
+  const nearMisses = (): number => otherLines.filter((line) => line.includes('near miss worth reading')).length
+  assert.equal(nearMisses(), 1, 'the refused-but-close case is reported')
+  await other.recallFor(stubAgent(gated))
+  assert.equal(nearMisses(), 1, 'and only once per conversation')
+
+  // The host's formatter is cordis `Logger.format`, which matches only a single
+  // letter after `%` and only knows `s d i f o O c C`. So `%.1f` is not even a
+  // placeholder, and `%j` has no formatter and is emitted verbatim with its
+  // argument appended unformatted. These lines exist to be read after the fact;
+  // the `recalled` one had been unreadable in the field the whole time.
+  for (const line of [...lines, ...otherLines]) {
+    assert.doesNotMatch(line, /%[.a-zA-Z]|\$\{/u, `a log line must render its values, not its placeholders: ${line}`)
+  }
+})
+
+test('an on-demand delta surfaces the memory the current turn matches', async (t) => {
+  const { runtime } = await fixture(t)
+  const session = stubSession(process.cwd(), 'pnpm')
+  await runtime.write(session, { scope: 'global', title: 'Prefer pnpm', body: 'Use pnpm, not npm.', tags: [] }, 'tool')
+
+  const delta = await runtime.recallFor(stubAgent(session))
+  assert.ok(delta !== undefined, 'a strong match injects')
+  assert.match(textOf(delta), /<memory-recall>/u)
+  assert.match(textOf(delta), /Prefer pnpm/u)
+  assert.equal(delta?.source.kind, MEMORY_SOURCE_KIND)
+})
+
+test('a delta is injected once per entry and capped per conversation', async (t) => {
+  const { runtime } = await fixture(t)
+  const session = stubSession(process.cwd(), 'pnpm')
+  await runtime.write(session, { scope: 'global', title: 'Prefer pnpm', body: 'Use pnpm.', tags: [] }, 'tool')
+  const agent = stubAgent(session)
+
+  assert.ok(await runtime.recallFor(agent) !== undefined)
+  assert.equal(await runtime.recallFor(agent), undefined, 'the same entry is never repeated')
+
+  await runtime.write(session, { scope: 'global', title: 'pnpm hoisting', body: 'Hoist pnpm deps.', tags: [] }, 'tool')
+  assert.ok(await runtime.recallFor(agent) !== undefined, 'a second unseen entry still fits')
+
+  await runtime.write(session, { scope: 'global', title: 'pnpm store', body: 'Share the pnpm store.', tags: [] }, 'tool')
+  assert.ok(await runtime.recallFor(agent) !== undefined, 'up to three')
+  await runtime.write(session, { scope: 'global', title: 'pnpm audit', body: 'Audit pnpm deps.', tags: [] }, 'tool')
+  assert.ok(await runtime.recallFor(agent) !== undefined, 'the fourth memory still fits the default cap')
+  await runtime.write(session, { scope: 'global', title: 'pnpm dedupe', body: 'Dedupe pnpm deps.', tags: [] }, 'tool')
+  assert.equal(await runtime.recallFor(agent), undefined, 'the cap stops further deltas')
+})
+
+test('one delta carries every memory the same turn matches, best first', async (t) => {
+  const { runtime } = await fixture(t)
+  const session = stubSession(process.cwd(), 'pnpm workspace hoisting')
+  // Both entries clear the evidence gate (each shares two of the turn's words
+  // with its title), and they clear it by different margins: the first carries
+  // the turn's words in its title AND body, the second only in its title. So the
+  // order is decided by relevance, not by which entry was written last.
+  await runtime.write(session, { scope: 'global', title: 'pnpm workspace', body: 'One pnpm workspace, hoisted for speed.', tags: [] }, 'tool')
+  await runtime.write(session, { scope: 'global', title: 'pnpm hoisting', body: 'A short note.', tags: [] }, 'tool')
+
+  const delta = await runtime.recallFor(stubAgent(session))
+  assert.ok(delta !== undefined)
+  const text = textOf(delta)
+  assert.match(text, /pnpm workspace/u, 'the stronger match is listed')
+  assert.match(text, /pnpm hoisting/u, 'and so is the second one the turn matched')
+  assert.ok(text.indexOf('pnpm workspace') < text.indexOf('pnpm hoisting'), 'ranked by relevance, best first')
+  // One block, not two: the whole point of a delta is that it costs one message.
+  assert.equal((text.match(/<memory-recall>/gu) ?? []).length, 1)
+})
+
+test('the delta byte budget bounds one block instead of dropping it', async (t) => {
+  const { runtime } = await fixture(t, { recallMaxBytes: 500 })
+  const session = stubSession(process.cwd(), 'pnpm note number seven')
+  for (let index = 0; index < 8; index += 1) {
+    // Each entry shares two of the turn's words (pnpm, note) with its TITLE, so
+    // all eight clear the evidence gate and the byte budget is the only thing
+    // limiting how many can be listed.
+    await runtime.write(session, {
+      scope: 'global',
+      title: `pnpm note number ${index}`,
+      body: `A note about pnpm, padded out so that a preview takes up real room.`,
+      tags: [],
+    }, 'tool')
+  }
+  const delta = await runtime.recallFor(stubAgent(session))
+  assert.ok(delta !== undefined, 'a budget too small for everything still yields a block')
+  const text = blockText(delta)
+  assert.ok(Buffer.byteLength(text, 'utf8') <= 500, 'the block respects its budget')
+  assert.match(text, /<memory-recall>/u)
+  assert.match(text, /<\/memory-recall>/u, 'the closing frame survives the budget, or dedupe breaks')
+  const listed = (text.match(/^- \[/gmu) ?? []).length
+  assert.ok(listed >= 1, 'at least one memory is listed')
+  assert.ok(listed < 8, 'and the budget stopped it short of the whole store')
+})
+
+test('a bare acknowledgement does not trigger a store scan', async (t) => {
+  const { runtime } = await fixture(t, { recallMinQueryChars: 2 })
+  const session = stubSession(process.cwd(), '好')
+  await runtime.write(session, { scope: 'global', title: '好习惯', body: '每天提交。', tags: [] }, 'tool')
+  assert.equal(await runtime.recallFor(stubAgent(session)), undefined, 'a one-character turn is skipped')
+})
+
+test('a Chinese turn reaches a memory it shares a phrase with', async (t) => {
+  const { runtime } = await fixture(t)
+  // The question and the title genuinely share the three consecutive characters
+  // 件的日, while the title's own wording differs around them.
+  const session = stubSession(process.cwd(), '这个插件的日志在哪里？')
+  await runtime.write(session, {
+    scope: 'global',
+    title: '件的日志该去哪里看',
+    body: '日志写在 dsh-memories.log 里。',
+    tags: [],
+  }, 'tool')
+  const delta = await runtime.recallFor(stubAgent(session))
+  assert.ok(delta !== undefined, 'a Chinese turn with no spaces still recalls')
+  assert.match(textOf(delta), /件的日志该去哪里看/u)
+})
+
+test('a Chinese turn reaches a memory it names in two non-adjacent pairs', async (t) => {
+  const { runtime } = await fixture(t)
+  // The turn and the title are unmistakably about the same thing and share NO
+  // three-character run: the pairs 改动 and 提交 sit in different places in each.
+  // Requiring a shared phrase meant this never surfaced — measured on the real
+  // store, six ordinary mid-conversation turns recalled nothing for exactly this
+  // reason, with the right memory sitting one shared pair away.
+  const session = stubSession(process.cwd(), '帮我把这次改动提交一下')
+  await runtime.write(session, {
+    scope: 'global',
+    title: '把混装的工作区改动拆成两笔提交',
+    body: '同一文件里混装了两批无关改动时，按 hunk 重建文件，把每批改动拆成独立的提交，分阶段跑测试。',
+    tags: [],
+  }, 'tool')
+  const delta = await runtime.recallFor(stubAgent(session))
+  assert.ok(delta !== undefined, 'two shared topic pairs are enough, adjacent or not')
+  assert.match(textOf(delta), /把混装的工作区改动拆成两笔提交/u)
+})
+
+test('a Chinese turn that only shares common pairs recalls nothing', async (t) => {
+  const { runtime } = await fixture(t)
+  const session = stubSession(process.cwd(), '该插件是否有日志')
+  // Shares the isolated pair 插件 with the question and nothing longer. It also
+  // scores 12, above any floor low enough to admit a paraphrase, so a score
+  // threshold cannot be the thing that keeps this out — the evidence gate is.
+  await runtime.write(session, {
+    scope: 'global',
+    title: '插件注册顺序',
+    body: '插件在启动时注册，日志级别由配置决定。',
+    tags: [],
+  }, 'tool')
+  assert.equal(await runtime.recallFor(stubAgent(session)), undefined,
+    'the same characters are not the same phrase')
+  // One pair is one term, and recall needs two. The body also says 日志, but a
+  // body word is not evidence: a long memory mentions many things.
+  const counted = matchCredit(
+    (await runtime.search(session, '该插件是否有日志', { limit: 1 }))[0]!.entry,
+    '该插件是否有日志', 9, 2,
+  )
+  assert.equal(counted.evidence.strongTerms, 1, 'exactly one pair is credited, and it is not enough')
+})
+
+test('appliesTo is what makes a memory reachable when the title shares no noun', async (t) => {
+  const { runtime } = await fixture(t)
+  const session = stubSession(process.cwd(), '准备推送代码')
+  await runtime.write(session, {
+    scope: 'global',
+    title: '提交后主动推送',
+    body: '本项目的约定是提交后主动推送，不要留在本地。',
+    tags: [],
+    appliesTo: '准备推送代码之前',
+  }, 'tool')
+  assert.ok(await runtime.recallFor(stubAgent(session)) !== undefined,
+    'the appliesTo phrase is exactly the signal for a turn like this')
+})
+
+test('a weak match and an unrelated turn inject nothing', async (t) => {
+  const { runtime } = await fixture(t)
+  const session = stubSession(process.cwd(), 'what is the weather tomorrow')
+  await runtime.write(session, { scope: 'global', title: 'Prefer pnpm', body: 'Use pnpm.', tags: [] }, 'tool')
+  assert.equal(await runtime.recallFor(stubAgent(session)), undefined)
+})
+
+test('the score threshold gates the delta', async (t) => {
+  const { runtime } = await fixture(t, { recallMinScore: 1_000 })
+  const session = stubSession(process.cwd(), 'pnpm')
+  await runtime.write(session, { scope: 'global', title: 'Prefer pnpm', body: 'Use pnpm.', tags: [] }, 'tool')
+  assert.equal(await runtime.recallFor(stubAgent(session)), undefined)
+})
+
+test('recallMode once keeps the single summary, and off keeps nothing', async (t) => {
+  const once = await fixture(t, { recallMode: 'once' })
+  const onceSession = stubSession(process.cwd(), 'pnpm')
+  await once.runtime.write(onceSession, { scope: 'global', title: 'Prefer pnpm', body: 'Use pnpm.', tags: [] }, 'tool')
+  assert.ok(await once.runtime.injectionFor(stubAgent(onceSession)) !== undefined, 'the summary still injects')
+  assert.equal(await once.runtime.recallFor(stubAgent(onceSession)), undefined, 'no delta in once mode')
+
+  const off = await fixture(t, { recallMode: 'off' })
+  const offSession = stubSession(process.cwd(), 'pnpm')
+  await off.runtime.write(offSession, { scope: 'global', title: 'Prefer pnpm', body: 'Use pnpm.', tags: [] }, 'tool')
+  assert.equal(await off.runtime.injectionFor(stubAgent(offSession)), undefined, 'off disables the summary')
+  assert.equal(await off.runtime.recallFor(stubAgent(offSession)), undefined, 'and the delta')
+})
+
+test('a delta does not suppress the summary, and the summary suppresses a repeat', async (t) => {
+  const { runtime } = await fixture(t)
+  const session = stubSession(process.cwd(), 'pnpm')
+  await runtime.write(session, { scope: 'global', title: 'Prefer pnpm', body: 'Use pnpm.', tags: [] }, 'tool')
+  const agent = stubAgent(session)
+
+  assert.ok(await runtime.recallFor(agent) !== undefined)
+  // The delta carries the same `form`, but not the summary's frame, so the
+  // conversation is still owed its once-per-conversation block.
+  assert.ok(await runtime.injectionFor(agent) !== undefined, 'the summary still arrives')
+
+  const other = stubSession(process.cwd(), 'pnpm', 'second-session')
+  const secondAgent = stubAgent(other)
+  await runtime.write(other, { scope: 'global', title: 'Prefer pnpm', body: 'Use pnpm.', tags: [] }, 'tool')
+  assert.ok(await runtime.injectionFor(secondAgent) !== undefined)
+  assert.equal(await runtime.recallFor(secondAgent), undefined, 'the summary already listed the only entry')
+})
+
+test('the per-session switch suspends injection and deltas until it is turned back on', async (t) => {
+  const { runtime } = await fixture(t)
+  const session = stubSession(process.cwd(), 'pnpm')
+  await runtime.write(session, { scope: 'global', title: 'Prefer pnpm', body: 'Use pnpm.', tags: [] }, 'tool')
+
+  assert.match(runtime.setSessionMode(session, ''), /Memory is on/u)
+  assert.match(runtime.setSessionMode(session, 'sideways'), /Usage: \/memories mode/u)
+  assert.match(runtime.setSessionMode(session, 'off'), /off for this session/u)
+  assert.equal(runtime.sessionMode(session), 'off')
+  assert.equal(await runtime.injectionFor(stubAgent(session)), undefined)
+  assert.equal(await runtime.recallFor(stubAgent(session)), undefined)
+
+  runtime.setSessionMode(session, 'on')
+  assert.equal(runtime.sessionMode(session), 'on')
+  assert.ok(await runtime.injectionFor(stubAgent(session)) !== undefined, 'turning it back on re-arms the summary')
+})
+
+test('resetInjection re-arms both the summary and the delta budget', async (t) => {
+  const { runtime } = await fixture(t)
+  const session = stubSession(process.cwd(), 'pnpm')
+  await runtime.write(session, { scope: 'global', title: 'Prefer pnpm', body: 'Use pnpm.', tags: [] }, 'tool')
+  const agent = stubAgent(session)
+  assert.ok(await runtime.recallFor(agent) !== undefined)
+  assert.equal(await runtime.recallFor(agent), undefined)
+
+  runtime.resetInjection(session)
+  assert.ok(await runtime.recallFor(agent) !== undefined, 'a cleared conversation may see the memory again')
+})
+test('a hub term does not count as one of the two pieces of evidence', () => {
+  // Two entries share the hub word `dsh`; only one is about the logger.
+  const make = (id: string, title: string, tags: string[]): MemoryEntry => ({
+    id, scope: 'global', kind: 'fact', title, body: 'body text', tags, keys: [],
+    createdAt: 0, updatedAt: 0, uses: 0, lastUsedAt: 0, lastSurfacedAt: 0, source: 'auto',
+  })
+  const store = [
+    make('logger', 'dsh plugin logger threshold', ['dsh', 'plugin']),
+    make('other', 'dsh install path', ['dsh']),
+    make('unrelated', 'surge proxy helpers', ['surge']),
+  ]
+  const hub = hubTerms(store, 0.5)   // 2 of 3 entries carry `dsh`
+  assert.equal(hub('dsh'), true, 'a word in two thirds of the store is a hub')
+  assert.equal(hub('plugin'), false)
+
+  const entry = store[0] as MemoryEntry
+  const query = 'dsh plugin'
+  // `singleTerm: false` is how the summary's topical tier calls this; the recall
+  // path leaves the one-strong-term escape hatch on, which would admit the entry
+  // on relevance alone and hide what the discount did to the evidence count.
+  const without = matchCredit(entry, query, 9, 2, { singleTerm: false })
+  const withHub = matchCredit(entry, query, 9, 2, { singleTerm: false, hub })
+  assert.equal(without.about, true, 'two terms with no discount')
+  assert.equal(withHub.about, false, 'the hub word leaves one real term')
+  assert.equal(without.evidence.strongTerms, 2)
+  assert.equal(withHub.evidence.strongTerms, 1, 'the hub word is not counted')
+  assert.equal(withHub.relevance, without.relevance, 'the discount changes evidence, not relevance')
+  assert.equal(withHub.score, without.score, 'and not the ranking score either')
+})
+
+test('a query with two real terms still clears the gate when a hub word is present', () => {
+  const make = (id: string, title: string, tags: string[]): MemoryEntry => ({
+    id, scope: 'global', kind: 'fact', title, body: 'body text', tags, keys: [],
+    createdAt: 0, updatedAt: 0, uses: 0, lastUsedAt: 0, lastSurfacedAt: 0, source: 'auto',
+  })
+  const store = [
+    make('logger', 'dsh plugin logger threshold', ['dsh']),
+    make('other', 'dsh install path', ['dsh']),
+    make('third', 'dsh random note', ['dsh']),
+  ]
+  const hub = hubTerms(store, 0.5)
+  const entry = store[0] as MemoryEntry
+  assert.equal(matchCredit(entry, 'dsh plugin logger', 9, 2, { hub }).about, true)
+})
+test('an archived memory renders with an explicit marker, after any live ones', () => {
+  const make = (id: string, title: string, body: string): MemoryEntry => ({
+    id, scope: 'global', kind: 'fact', title, body, tags: [], keys: [],
+    createdAt: 0, updatedAt: 0, uses: 0, lastUsedAt: 0, lastSurfacedAt: 0, source: 'auto',
+  })
+  const live = make('live', 'Current rule', 'this is what we do now')
+  const retired = make('retired', 'Old rule', 'this is what we used to do')
+  const mixed = renderRecall([live], 4_000, [retired])
+  assert.ok(mixed !== undefined)
+  assert.match(mixed ?? '', /\[archived\] Old rule/u, 'a retired memory says so')
+  assert.ok((mixed ?? '').indexOf('Current rule') < (mixed ?? '').indexOf('[archived]'), 'live entries come first')
+
+  const onlyRetired = renderRecall([], 4_000, [retired])
+  assert.ok(onlyRetired !== undefined, 'an archived-only block is still worth emitting')
+  assert.match(onlyRetired ?? '', /以前是这么说的/u)
+
+  assert.equal(renderRecall([], 4_000, []), undefined, 'nothing to say renders nothing')
+})

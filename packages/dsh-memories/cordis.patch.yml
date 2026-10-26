@@ -1,0 +1,27 @@
+# The dsh-memories bundle patch: one row inserting the cross-session memory
+# plugin over the profile root. Later bundle patches and the profile's own
+# cordis.patch.yml address it by id (`memories`), with the last write winning.
+#
+# One row, two kinds of key. The keys below are composition facts; every
+# behavioural knob is a live field of this same row — declared `.volatile()` in
+# the plugin's Config, edited from the Memories page, and persisted into the
+# active profile's Cordis patch:
+#
+#   - id: memories
+#     config:
+#       autoExtract: false
+#       maxSummaryBytes: 8192
+#
+# This row carries deployment facts only — where the store lives and how a
+# workspace root is recognised — because the profile patch is the layer above it
+# and is where a user's own values belong.
+
+- insert:
+    - id: memories
+      name: dsh-memories
+      config:
+        # Directory holding every memory store. Defaults to $DSH_HOME/memories.
+        # memoriesDir: /custom/path
+        # Child names that mark a workspace root during the upward walk.
+        projectRootMarkers:
+          - .git

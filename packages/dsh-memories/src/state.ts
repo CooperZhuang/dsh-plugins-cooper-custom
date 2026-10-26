@@ -1,0 +1,727 @@
+/**
+ * Operational state: extraction watermarks, job leases, and usage counters.
+ *
+ * These are NOT the memories. Entries stay human-readable markdown files (see
+ * `storage.ts`), because those are the thing a person greps, edits, and commits.
+ * State is the opposite: it is small, hot, and written concurrently by every
+ * session in the process, which is exactly what a JSON read-modify-write file
+ * gets wrong — two sessions mining at once would each write back a whole
+ * document and silently drop the other's watermark.
+ *
+ * So state lives in SQLite, through Node's built-in `node:sqlite` (no
+ * dependency). The module is loaded lazily and every failure degrades to an
+ * in-memory map: a deployment on an older Node, or one where the driver is
+ * unavailable, keeps working — it just loses cross-restart watermarks instead
+ * of refusing to boot.
+ *
+ * @module dsh-memories/state
+ */
+import { mkdirSync } from 'node:fs'
+import { readFile, rm } from 'node:fs/promises'
+import { createRequire } from 'node:module'
+import { dirname, join } from 'node:path'
+
+/**
+ * Module-level require, used only for the optional `node:sqlite` import.
+ * `createRequire` keeps the load lazy and lets an unavailable driver be caught
+ * instead of failing the whole plugin at import time.
+ */
+const requireOptional = createRequire(import.meta.url)
+
+/** Whether a filesystem error means "absent". */
+function isMissing(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error
+    && (error.code === 'ENOENT' || error.code === 'ENOTDIR')
+}
+
+/** One session's extraction progress. */
+export interface SessionState {
+  /** Last surface message seq already mined (exclusive). */
+  lastSeq: number
+  /** Unix epoch milliseconds of the last successful extraction. */
+  at: number
+  /** Absolute workspace root recorded when the watermark was written. */
+  root?: string
+  /** Whether this session has ever contributed memories. */
+  contributed?: boolean
+  /** Unix epoch milliseconds of the session's last observed activity. */
+  activityAt?: number
+}
+
+/** One pending consolidation job. */
+export interface ConsolidateJob {
+  /** Job key; currently always the global scope name. */
+  key: string
+  /** Unix epoch milliseconds when the job was enqueued. */
+  enqueuedAt: number
+  /** Unix epoch milliseconds before which the job must not run. */
+  notBefore: number
+  /**
+   * Absolute workspace root whose project scope this pass covers.
+   *
+   * Consolidation is process-level but project scope is per-workspace, so the
+   * job has to remember which workspace enqueued it: using whichever session
+   * happens to run the pass would consolidate a different project's memories.
+   */
+  root?: string
+  /** Lease holder token, or `undefined` when unclaimed. */
+  lease?: string
+  /** Unix epoch milliseconds the lease expires. */
+  leaseUntil?: number
+  /** Remaining retries before the job is dropped. */
+  retries: number
+  /** Last failure message, for diagnostics. */
+  lastError?: string
+}
+
+/** The single background-pass pause a store records today. */
+export const BACKGROUND_LIMIT = 'background'
+
+/**
+ * A recorded "stop spending quota" state.
+ *
+ * Codex gates background memory work on a provider-reported remaining-quota
+ * percentage. DSH exposes no such number, so the same protection is driven by the
+ * refusal itself: after a rate-limit or exhausted-quota error the plugin stops
+ * starting background passes until the wait elapses, doubling it per consecutive
+ * refusal.
+ */
+export interface LimitState {
+  /** Consecutive refused passes. */
+  failures: number
+  /** Unix epoch milliseconds before which no background pass may start. */
+  until: number
+  /** Unix epoch milliseconds of the most recent refusal. */
+  at: number
+  /** Provider wording, for diagnostics. */
+  reason?: string
+}
+
+/** A minimal synchronous SQL driver, matching the subset of `node:sqlite` used here. */
+interface SqlDatabase {
+  exec(sql: string): void
+  prepare(sql: string): { run(...parameters: unknown[]): unknown; get(...parameters: unknown[]): unknown; all(...parameters: unknown[]): unknown[] }
+  close(): void
+}
+
+/**
+ * Durable state store.
+ *
+ * Every method is synchronous and internally consistent: SQLite serializes the
+ * writes, and the fallback map is single-process. Callers do not need locking.
+ */
+export class StateStore {
+  private db: SqlDatabase | undefined
+  /** Fallback when `node:sqlite` is unavailable: watermarks survive only in-process. */
+  private readonly sessions = new Map<string, SessionState>()
+  private readonly jobs = new Map<string, ConsolidateJob>()
+  private readonly usage = new Map<string, { uses: number; lastUsedAt: number; surfacedAt: number; consolidatedAt: number }>()
+  /** Bookkeeping scalars: when the last sweep ran, and anything else a pass must remember. */
+  private readonly meta = new Map<string, string>()
+  /** Per-session memory switches, when the SQL driver is unavailable. */
+  private readonly sessionModes = new Map<string, 'on' | 'off'>()
+  private readonly limits = new Map<string, LimitState>()
+  /** Why the SQL driver is absent, for one diagnostic line. */
+  readonly degradedReason: string | undefined
+
+  constructor(readonly path: string) {
+    let driver: string | undefined
+    try {
+      // Required lazily so a deployment on an older Node never pays for (or
+      // fails on) the import.
+      const { DatabaseSync } = requireOptional('node:sqlite') as { DatabaseSync: new (path: string) => SqlDatabase }
+      mkdirSync(dirname(path), { recursive: true })
+      this.db = new DatabaseSync(path)
+      this.db.exec(`
+        PRAGMA journal_mode = WAL;
+        PRAGMA synchronous = NORMAL;
+        -- The default autocheckpoint is 1000 pages (4 MB at the default page
+        -- size), which for this store means the write-ahead log is allowed to
+        -- grow to thirty times the size of the database: measured on a real
+        -- store, 143 KB of tables beside a 4.12 MB WAL sitting exactly at the
+        -- threshold. Checkpointing every 64 pages keeps the WAL proportional to
+        -- what actually changed, and this database sees a few writes per pass.
+        PRAGMA wal_autocheckpoint = 64;
+        CREATE TABLE IF NOT EXISTS sessions (
+          id TEXT PRIMARY KEY,
+          last_seq INTEGER NOT NULL DEFAULT 0,
+          at INTEGER NOT NULL DEFAULT 0,
+          root TEXT,
+          contributed INTEGER NOT NULL DEFAULT 0,
+          activity_at INTEGER NOT NULL DEFAULT 0,
+          memory_mode TEXT
+        );
+        CREATE TABLE IF NOT EXISTS jobs (
+          key TEXT PRIMARY KEY,
+          enqueued_at INTEGER NOT NULL,
+          root TEXT,
+          not_before INTEGER NOT NULL DEFAULT 0,
+          lease TEXT,
+          lease_until INTEGER NOT NULL DEFAULT 0,
+          retries INTEGER NOT NULL DEFAULT 0,
+          last_error TEXT
+        );
+        CREATE TABLE IF NOT EXISTS usage (
+          scope TEXT NOT NULL,
+          id TEXT NOT NULL,
+          uses INTEGER NOT NULL DEFAULT 0,
+          last_used_at INTEGER NOT NULL DEFAULT 0,
+          surfaced_at INTEGER NOT NULL DEFAULT 0,
+          consolidated_at INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (scope, id)
+        );
+        CREATE TABLE IF NOT EXISTS limits (
+          id TEXT PRIMARY KEY,
+          failures INTEGER NOT NULL DEFAULT 0,
+          until INTEGER NOT NULL DEFAULT 0,
+          at INTEGER NOT NULL DEFAULT 0,
+          reason TEXT
+        );
+        CREATE TABLE IF NOT EXISTS meta (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+      `)
+      this.migrate()
+    } catch (error) {
+      driver = error instanceof Error ? error.message : String(error)
+      this.db = undefined
+    }
+    this.degradedReason = driver
+  }
+
+  /**
+   * Add columns a newer version introduced.
+   *
+   * `CREATE TABLE IF NOT EXISTS` is a no-op on an existing table, so a column
+   * added to the schema above would silently never appear on an upgraded store
+   * and every query naming it would fail. Each column is checked and added
+   * individually, which is safe to run on every open.
+   */
+  private migrate(): void {
+    const db = this.db
+    if (db === undefined) return
+    const columns = (table: string): Set<string> => {
+      const rows = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]
+      return new Set(rows.map((row) => row.name))
+    }
+    // jobs.root: which workspace a consolidation pass covers (added after v1).
+    if (!columns('jobs').has('root')) db.exec('ALTER TABLE jobs ADD COLUMN root TEXT')
+    // usage.surfaced_at / usage.consolidated_at: retention and review bookkeeping.
+    if (!columns('usage').has('surfaced_at')) db.exec('ALTER TABLE usage ADD COLUMN surfaced_at INTEGER NOT NULL DEFAULT 0')
+    if (!columns('usage').has('consolidated_at')) db.exec('ALTER TABLE usage ADD COLUMN consolidated_at INTEGER NOT NULL DEFAULT 0')
+    // sessions.memory_mode: per-session memory switch (`off` suspends it).
+    if (!columns('sessions').has('memory_mode')) db.exec('ALTER TABLE sessions ADD COLUMN memory_mode TEXT')
+  }
+
+  /** Whether SQLite is backing this store. */
+  get durable(): boolean {
+    return this.db !== undefined
+  }
+
+  /**
+   * The write-ahead-log checkpoint threshold in pages, as this connection sees it.
+   *
+   * Exposed because the value is per-connection and therefore invisible to any
+   * other handle: a fresh connection reports the compiled-in default and would
+   * happily "confirm" a policy this store does not use.
+   */
+  get walAutocheckpoint(): number {
+    const db = this.db
+    if (db === undefined) return 0
+    try {
+      const row = db.prepare('PRAGMA wal_autocheckpoint').get() as { wal_autocheckpoint?: number } | undefined
+      return Number(row?.wal_autocheckpoint ?? 0)
+    } catch {
+      return 0
+    }
+  }
+
+  /** Close the database handle; safe to call twice. */
+  close(): void {
+    try {
+      this.db?.close()
+    } catch {
+      // Closing a store that is already gone is not a caller error.
+    }
+    this.db = undefined
+  }
+
+  /** Read one session's watermark. */
+  getSession(id: string): SessionState | undefined {
+    if (this.db === undefined) return this.sessions.get(id)
+    const row = this.db.prepare('SELECT last_seq, at, root, contributed, activity_at FROM sessions WHERE id = ?').get(id) as
+      | { last_seq: number; at: number; root: string | null; contributed: number; activity_at: number }
+      | undefined
+    if (row === undefined) return undefined
+    return {
+      lastSeq: Number(row.last_seq),
+      at: Number(row.at),
+      ...row.root === null ? {} : { root: row.root },
+      contributed: row.contributed === 1,
+      activityAt: Number(row.activity_at),
+    }
+  }
+
+  /** Write one session's watermark. */
+  putSession(id: string, state: SessionState): void {
+    if (this.db === undefined) {
+      this.sessions.set(id, state)
+      return
+    }
+    this.db.prepare(`
+      INSERT INTO sessions (id, last_seq, at, root, contributed, activity_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        last_seq = excluded.last_seq, at = excluded.at, root = excluded.root,
+        contributed = excluded.contributed, activity_at = excluded.activity_at
+    `).run(id, state.lastSeq, state.at, state.root ?? null, state.contributed === true ? 1 : 0, state.activityAt ?? 0)
+  }
+
+  /** Record activity for a session without touching its watermark. */
+  touchSession(id: string, at = Date.now()): void {
+    if (this.db === undefined) {
+      const existing = this.sessions.get(id)
+      this.sessions.set(id, existing === undefined
+        ? { lastSeq: 0, at: 0, activityAt: at }
+        : { ...existing, activityAt: at })
+      return
+    }
+    this.db.prepare(`
+      INSERT INTO sessions (id, last_seq, at, activity_at) VALUES (?, 0, 0, ?)
+      ON CONFLICT(id) DO UPDATE SET activity_at = excluded.activity_at
+    `).run(id, at)
+  }
+
+  /** Every session that has a watermark, newest activity first. */
+  listSessions(): { id: string; state: SessionState }[] {
+    if (this.db === undefined) return [...this.sessions.entries()].map(([id, state]) => ({ id, state }))
+    const rows = this.db.prepare('SELECT id, last_seq, at, root, contributed, activity_at FROM sessions ORDER BY activity_at DESC').all() as
+      { id: string; last_seq: number; at: number; root: string | null; contributed: number; activity_at: number }[]
+    return rows.map((row) => ({
+      id: row.id,
+      state: {
+        lastSeq: Number(row.last_seq),
+        at: Number(row.at),
+        ...row.root === null ? {} : { root: row.root },
+        contributed: row.contributed === 1,
+        activityAt: Number(row.activity_at),
+      },
+    }))
+  }
+
+  /**
+   * Number of sessions this store knows about.
+   *
+   * Every row counts, including ones that only ever recorded activity or a
+   * memory switch, so this answers "has this store seen the session" — which is
+   * what the legacy-import guard needs. {@link minedCount} answers "was it
+   * mined", which is what a diagnostic wants.
+   */
+  sessionCount(): number {
+    if (this.db === undefined) return this.sessions.size
+    const row = this.db.prepare('SELECT COUNT(*) AS n FROM sessions').get() as { n: number }
+    return Number(row.n)
+  }
+
+  /**
+   * Number of sessions that were actually mined.
+   *
+   * The distinction is not cosmetic: a store can accumulate dozens of activity
+   * rows while extraction has never once completed, and a single "sessions"
+   * number reports that as a busy, healthy plugin.
+   */
+  minedCount(): number {
+    if (this.db === undefined) {
+      return [...this.sessions.values()].filter((state) => state.lastSeq > 0 || state.contributed === true).length
+    }
+    const row = this.db.prepare('SELECT COUNT(*) AS n FROM sessions WHERE last_seq > 0 OR contributed = 1').get() as { n: number }
+    return Number(row.n)
+  }
+
+  /** Read one job. */
+  getJob(key: string): ConsolidateJob | undefined {
+    if (this.db === undefined) return this.jobs.get(key)
+    const row = this.db.prepare('SELECT key, enqueued_at, not_before, root, lease, lease_until, retries, last_error FROM jobs WHERE key = ?').get(key) as
+      | { key: string; enqueued_at: number; not_before: number; root: string | null; lease: string | null; lease_until: number; retries: number; last_error: string | null }
+      | undefined
+    if (row === undefined) return undefined
+    return {
+      key: row.key,
+      enqueuedAt: Number(row.enqueued_at),
+      notBefore: Number(row.not_before),
+      ...row.root === null ? {} : { root: row.root },
+      ...row.lease === null ? {} : { lease: row.lease },
+      leaseUntil: Number(row.lease_until),
+      retries: Number(row.retries),
+      ...row.last_error === null ? {} : { lastError: row.last_error },
+    }
+  }
+
+  /** Insert or replace one job. */
+  putJob(job: ConsolidateJob): void {
+    if (this.db === undefined) {
+      this.jobs.set(job.key, job)
+      return
+    }
+    this.db.prepare(`
+      INSERT INTO jobs (key, enqueued_at, not_before, root, lease, lease_until, retries, last_error)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET
+        enqueued_at = excluded.enqueued_at, not_before = excluded.not_before, root = excluded.root, lease = excluded.lease,
+        lease_until = excluded.lease_until, retries = excluded.retries, last_error = excluded.last_error
+    `).run(job.key, job.enqueuedAt, job.notBefore, job.root ?? null, job.lease ?? null, job.leaseUntil ?? 0, job.retries, job.lastError ?? null)
+  }
+
+  /** Delete one job. */
+  deleteJob(key: string): void {
+    if (this.db === undefined) {
+      this.jobs.delete(key)
+      return
+    }
+    this.db.prepare('DELETE FROM jobs WHERE key = ?').run(key)
+  }
+
+  /**
+   * Claim one job for `leaseMs`, or return `undefined` when another holder owns
+   * a live lease or the job's backoff has not elapsed. The current holder may
+   * renew its own lease.
+   * @param key - job key.
+   * @param token - this worker's opaque lease token.
+   * @param leaseMs - how long the lease is valid.
+   * @param now - injected clock.
+   * @returns the claimed job, or `undefined` when it is not available.
+   */
+  claimJob(key: string, token: string, leaseMs: number, now = Date.now()): ConsolidateJob | undefined {
+    const job = this.getJob(key)
+    if (job === undefined) return undefined
+    if (job.notBefore > now) return undefined
+    // `notBefore` is the BACKOFF, and it exists to stop a broken pass spinning.
+    // A person typing the command is not a broken pass: `consolidateNow` clears
+    // the backoff before claiming when it was forced, so a stale row from an era
+    // when the pass always failed cannot block a command the user asked for.
+    const heldByOther = job.lease !== undefined && job.lease !== token && (job.leaseUntil ?? 0) > now
+    if (heldByOther) return undefined
+    const claimed: ConsolidateJob = { ...job, lease: token, leaseUntil: now + leaseMs }
+    this.putJob(claimed)
+    return claimed
+  }
+
+  /**
+   * Drop one job's backoff and last failure, leaving the job queued.
+   *
+   * Called when a person forces a pass. Without it a manual `/memories
+   * consolidate` returned "nothing to consolidate" for hours after a failure had
+   * already been fixed — the command was refused by a backoff meant for the
+   * background retry, and the message named three causes none of which was the
+   * real one.
+   *
+   * @param key - job key.
+   */
+  clearJobBackoff(key: string): void {
+    const job = this.getJob(key)
+    if (job === undefined) return
+    const { lastError: _lastError, lease: _lease, leaseUntil: _leaseUntil, ...rest } = job
+    this.putJob({ ...rest, notBefore: 0, retries: 0 })
+  }
+
+  /** Record one usage hit for a memory entry. */
+  bumpUsage(scope: string, id: string, now = Date.now()): { uses: number; lastUsedAt: number } {
+    if (this.db === undefined) {
+      const key = `${scope}\u0000${id}`
+      const previous = this.usage.get(key)
+      this.usage.set(key, {
+        uses: (previous?.uses ?? 0) + 1,
+        lastUsedAt: now,
+        surfacedAt: previous?.surfacedAt ?? 0,
+        consolidatedAt: previous?.consolidatedAt ?? 0,
+      })
+      return { uses: (previous?.uses ?? 0) + 1, lastUsedAt: now }
+    }
+    this.db.prepare(`
+      INSERT INTO usage (scope, id, uses, last_used_at) VALUES (?, ?, 1, ?)
+      ON CONFLICT(scope, id) DO UPDATE SET uses = uses + 1, last_used_at = excluded.last_used_at
+    `).run(scope, id, now)
+    const row = this.db.prepare('SELECT uses, last_used_at FROM usage WHERE scope = ? AND id = ?').get(scope, id) as { uses: number; last_used_at: number }
+    return { uses: Number(row.uses), lastUsedAt: Number(row.last_used_at) }
+  }
+
+  /** Read one entry's usage counters. */
+  getUsage(scope: string, id: string): { uses: number; lastUsedAt: number } {
+    if (this.db === undefined) {
+      const row = this.usage.get(`${scope}\u0000${id}`)
+      return row === undefined ? { uses: 0, lastUsedAt: 0 } : { uses: row.uses, lastUsedAt: row.lastUsedAt }
+    }
+    const row = this.db.prepare('SELECT uses, last_used_at FROM usage WHERE scope = ? AND id = ?').get(scope, id) as
+      | { uses: number; last_used_at: number }
+      | undefined
+    return row === undefined ? { uses: 0, lastUsedAt: 0 } : { uses: Number(row.uses), lastUsedAt: Number(row.last_used_at) }
+  }
+
+  /** Every usage row, for the summary ranking pass. */
+  listUsage(): { scope: string; id: string; uses: number; lastUsedAt: number }[] {
+    if (this.db === undefined) {
+      return [...this.usage.entries()].map(([key, value]) => {
+        const [scope, id] = key.split('\u0000')
+        return { scope: scope ?? '', id: id ?? '', uses: value.uses, lastUsedAt: value.lastUsedAt }
+      })
+    }
+    const rows = this.db.prepare('SELECT scope, id, uses, last_used_at FROM usage').all() as
+      { scope: string; id: string; uses: number; last_used_at: number }[]
+    return rows.map((row) => ({ scope: row.scope, id: row.id, uses: Number(row.uses), lastUsedAt: Number(row.last_used_at) }))
+  }
+
+  /**
+   * Record that an entry was listed in an injected block.
+   *
+   * Surfacing is a weaker signal than a read — the model saw the memory but did
+   * not open it — so it deliberately does not inflate `uses`. It exists because
+   * retention would otherwise evict the memories that work too well to need a
+   * search: an entry the model read straight out of the summary would look
+   * unused, and the better it is, the faster it would expire.
+   *
+   * @param scope - the entry's scope.
+   * @param id - the entry's id.
+   * @param now - injected clock.
+   * @returns the recorded timestamp.
+   */
+  bumpSurfaced(scope: string, id: string, now = Date.now()): number {
+    if (this.db === undefined) {
+      const key = `${scope}\u0000${id}`
+      const previous = this.usage.get(key)
+      this.usage.set(key, {
+        uses: previous?.uses ?? 0,
+        lastUsedAt: previous?.lastUsedAt ?? 0,
+        surfacedAt: now,
+        consolidatedAt: previous?.consolidatedAt ?? 0,
+      })
+      return now
+    }
+    this.db.prepare(`
+      INSERT INTO usage (scope, id, uses, last_used_at, surfaced_at) VALUES (?, ?, 0, 0, ?)
+      ON CONFLICT(scope, id) DO UPDATE SET surfaced_at = excluded.surfaced_at
+    `).run(scope, id, now)
+    return now
+  }
+
+  /**
+   * Record that a consolidation pass reviewed these entries.
+   *
+   * The mark is what stops a review from starving: selection prefers entries it
+   * has never reviewed, then the ones reviewed longest ago, so a memory cannot
+   * sit unseen forever behind a permanently-newest first page.
+   *
+   * @param refs - the scope/id pairs the pass considered.
+   * @param now - clock to record.
+   */
+  markConsolidated(refs: readonly { scope: string; id: string }[], now = Date.now()): void {
+    for (const ref of refs) {
+      if (this.db === undefined) {
+        const key = `${ref.scope}\u0000${ref.id}`
+        const previous = this.usage.get(key)
+        this.usage.set(key, {
+          uses: previous?.uses ?? 0,
+          lastUsedAt: previous?.lastUsedAt ?? 0,
+          surfacedAt: previous?.surfacedAt ?? 0,
+          consolidatedAt: now,
+        })
+        continue
+      }
+      this.db.prepare(`
+        INSERT INTO usage (scope, id, uses, last_used_at, consolidated_at) VALUES (?, ?, 0, 0, ?)
+        ON CONFLICT(scope, id) DO UPDATE SET consolidated_at = excluded.consolidated_at
+      `).run(ref.scope, ref.id, now)
+    }
+  }
+
+  /** Every usage row with all four timestamps, for the retention pass. */
+  retentionRows(): { scope: string; id: string; uses: number; lastUsedAt: number; surfacedAt: number; consolidatedAt: number }[] {
+    if (this.db === undefined) {
+      return [...this.usage.entries()].map(([key, value]) => {
+        const [scope, id] = key.split('\u0000')
+        return { scope: scope ?? '', id: id ?? '', ...value }
+      })
+    }
+    const rows = this.db.prepare('SELECT scope, id, uses, last_used_at, surfaced_at, consolidated_at FROM usage').all() as
+      { scope: string; id: string; uses: number; last_used_at: number; surfaced_at: number; consolidated_at: number }[]
+    return rows.map((row) => ({
+      scope: row.scope,
+      id: row.id,
+      uses: Number(row.uses),
+      lastUsedAt: Number(row.last_used_at),
+      surfacedAt: Number(row.surfaced_at),
+      consolidatedAt: Number(row.consolidated_at),
+    }))
+  }
+
+  /** Read one bookkeeping value, if it was ever written. */
+  getMeta(key: string): string | undefined {
+    if (this.db === undefined) return this.meta.get(key)
+    const row = this.db.prepare('SELECT value FROM meta WHERE key = ?').get(key) as { value: string } | undefined
+    return row?.value
+  }
+
+  /** Write one bookkeeping value. */
+  putMeta(key: string, value: string): void {
+    if (this.db === undefined) {
+      this.meta.set(key, value)
+      return
+    }
+    this.db.prepare(`
+      INSERT INTO meta (key, value) VALUES (?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `).run(key, value)
+  }
+
+  /** One session's memory switch; `on` unless it was turned off. */
+  getSessionMode(id: string): 'on' | 'off' {
+    if (this.db === undefined) return this.sessionModes.get(id) ?? 'on'
+    const row = this.db.prepare('SELECT memory_mode FROM sessions WHERE id = ?').get(id) as { memory_mode: string | null } | undefined
+    return row?.memory_mode === 'off' ? 'off' : 'on'
+  }
+
+  /** Turn one session's memory off, or back on. */
+  setSessionMode(id: string, mode: 'on' | 'off', at = Date.now()): void {
+    if (this.db === undefined) {
+      if (!this.sessions.has(id)) this.sessions.set(id, { lastSeq: 0, at: 0, activityAt: at })
+      this.sessionModes.set(id, mode)
+      return
+    }
+    this.db.prepare(`
+      INSERT INTO sessions (id, last_seq, at, memory_mode) VALUES (?, 0, 0, ?)
+      ON CONFLICT(id) DO UPDATE SET memory_mode = excluded.memory_mode
+    `).run(id, mode)
+  }
+
+  /** The recorded background pause, if any. */
+  getLimit(id: string = BACKGROUND_LIMIT): LimitState | undefined {
+    if (this.db === undefined) return this.limits.get(id)
+    const row = this.db.prepare('SELECT id, failures, until, at, reason FROM limits WHERE id = ?').get(id) as
+      | { id: string; failures: number; until: number; at: number; reason: string | null }
+      | undefined
+    if (row === undefined) return undefined
+    return {
+      failures: Number(row.failures),
+      until: Number(row.until),
+      at: Number(row.at),
+      ...row.reason === null ? {} : { reason: row.reason },
+    }
+  }
+
+  /**
+   * Whether background passes are paused right now.
+   * @param now - injected clock.
+   * @param id - which pause to read.
+   * @returns true while the recorded wait has not elapsed.
+   */
+  isLimited(now = Date.now(), id: string = BACKGROUND_LIMIT): boolean {
+    const limit = this.getLimit(id)
+    return limit !== undefined && limit.until > now
+  }
+
+  /**
+   * Record one provider refusal and extend the wait.
+   *
+   * The wait doubles per consecutive refusal, capped, so a provider that keeps
+   * refusing costs one failed call per interval instead of one per idle timer.
+   *
+   * @param reason - provider wording, for diagnostics.
+   * @param baseMs - wait after the first refusal.
+   * @param maxMs - ceiling for the doubling.
+   * @param now - injected clock.
+   * @param id - which pause to write.
+   * @returns the state after this refusal.
+   */
+  noteLimitFailure(reason: string, baseMs: number, maxMs: number, now = Date.now(), id: string = BACKGROUND_LIMIT): LimitState {
+    const previous = this.getLimit(id)
+    const failures = (previous?.failures ?? 0) + 1
+    const wait = Math.min(maxMs, baseMs * 2 ** (failures - 1))
+    const state: LimitState = { failures, until: now + wait, at: now, reason }
+    if (this.db === undefined) {
+      this.limits.set(id, state)
+      return state
+    }
+    this.db.prepare(`
+      INSERT INTO limits (id, failures, until, at, reason) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        failures = excluded.failures, until = excluded.until, at = excluded.at, reason = excluded.reason
+    `).run(id, state.failures, state.until, state.at, state.reason ?? null)
+    return state
+  }
+
+  /** Forget the pause after a pass succeeds. */
+  clearLimit(id: string = BACKGROUND_LIMIT): void {
+    if (this.db === undefined) {
+      this.limits.delete(id)
+      return
+    }
+    this.db.prepare('DELETE FROM limits WHERE id = ?').run(id)
+  }
+}
+
+/**
+ * Resolve the state database path inside one memory store. */
+export function statePath(memoriesDir: string): string {
+  return join(memoriesDir, 'state.db')
+}
+
+/** The pre-SQLite watermark file, imported once and then removed. */
+export const LEGACY_STATE_FILE = 'extract-state.json'
+
+/** Shape of the legacy `extract-state.json` document. */
+interface LegacyState {
+  version?: number
+  sessions?: Record<string, { lastSeq?: number; at?: number; root?: string; contributed?: boolean }>
+}
+
+/**
+ * Import and remove a pre-SQLite `extract-state.json`.
+ *
+ * The file only ever held extraction watermarks. Importing them matters: a
+ * session with no watermark is re-mined, which spends quota re-reading a
+ * conversation that was already processed. The import is skipped when the
+ * database already holds sessions, so it can never overwrite newer state.
+ *
+ * @param store - the state store to import into.
+ * @param memoriesDir - directory the legacy file lives in.
+ * @returns how many watermarks were imported, or `undefined` when there was nothing to do.
+ */
+export async function importLegacyState(store: StateStore, memoriesDir: string): Promise<number | undefined> {
+  const path = join(memoriesDir, LEGACY_STATE_FILE)
+  let text: string
+  try {
+    text = await readFile(path, 'utf8')
+  } catch (error) {
+    if (isMissing(error)) return undefined
+    throw error
+  }
+  let parsed: LegacyState
+  try {
+    parsed = JSON.parse(text) as LegacyState
+  } catch {
+    // A corrupt legacy file is not worth failing the plugin over; remove it so
+    // it stops looking like live state.
+    await rm(path, { force: true })
+    return 0
+  }
+  let imported = 0
+  if (store.sessionCount() === 0 && typeof parsed.sessions === 'object' && parsed.sessions !== null) {
+    for (const [id, value] of Object.entries(parsed.sessions)) {
+      if (typeof value !== 'object' || value === null) continue
+      const lastSeq = Number(value.lastSeq)
+      if (!Number.isFinite(lastSeq) || lastSeq <= 0) continue
+      store.putSession(id, {
+        lastSeq: Math.trunc(lastSeq),
+        at: Number.isFinite(Number(value.at)) ? Number(value.at) : 0,
+        ...typeof value.root === 'string' ? { root: value.root } : {},
+        ...value.contributed === true ? { contributed: true } : {},
+        // The legacy file never recorded activity; the watermark time is the
+        // closest honest proxy for "when this session was last touched".
+        activityAt: Number.isFinite(Number(value.at)) ? Number(value.at) : 0,
+      })
+      imported += 1
+    }
+  }
+  await rm(path, { force: true })
+  return imported
+}
