@@ -1,0 +1,3861 @@
+/**
+ * `dsh-memories` — cross-session memory for the DeepSeek Harness.
+ *
+ * Two scopes, mirroring the Codex memories split:
+ *
+ * - **global** — facts that hold across every project (`$DSH_HOME/memories`).
+ * - **project** — facts tied to one workspace
+ *   (`$DSH_HOME/memories/projects/<slug>`), shared by every session opened in
+ *   that workspace, whichever subdirectory it starts in.
+ *
+ * Three cooperating mechanisms:
+ *
+ * 1. **Explicit capture** — the `memory` tool lets the model write, search,
+ *    read, update, and forget entries, choosing the scope per call.
+ * 2. **Idle-time extraction** — after a session has been quiet for
+ *    `autoExtractIdleMs`, one auxiliary model call mines the transcript tail for
+ *    durable facts and upserts them (deduplicated by title).
+ * 3. **Layered injection** — a bounded summary of both scopes enters the
+ *    conversation once, at the first step that has something to say; details
+ *    stay behind `memory_search`.
+ *
+ * @module dsh-memories
+ */
+import { ACCOUNT_QUOTA_EXCEEDED_CODE, createUserMessage, isQuotaExceededError, QUOTA_EXCEEDED_CODE } from '@deepseek-ai/dsh-llm'
+import { homedir } from 'node:os'
+import { resolve, sep } from 'node:path'
+import type { LlmRuntime, UserMessage } from '@deepseek-ai/dsh-llm'
+import type { Agent, SessionStartSource } from '@deepseek-ai/dsh-agent'
+import type { Session } from '@deepseek-ai/dsh-session'
+import type { CommandInvocation } from '@deepseek-ai/dsh-commands'
+import type { Context } from '@deepseek-ai/cordis'
+// Type-only: the Loader owns the `loader/volatile-update` event this plugin
+// listens for, and the loader is the host rather than a runtime dependency, so
+// only its declarations belong in this program.
+import type {} from '@deepseek-ai/cordis-plugin-loader'
+import { Config as ConfigSchema, consolidationRouteOf, readTunables, resolveConfig } from './config.js'
+import type { MemoriesConfig, MemoriesSettings, ResolvedConfig } from './config.js'
+import { MemoryStore, slugify } from './storage.js'
+import { StateStore, importLegacyState, statePath } from './state.js'
+import { browseMemories, EXPAND_SEEDS, hubTerms, matchCredit, prefilterEntries, QUALIFIED_SCORE_FACTOR, relatedHits, searchMemories } from './search.js'
+import type { MatchCredit, ScopeEntries } from './search.js'
+import { readFile } from 'node:fs/promises'
+import { readPersona, renderPersonaBlock, writePersona } from './persona.js'
+import { admitNotice, dueNotices, pruneNotices, readNotices, withNotice, writeNotices } from './notices.js'
+import { readPetId, say, systemNotification } from './pet.js'
+import type { PetTarget } from './pet.js'
+import { closeLoop, describeLoops, dueLoops, mergeLoops, pruneLoops, readLoops, withLoop, writeLoops } from './loops.js'
+import { gateNotices } from './gate.js'
+import { listReflections, previousInsights, reflectionDue, runReflection, writeReflection } from './reflection.js'
+import type { GateCandidate } from './gate.js'
+import { parseTimeRange } from './time.js'
+import { isSubstantiveTurn } from './query.js'
+import { MEMORY_OPEN, rankForSummary, renderEntry, renderHit, renderMemorySummaryResult, renderRecall, renderScopeListing, selectForSummary } from './render.js'
+import type { SummaryScope } from './render.js'
+import { findProjectRoot, isWithin } from './workspace.js'
+import { citationRoots, citationWarning, ignoredUnder, missingCitations } from './citations.js'
+import { planRetention, retentionKey } from './retention.js'
+import { MemoryLog, createFileSink, createLogExporter, pluginLogger } from './log.js'
+import { collectWindow, resolveLlmRoute, runExtraction } from './extract.js'
+import type { ExtractionRoute } from './extract.js'
+import { backgroundDelayMs, cappedBackoffMs, extractionDelayMs, formatDelay, parsePeakHours, peakDelayMs } from './schedule.js'
+import { CONSOLIDATE_PRESET_ID, adjudicateDisputes, applyPlan, applyVerdicts, classifyPlan, clearPendingPlan, conflictDisputes, denyToolsFor, mergePendingPlan, proposalIsFresh, readPendingPlan, runConsolidation, runConsolidationDirect, selectForConsolidation, writePendingPlan } from './consolidate.js'
+import type { ConsolidateRequest, ConsolidationDispute, DisputeVerdict } from './consolidate.js'
+import { discardDraft, listDrafts, promote, writeDraft } from './skills.js'
+import type { ConsolidationPlan, ConsolidationTarget, SubagentSeam } from './consolidate.js'
+import { MEMORY_KINDS, MEMORY_SOURCE_KIND } from './types.js'
+import type { MemoryDraft, MemoryEntry, MemoryKind, MemoryScope, SessionMode } from './types.js'
+import { registerMemoryTool } from './tool.js'
+import { REMOTE_CONTRIBUTION, REMOTE_NAMESPACE, REMOTE_SERVICE, createRemoteService } from './remote.js'
+import type { TypertRegistryLike } from './remote.js'
+
+/** Plugin name; also the source tag of every injected message. */
+export const name = 'memories'
+
+/** Budget for the extraction a shutdown is allowed to wait for. */
+const EXIT_FLUSH_TIMEOUT_MS = 8_000
+
+/**
+ * How often a periodic pass that changed nothing still reports at info level.
+ *
+ * An hour: often enough that a stall is visible within one working session, rare
+ * enough that a store nobody is using does not write a line every thirty minutes
+ * for the rest of the process's life.
+ */
+const PASS_REPORT_INTERVAL_MS = 3_600_000
+
+/**
+ * Name the route an extraction call ran on, for a log line.
+ *
+ * The reasoning level is part of the name when the session declared one: it is
+ * the field that explains a call which hit the output cap without writing
+ * anything, because a thinking model spends that ceiling before its first
+ * visible token.
+ *
+ * @param route - the resolved route, when the call got that far.
+ * @returns `provider/model`, with `(reasoning <level>)` appended when known.
+ */
+function describeExtractionRoute(route: ExtractionRoute | undefined): string {
+  if (route === undefined) return 'an unresolved route'
+  return route.reasoningEffort === undefined
+    ? `${route.provider}/${route.model}`
+    : `${route.provider}/${route.model} (reasoning ${route.reasoningEffort})`
+}
+
+/** State key holding the last periodic sweep, so it survives a restart. */
+const SWEEP_META_KEY = 'sweep-at'
+
+/**
+ * Model-facing label of a session that has no workspace of its own.
+ *
+ * Sessions opened in the harness home itself (or with no recorded `cwd`) are not
+ * working in a project, and giving them one produced a scope that mixed
+ * unrelated repositories: measured on a real store, one such bucket held 14
+ * memories from five different projects and injected all of them into every
+ * session started there.
+ */
+const NO_PROJECT_LABEL = 'project:none'
+
+/**
+ * How many existing titles one extraction prompt carries.
+ *
+ * Enough to cover a well-kept scope, bounded because these lines compete with
+ * the transcript for the prompt: the extractor only needs to recognise that a
+ * fact is already known so it reuses the entry's title instead of inventing a
+ * second one.
+ */
+const KNOWN_TITLE_LIMIT = 80
+
+/** Case-insensitive path equality on Windows, exact elsewhere. */
+function samePath(left: string, right: string): boolean {
+  const base = resolve(right)
+  const target = resolve(left)
+  return process.platform === 'win32' ? base.toLowerCase() === target.toLowerCase() : base === target
+}
+
+/**
+ * Whether a directory is somewhere a session was *started from*, not a project.
+ *
+ * {@link findProjectRoot} falls back to the starting directory when it finds no
+ * root marker, so any directory a session happens to open in becomes a scope
+ * forever. Two of them must never become one: the harness home (plugin work,
+ * profiles, logs) and the user's home directory itself. Measured on a real
+ * store, the harness home alone had collected 14 memories from five unrelated
+ * projects.
+ *
+ * Descendants of the home directory are deliberately allowed through: a game's
+ * save folder under `%LOCALAPPDATA%` is a real workspace with work worth
+ * remembering, while the home directory itself is not. The OS temp tree is
+ * allowed through too, because half-finished work there is still work.
+ *
+ * @param root - the candidate workspace root.
+ * @param dshHome - the harness home directory.
+ * @returns true when the directory must not own a project scope.
+ */
+export function isCatchAllDirectory(root: string, dshHome: string): boolean {
+  if (isWithin(dshHome, root)) return true
+  return samePath(root, homedir())
+}
+
+/**
+ * Services this plugin requires at activation: the tool registry (for the
+ * `memory` tool) and the command registry (for `/memories`).
+ *
+ * The settings domain, the LLM, and the subagent seam are all optional and
+ * reached through `ctx.inject` or `ctx.get`: a deployment with no model adapter
+ * or no delegation still loads (it just never runs background extraction or
+ * consolidation), and one without the settings domain still serves every
+ * model-facing surface (it just has no Memories page).
+ */
+export const inject: string[] = ['tools', 'commands']
+
+/**
+ * The one settings-domain method this plugin uses.
+ *
+ * Spelled structurally rather than imported: the plugin ships its own page and
+ * only needs to be left out of the schema-derived one, and the domain is an
+ * optional service rather than a dependency of a plugin whose config is the
+ * schema.
+ */
+interface SettingsDomainLike {
+  /** Register this plugin instance's page policy; the returned disposer withdraws it. */
+  configure(presentation: { auto?: boolean }, owner?: unknown): () => void
+}
+
+/** Job key of the single global consolidation job. */
+const CONSOLIDATE_JOB = 'global'
+
+/**
+ * The live-agent registry, spelled structurally.
+ *
+ * `@deepseek-ai/dsh-agent` publishes it as the `agents` service, but the plugin
+ * treats it the way it treats every other optional seam: a deployment that
+ * composes no registry still loads and simply has no second source of sessions.
+ */
+interface AgentRegistryLike {
+  /** Live agents in registration order. */
+  list?(): Agent[]
+  /** Live top-level agents in registration order. */
+  roots?(): Agent[]
+}
+
+/**
+ * The Agent Preset registry, spelled structurally.
+ *
+ * `@deepseek-ai/dsh-agent-preset-registry` publishes it as the `agentPresets`
+ * service. Since 0.2.1-rc.2 a subagent's tool set comes from the preset it
+ * names, so this plugin registers one preset of its own — a preset with no tool
+ * rows — and the consolidation child runs under it. A deployment that composes
+ * no registry simply has no preset, and the consolidation pass falls back to a
+ * plain model call that owns no tools either.
+ */
+interface AgentPresetRegistryLike {
+  register(definition: {
+    id: string
+    name?: string
+    description?: string
+    order?: number
+    plugins: readonly unknown[]
+  }): Promise<() => Promise<void>>
+}
+
+/** Why one session was not mined, for the pass line. */
+type MineSkip = 'off' | 'peak' | 'not-idle' | 'quiet' | 'claim' | 'no-llm' | 'no-route' | 'empty' | 'max-tokens' | 'capped'
+
+/** One scope's loaded state. */
+interface ScopeState {
+  readonly scope: MemoryScope
+  readonly label: string
+  readonly heading: string
+  readonly entries: readonly MemoryEntry[]
+}
+
+
+/**
+ * The memory runtime: one instance per plugin mount, shared by the tool, the
+ * injector, the extractor, and the command handler.
+ */
+export class MemoriesRuntime {
+  /** Deployment facts resolved once: paths and workspace discovery. */
+  readonly deployment: ResolvedConfig
+  readonly store: MemoryStore
+  /** Operational state: watermarks, consolidation jobs, usage counters. */
+  readonly state: StateStore
+  /**
+   * Live tunables.
+   *
+   * A thunk rather than a snapshot: the settings namespace is hot-reloaded, so
+   * every read must see the value committed most recently, and a restart is
+   * never required to change a knob.
+   */
+  private readonly settingsThunk: () => MemoriesSettings
+  /**
+   * The LLM runtime as it was at activation, when it was already provided.
+   *
+   * Kept as a snapshot because by the time a settle pass runs the tree may
+   * already be disposing, and a late `ctx.get('llm')` then resolves to nothing —
+   * which is exactly the pass a one-shot run depends on.
+   */
+  private readonly llmAtActivation: LlmRuntime | undefined
+  /** The subagent seam as it was at activation; absent in a deployment without delegation. */
+  private readonly subagentsAtActivation: SubagentSeam | undefined
+  /** Whether the "no llm service" warning has already been written. */
+  private warnedNoLlm = false
+  /** Whether the "no subagent seam" warning has already been written. */
+  private warnedNoSubagents = false
+  /**
+   * Whether the tool-free consolidation preset is registered.
+   *
+   * Since 0.2.1-rc.2 a subagent's tool set comes from the preset it names, and
+   * a child that names none inherits the parent's composition — the parent's
+   * tools, which is exactly what the consolidation pass must withhold. This flag
+   * is what tells the pass that the new-style seam can be used safely.
+   */
+  private consolidatePresetReady = false
+  private readonly rootCache = new WeakMap<Session, Promise<string | undefined>>()
+  /** Why the last `consolidateNow` declined to run, for the command's report. */
+  private consolidateSkip: string | undefined
+  /** Hub-term predicates by store signature; see `hubFor`. */
+  private readonly hubCache = new Map<string, (term: string) => boolean>()
+  /** Sessions whose conversation already carries the memory block. */
+  private readonly injected = new WeakSet<Session>()
+  /** Recall deltas already injected into each conversation. */
+  private readonly recallCounts = new WeakMap<Session, number>()
+  /** Entry ids each conversation has already been shown. */
+  private readonly surfacedIds = new WeakMap<Session, Set<string>>()
+  /** Injected ids this conversation has already credited as used. */
+  private readonly helpedIds = new WeakMap<Session, Set<string>>()
+  /**
+   * Sessions whose "nothing was recalled, but something cleared the floor" has
+   * already been reported, so the diagnostic costs at most one line each.
+   */
+  private readonly nearMissLogged = new WeakSet<Session>()
+  private readonly idleTimers = new WeakMap<Agent, NodeJS.Timeout>()
+  private readonly extracting = new Set<string>()
+  /**
+   * Sessions whose last extraction reply hit the output cap, and when they may
+   * be tried again.
+   *
+   * A capped window is deliberately left unmined so nothing is lost, which is
+   * exactly why the retry needs a gate: the cap that cut the reply is a property
+   * of the transcript rather than a hiccup, so retrying on the pass cadence would
+   * repeat the same full-price call forever. Entries carry the ceiling and route
+   * they blamed, so changing either clears the verdict on the spot instead of
+   * making a user who just raised the knob wait out a cooldown.
+   */
+  private readonly capped = new Map<string, { hits: number; until: number; cause: string }>()
+  private readonly lifecycle = new AbortController()
+  /** The plugin's own logger: the host logger, plus the decision facade. */
+  private readonly log: MemoryLog
+  /**
+   * Why the configured log file is not being written, when it could not be
+   * opened or a write failed. Set by the composition, surfaced by `/memories
+   * stats` — the only reachable diagnostic, since the broken channel cannot
+   * report itself.
+   */
+  logSinkError: string | undefined
+
+  constructor(
+    private readonly ctx: Context,
+    config: MemoriesConfig,
+    settings?: () => MemoriesSettings,
+  ) {
+    this.deployment = resolveConfig(config)
+    this.settingsThunk = settings ?? (() => this.deployment.tunables)
+    this.store = new MemoryStore(this.deployment.memoriesDir)
+    this.store.entryLimit = () => this.settings.maxEntriesPerScope
+    this.store.similarityLimit = () => this.settings.dedupeSimilarity
+    // Every retirement goes through the store, and the store has no logger: a
+    // memory disappearing used to leave no trace at all, which made the 200-cap
+    // rotation indistinguishable from a deliberate consolidation. One line per
+    // retirement is cheap next to an irreversible action nobody can explain.
+    this.store.onRetire = (info) => this.log.info('dsh-memories: retired %s/%s (%s)', info.scope, info.id, info.reason)
+    this.state = new StateStore(statePath(this.deployment.memoriesDir))
+    this.llmAtActivation = ctx.get('llm') as LlmRuntime | undefined
+    this.subagentsAtActivation = ctx.get('subagents') as SubagentSeam | undefined
+    this.log = new MemoryLog(pluginLogger(ctx.logger), () => this.settings.traceMaintenance)
+  }
+
+  /**
+   * The LLM runtime to use right now.
+   *
+   * The activation snapshot first, then a live lookup. In 0.1.7 a service may be
+   * provided by a row that runs after this plugin's — the same ordering trap the
+   * `settings` and `typert` seams below document — so the snapshot is
+   * legitimately `undefined` at activation and stays that way for the whole
+   * process. Resolving per call is what keeps a late provider from turning every
+   * background pass into a silent no-op.
+   */
+  private get llm(): LlmRuntime | undefined {
+    if (this.llmAtActivation !== undefined) return this.llmAtActivation
+    try {
+      return this.ctx.get('llm') as LlmRuntime | undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * The subagent seam to use right now.
+   *
+   * Resolved the same way and for the same reason as {@link llm}: consolidation
+   * is a subagent pass, so a seam captured at activation when it was not yet
+   * provided would disable every later consolidation silently.
+   */
+  private get subagents(): SubagentSeam | undefined {
+    if (this.subagentsAtActivation !== undefined) return this.subagentsAtActivation
+    try {
+      return this.ctx.get('subagents') as SubagentSeam | undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  /** The tunables in force right now. */
+  get settings(): MemoriesSettings {
+    return this.settingsThunk()
+  }
+
+  /**
+   * Record that the tool-free consolidation preset is registered.
+   *
+   * The composition answers this once the preset registry is available; the
+   * flag is what the consolidation pass reads before it hands a child to the
+   * 0.2.1-rc.2 seam.
+   *
+   * @param ready - whether the preset is registered and usable.
+   */
+  markConsolidatePresetReady(ready: boolean): void {
+    this.consolidatePresetReady = ready
+  }
+
+  /** Abort every owned background activity and release the state store. */
+  dispose(): void {
+    this.stopPeriodicExtraction()
+    this.lifecycle.abort(new Error('dsh-memories disposed'))
+    this.state.close()
+  }
+
+  /**
+   * Resolve (and cache) one session's workspace root.
+   *
+   * `undefined` means the session has no project scope at all — see
+   * {@link NO_PROJECT_LABEL} — which is a different thing from "the lookup
+   * failed": every caller treats it as "this conversation has no workspace".
+   *
+   * @param session - session whose workspace to resolve.
+   * @returns the workspace root, or `undefined` when the session has none.
+   */
+  async projectRoot(session: Session): Promise<string | undefined> {
+    const cached = this.rootCache.get(session)
+    if (cached !== undefined) return await cached
+    const pending = this.resolveProjectRoot(session)
+    this.rootCache.set(session, pending)
+    return await pending
+  }
+
+  /** Decide one session's project scope; see {@link NO_PROJECT_LABEL}. */
+  private async resolveProjectRoot(session: Session): Promise<string | undefined> {
+    const cwd = session.header.cwd?.trim()
+    // A session with no recorded cwd is not a project: the host's own working
+    // directory is where the harness happens to run, not where the conversation
+    // works, and scoping to it merged unrelated repositories into one bucket.
+    if (cwd === undefined || cwd.length === 0) return undefined
+    // A directory the deployment names explicitly wins over every rule below —
+    // including the catch-all rule for the harness home, which is exactly why
+    // this exists: plugin and kernel work happens in `~/.dsh`, and 28% of the
+    // global scope turned out to be those notes following the user around.
+    for (const [prefix, root] of this.deployment.projectRootOverrides) {
+      const bounded = prefix.endsWith(sep) ? prefix : prefix + sep
+      if (cwd === prefix || cwd.startsWith(bounded)) return root
+    }
+    const root = await findProjectRoot(cwd, this.deployment.projectRootMarkers)
+    // A directory that is not a project is not a scope either: the harness home,
+    // the user's home directory itself, and the OS temp tree are places a
+    // session is *started from*, not things it works on. `findProjectRoot` falls
+    // back to the starting directory when it finds no marker, so without this a
+    // session opened there owns a scope shared by everything worked on from it —
+    // measured: 14 memories from five unrelated projects under `$DSH_HOME`.
+    return isCatchAllDirectory(root, this.deployment.dshHome) ? undefined : root
+  }
+
+  /** Load one scope's entries plus its model-facing labels. */
+  async scopeState(scope: MemoryScope, session: Session): Promise<ScopeState> {
+    const root = scope === 'project' ? await this.projectRoot(session) : undefined
+    if (scope === 'project' && root === undefined) {
+      return { scope, label: NO_PROJECT_LABEL, heading: 'Project memories (none)', entries: [] }
+    }
+    const entries = await this.store.list(scope, root)
+    const target = this.store.target(scope, root)
+    return {
+      scope,
+      label: target.label,
+      heading: scope === 'global' ? 'Global memories' : `Project memories (${target.label})`,
+      entries: rankForSummary(entries),
+    }
+  }
+
+  /** Load both scopes, broadest first. */
+  async allScopes(session: Session): Promise<readonly ScopeState[]> {
+    return [await this.scopeState('global', session), await this.scopeState('project', session)]
+  }
+
+  /** Convert loaded scopes into the search/browse input shape. */
+  private groups(states: readonly ScopeState[]): ScopeEntries[] {
+    return states.map((state) => ({ scope: state.scope, label: state.label, entries: state.entries }))
+  }
+
+  /** Search both scopes. */
+  async search(session: Session, query: string, options: { scopes?: readonly MemoryScope[]; tags?: readonly string[]; kinds?: readonly MemoryKind[]; limit?: number }) {
+    const states = await this.allScopes(session)
+    // Expansion is on for the model-facing search only: it is asking what is
+    // known about a subject, and the entries filed under the same keys are part
+    // of that answer. The settings page calls `searchMemories` directly and stays
+    // literal, because a person typing into a search box wants what matches.
+    const hits = searchMemories(this.groups(states), query, { ...options, expand: true })
+    // Decision level, so a stock `logLevel` stays quiet and `traceMaintenance:
+    // true` makes this answerable: which order the model actually saw, and why
+    // the first row is first. Until 2026-09-29 this surface logged nothing at
+    // all, which meant the ordering change (search ranks by relevance) could not
+    // be confirmed from a running host.
+    const top = hits[0]
+    const hops = hits.filter((hit) => hit.via !== undefined).length
+    const window = parseTimeRange(query)
+    this.log.decision('dsh-memories: search %s -> %d hit(s)%s%s (top %s relevance %s score %s)',
+      JSON.stringify(query.slice(0, 60)), hits.length,
+      window === undefined ? '' : `, window ${window.label}`,
+      hops === 0 ? '' : `, ${hops} over a hop`,
+      top?.entry.id ?? 'none', (top?.relevance ?? 0).toFixed(1), (top?.score ?? 0).toFixed(1))
+    return hits
+  }
+
+  /** Browse both scopes without a query. */
+  async browse(session: Session, options: { scopes?: readonly MemoryScope[]; tags?: readonly string[]; kinds?: readonly MemoryKind[]; limit?: number }) {
+    const states = await this.allScopes(session)
+    return browseMemories(this.groups(states), options)
+  }
+
+  /** Read one entry by scope and id, recording the hit. */
+  async read(session: Session, scope: MemoryScope, id: string, record = true): Promise<MemoryEntry | undefined> {
+    const root = scope === 'project' ? await this.projectRoot(session) : undefined
+    if (scope === 'project' && root === undefined) return undefined
+    const entry = await this.store.read(scope, root, id)
+    if (entry === undefined || !record) return entry
+    return this.touchEntry(entry, root)
+  }
+
+  /**
+   * Record one read/search hit.
+   *
+   * The counter lives in the state database (atomic, concurrent-safe) and is
+   * mirrored back into the entry file so the markdown stays a complete picture
+   * for a human reader.
+   */
+  private async touchEntry(entry: MemoryEntry, root: string | undefined): Promise<MemoryEntry> {
+    const counters = this.state.bumpUsage(entry.scope, entry.id)
+    return this.store.writeCounters(entry, root, counters)
+  }
+
+  /** Record hits for a batch of search/browse results, best-effort. */
+  async recordUsage(session: Session, entries: readonly MemoryEntry[]): Promise<void> {
+    if (entries.length === 0) return
+    const root = await this.projectRoot(session)
+    // An entry can only be marked against a scope that exists right now, and a
+    // session without a workspace has no project scope to mark.
+    const markable = entries.filter((entry) => entry.scope === 'global' || root !== undefined)
+    await Promise.all(markable.map((entry) => this.touchEntry(entry, entry.scope === 'project' ? root : undefined)))
+  }
+
+  /**
+   * Store one draft, choosing the scope.
+   *
+   * The whole draft shape is accepted, not a reduced one: `kind`, `keys`, and
+   * `appliesTo` are what make a memory findable and what say when it matters, so
+   * a caller that has them must not have to drop them at this seam.
+   *
+   * A project draft from a session with no workspace is stored globally rather
+   * than refused: the extractor cannot know the session has none, and dropping
+   * the fact would lose it silently. The rewrite is logged, because the scope it
+   * lands in is what decides who sees it later.
+   */
+  async write(
+    session: Session,
+    draft: MemoryDraft,
+    source: MemoryEntry['source'],
+  ) {
+    return await this.persist(session, draft, source)
+  }
+
+  /** The one place a draft becomes an entry, so the scope rule has one home. */
+  private async persist(session: Session, draft: MemoryDraft, source: MemoryEntry['source']) {
+    if (draft.scope === 'global') {
+      // A global memory is injected into every unrelated project, so a draft
+      // that cites a workspace we already keep memories for belongs to that
+      // workspace instead. Matching on the recorded root PATH (not on a project
+      // name) keeps this precise: generic memories legitimately cite paths, and
+      // only a path inside a known project is evidence of where a fact lives.
+      const owner = await this.projectOwningPath(draft)
+      if (owner !== undefined) {
+        this.log.decision('dsh-memories: global draft %s names %s, storing it there instead',
+          draft.title, this.store.target('project', owner).label)
+        return await this.store.upsert({ ...draft, scope: 'project' }, owner, source)
+      }
+      return await this.store.upsert(draft, undefined, source)
+    }
+    const root = await this.projectRoot(session)
+    if (root !== undefined) return await this.store.upsert(draft, root, source)
+    this.log.decision('dsh-memories: session %s has no workspace, storing %s as global', session.id, draft.title)
+    return await this.store.upsert({ ...draft, scope: 'global' }, undefined, source)
+  }
+
+  /**
+   * Find the project scope whose root directory a global draft cites.
+   *
+   * Scoping is where a memory earns or loses its reach: an employer, product or
+   * repository fact parked in global follows the user into every unrelated
+   * project. The extractor is asked to make that call and sometimes gets it
+   * wrong, so the store's own project descriptors are the second opinion — a
+   * global draft that quotes a known project's path is filed with that project.
+   *
+   * @param draft - the draft about to be stored.
+   * @returns the owning project root, or `undefined` when nothing matches.
+   */
+  private async projectOwningPath(draft: MemoryDraft): Promise<string | undefined> {
+    const text = `${draft.title} ${draft.body}`
+    // A path is spelled differently on each platform: a drive letter on
+    // Windows (`C:\...`), a rooted path elsewhere (`/...`). The cheap reject
+    // below only skips text that carries no path at all, so a POSIX workspace
+    // path is recognized just like a Windows one.
+    if (!/[A-Za-z]:\\/u.test(text) && !/(?:^|[\s'"`(\[])\//u.test(text)) return undefined
+    const haystack = text.toLowerCase()
+    for (const slug of await this.store.listProjects()) {
+      const descriptor = await this.store.readProjectDescriptor(slug)
+      if (descriptor === undefined) continue
+      // A catch-all directory is not a project, so it must never be a target
+      // either: the harness home in particular is cited by machine-level facts
+      // that belong in global, and rerouting them there hides them from every
+      // other workspace.
+      if (isCatchAllDirectory(descriptor.root, this.deployment.dshHome)) continue
+      if (descriptor.root.toLowerCase().length >= 4 && haystack.includes(descriptor.root.toLowerCase())) {
+        return descriptor.root
+      }
+    }
+    return undefined
+  }
+
+  /**
+   * Titles already stored in the scopes one extraction pass may write to.
+   *
+   * Project titles come first: they are the ones a pass in this workspace is
+   * most likely to be re-deriving, so they are the ones that must survive the
+   * cap. Extraction is otherwise blind to what is already known, which is how one
+   * session's lesson ended up stored twice — once in Chinese, once in English.
+   *
+   * @param root - the session's project root, when it has one.
+   * @returns existing titles, capped for the prompt.
+   */
+  private async knownTitles(root: string | undefined): Promise<readonly string[]> {
+    const titles: string[] = []
+    if (root !== undefined) {
+      const project = await this.store.list('project', root).catch(() => [] as MemoryEntry[])
+      for (const entry of project) titles.push(entry.title)
+    }
+    const global = await this.store.list('global', undefined).catch(() => [] as MemoryEntry[])
+    for (const entry of global) titles.push(entry.title)
+    return titles.slice(0, KNOWN_TITLE_LIMIT)
+  }
+
+  /** Delete one entry. */
+  async forget(session: Session, scope: MemoryScope, id: string): Promise<boolean> {
+    const root = scope === 'project' ? await this.projectRoot(session) : undefined
+    if (scope === 'project' && root === undefined) return false
+    return await this.store.remove(scope, root, id)
+  }
+
+  /**
+   * Build the injected summary block for one session, or `undefined` when the
+   * store is empty or injection is disabled.
+   *
+   * @param session - session whose scopes to summarize.
+   * @returns the framed block, or `undefined` when there is nothing to say.
+   */
+  async summary(session: Session): Promise<string | undefined> {
+    return (await this.summaryWithSurfaced(session))?.text
+  }
+
+  /**
+   * Build the injected block and name the entries it lists.
+   *
+   * The caller needs both: the text enters the conversation, and the entries it
+   * names are marked as surfaced, which is what keeps retention from archiving a
+   * memory that works so well it never needs a search.
+   *
+   * Which entries those are is decided by `selectForSummary`, not by the ranker
+   * alone: on a scope with more entries than slots the ranking is a fixed point,
+   * so pure ranking would list the same memories forever and never surface
+   * anything new — including an explicit correction of one of them.
+   *
+   * @param session - session whose scopes to summarize.
+   * @returns the framed block plus the entries it lists, or `undefined`.
+   */
+  private async summaryWithSurfaced(session: Session, query?: string): Promise<{ text: string; surfaced: readonly MemoryEntry[] } | undefined> {
+    if (this.settings.maxSummaryBytes <= 0) return undefined
+    if (this.settings.recallMode === 'off') return undefined
+    const states = await this.allScopes(session)
+    // Each scope is selected against the number of bullets it can actually RENDER,
+    // not the shared per-scope maximum. The global half renders at most
+    // `globalSummaryEntries` while the reservation was computed against
+    // `maxSummaryEntries`, so with the shipped defaults three of the four global
+    // bullets went to never-listed entries and every topically relevant global
+    // memory was gone — measured on the real store, including the one at
+    // relevance 62. Selecting against the real cap is what makes
+    // `selectForSummary`'s own bound bite.
+    // The global cap exists to stop the global half eating a budget the project
+    // half needs. With no project half there is nothing to protect, and the cap
+    // became the ONLY constraint: measured on the real store, every project-less
+    // session listed exactly 4 entries out of 200 and left 62% of
+    // `maxSummaryBytes` unusable. Raise it only when nothing else competes.
+    const projectHasEntries = states.some((state) => state.scope === 'project' && state.entries.length > 0)
+    const globalCap = projectHasEntries ? this.settings.globalSummaryEntries : this.settings.maxSummaryEntries
+    const capOf = (state: ScopeState): number =>
+      state.scope === 'global' ? globalCap : this.settings.maxSummaryEntries
+    const selected = states.map((state) => selectForSummary(state.entries, capOf(state), {
+      freshSlots: this.settings.summaryFreshSlots,
+      // The opening turn is the only topic signal available this early, and it
+      // is what keeps a globally scoped memory that shares nothing with this
+      // conversation from outranking one that does.
+      ...query === undefined || query.length === 0 ? {} : { query },
+    }))
+    const scopes: SummaryScope[] = states.map((state, index) => ({
+      label: state.label,
+      heading: state.heading,
+      entries: selected[index] ?? [],
+      // The full count, not the listed one, so the block still says how much it
+      // is not showing.
+      total: state.entries.length,
+      // Every session shares the global half, so it gets its own smaller cap —
+      // in entries and in bytes, because a count cap alone still let it take
+      // most of the block once the entries were Chinese.
+      ...state.scope === 'global' && projectHasEntries
+        ? { maxEntries: this.settings.globalSummaryEntries, maxBytes: this.settings.globalSummaryBytes }
+        : {},
+    }))
+    const note = await this.draftNote()
+    // Check the citations of what is about to be shown, not of the whole store:
+    // a few paths per session is affordable, and a warning on a bullet nobody
+    // sees is worth nothing.
+    const flags = await this.citationFlags(session, selected.flat()).catch(() => new Map<string, string>())
+    const result = renderMemorySummaryResult(scopes, {
+      maxBytes: this.settings.maxSummaryBytes,
+      maxEntriesPerScope: this.settings.maxSummaryEntries,
+      ...note === undefined ? {} : { note },
+      ...flags.size === 0 ? {} : { flags },
+    })
+    if (result === undefined) return undefined
+    // The profile goes FIRST: it is the context the rest of the turn is read
+    // against, and it is bounded and stable, so it costs one cached block.
+    const persona = renderPersonaBlock(
+      await readPersona(this.store.memoriesDir).catch(() => undefined),
+      this.settings.personaMaxBytes,
+    )
+    return { text: persona === undefined ? result.text : `${persona}\n\n${result.text}`, surfaced: result.listed }
+  }
+
+  /**
+   * The consolidation decisions waiting for a person.
+   *
+   * @returns one row per decision, newest pass first.
+   */
+  async disputes(): Promise<readonly ConsolidationDispute[]> {
+    const pending = await readPendingPlan(this.store.memoriesDir)
+    return pending === undefined ? [] : pending.disputes
+  }
+
+  /**
+   * Accept or reject one waiting decision.
+   *
+   * Accepting applies only that item — the plan fragment stored beside the row —
+   * so a person can take the safe-looking half of a pass without taking all of
+   * it. Rejecting changes nothing: the entry stays exactly as it was.
+   *
+   * @param id - entry id the decision is about.
+   * @param decision - `accept` applies it, `reject` drops it.
+   * @returns a human-readable outcome, or `undefined` when nothing matched.
+   */
+  async resolveDispute(id: string, decision: 'accept' | 'reject'): Promise<string | undefined> {
+    const pending = await readPendingPlan(this.store.memoriesDir)
+    if (pending === undefined) return undefined
+    const row = pending.disputes.find((item) => item.id === id)
+    if (row === undefined) return undefined
+    const root = pending.projectRoot.length > 0 ? pending.projectRoot : undefined
+    if (decision === 'accept') {
+      const upsert = pending.plan.upserts.find((item) => item.id === id)
+      const retire = pending.plan.retire.includes(id)
+      const entries = await this.scopeEntries(root)
+      const snapshot = entries.filter((entry) => entry.id === id)
+      try {
+        await applyPlan(
+          { upserts: upsert === undefined ? [] : [upsert], retire: retire ? [id] : [], skills: [], notes: '' },
+          this.consolidationTarget(),
+          root,
+          { entries: snapshot },
+        )
+        this.log.info('dsh-memories: accepted the consolidation decision for %s (%s)', id, row.action)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        this.log.warn('dsh-memories: accepting the decision for %s failed and was rolled back: %s', id, message)
+        return `Applying that decision failed and was rolled back: ${message}`
+      }
+    } else {
+      this.log.info('dsh-memories: rejected the consolidation decision for %s (%s)', id, row.action)
+    }
+    await this.removeDispute(id)
+    return decision === 'accept'
+      ? `Applied: ${row.action === 'retire' ? 'retired' : 'rewrote'} “${row.title}”.`
+      : `Kept “${row.title}” unchanged.`
+  }
+
+  /** Load the entries of one scope pair, for a single-item apply. */
+  private async scopeEntries(root: string | undefined): Promise<readonly MemoryEntry[]> {
+    const global = await this.store.list('global', undefined, { fresh: true })
+    const project = root === undefined ? [] : await this.store.list('project', root, { fresh: true })
+    return [...global, ...project]
+  }
+
+  /** Drop one row from the waiting set, clearing the file when it empties. */
+  private async removeDispute(id: string): Promise<void> {
+    const pending = await readPendingPlan(this.store.memoriesDir)
+    if (pending === undefined) return
+    const disputes = pending.disputes.filter((row) => row.id !== id)
+    if (disputes.length === 0) {
+      await clearPendingPlan(this.store.memoriesDir)
+      return
+    }
+    await writePendingPlan(this.store.memoriesDir, {
+      plan: {
+        upserts: pending.plan.upserts.filter((item) => item.id !== id),
+        retire: pending.plan.retire.filter((item) => item !== id),
+        skills: [],
+        notes: pending.plan.notes,
+      },
+      disputes,
+      projectRoot: pending.projectRoot,
+      at: pending.at,
+      label: pending.label,
+    })
+  }
+
+  /**
+   * Describe the decisions waiting for a person.
+   *
+   * @returns a human-readable summary, or `undefined` when nothing is staged.
+   */
+  async pendingPlan(): Promise<string | undefined> {
+    const pending = await readPendingPlan(this.store.memoriesDir)
+    if (pending === undefined) return undefined
+    const lines = [
+      `${pending.disputes.length} consolidation decision${pending.disputes.length === 1 ? '' : 's'} need you (${pending.label}, staged ${new Date(pending.at).toISOString()}):`,
+    ]
+    for (const row of pending.disputes.slice(0, 12)) {
+      lines.push(`  [${row.action === 'retire' ? '退役' : '改写'}] ${row.title}`)
+      lines.push(`      ${row.reason}`)
+    }
+    if (pending.disputes.length > 12) lines.push(`  … ${pending.disputes.length - 12} more`)
+    lines.push('', '在 设置 → 记忆 → 待裁决 里逐条处理，或 /memories apply 全部接受 / /memories reject 全部丢弃。')
+    return lines.join('\n')
+  }
+
+  /**
+   * Apply every waiting decision.
+   *
+   * @param _parent - the agent asking; the stored rows carry their own scope.
+   * @returns a human-readable summary, or `undefined` when nothing is staged.
+   */
+  async applyPendingPlan(_parent: Agent): Promise<string | undefined> {
+    const pending = await readPendingPlan(this.store.memoriesDir)
+    if (pending === undefined) return undefined
+    const root = pending.projectRoot.length > 0 ? pending.projectRoot : undefined
+    const entries = await this.scopeEntries(root)
+    try {
+      const result = await applyPlan(pending.plan, this.consolidationTarget(), root, { entries })
+      await clearPendingPlan(this.store.memoriesDir)
+      this.log.info('dsh-memories: applied %d waiting consolidation decision(s): %d written, %d retired', pending.disputes.length, result.written, result.retired)
+      return `Applied ${pending.disputes.length} decision${pending.disputes.length === 1 ? '' : 's'}: ${result.written} written, ${result.retired} retired.`
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      this.log.warn('dsh-memories: applying the waiting decisions failed: %s', message)
+      return `Applying them failed and the store was rolled back: ${message}`
+    }
+  }
+
+  /**
+   * The one line this plugin wants in the summary but cannot express as a memory.
+   *
+   * Staged skill drafts are the only state that needs a human: consolidation
+   * produces them, they are invisible to the model (the harness scans its own
+   * skill roots, not the memory store), and nothing else ever mentions them
+   * again. Measured on a real store: 13 drafts had accumulated over a week and
+   * none had ever been promoted, because the only notice was a line in one
+   * session's consolidation reply.
+   *
+   * @returns the note, or `undefined` when nothing is waiting.
+   */
+  private async draftNote(): Promise<string | undefined> {
+    const lines: string[] = []
+    const pending = await readPendingPlan(this.store.memoriesDir).catch(() => undefined)
+    if (pending !== undefined) {
+      lines.push(`Pending consolidation proposal for ${pending.label}: ${pending.plan.upserts.length} to write, ${pending.plan.retire.length} to retire — review with /memories plan, then /memories apply or /memories reject.`)
+    }
+    // `dshHome` filters out drafts whose promoted copy is byte-identical: the
+    // banner used to report already-promoted skills as pending forever.
+    const drafts = await listDrafts(this.store.memoriesDir, this.deployment.dshHome).catch(() => [])
+    if (drafts.length > 0) {
+      const names = drafts.slice(0, 3).map((draft) => draft.name).join(', ')
+      const more = drafts.length > 3 ? `, +${drafts.length - 3} more` : ''
+      lines.push(`Pending skill drafts (${drafts.length}): ${names}${more} — promote with /memories promote <name> or discard with /memories discard <name>.`)
+    }
+    return lines.length === 0 ? undefined : lines.join(' ')
+  }
+
+  /**
+   * Record that these entries entered a conversation.
+   *
+   * The state database is authoritative and the entry file is only a mirror for
+   * a human reader, refreshed at most hourly: rewriting a dozen markdown files
+   * on every injection would cost more than the mark is worth.
+   *
+   * @param session - conversation the entries appeared in.
+   * @param entries - the entries shown.
+   */
+  private async markSurfaced(session: Session, entries: readonly MemoryEntry[]): Promise<void> {
+    if (entries.length === 0) return
+    const seen = this.seenIds(session)
+    const root = await this.projectRoot(session)
+    // A project entry cannot be marked in a scope that does not exist; the
+    // counter still moves, only the markdown mirror is skipped.
+    await Promise.all(entries.map(async (entry) => {
+      seen.add(entry.id)
+      const at = this.state.bumpSurfaced(entry.scope, entry.id)
+      if (entry.scope === 'project' && root === undefined) return
+      if (entry.lastSurfacedAt >= at - 3_600_000) return
+      await this.store.writeCounters(entry, entry.scope === 'project' ? root : undefined, {
+        uses: entry.uses,
+        lastUsedAt: entry.lastUsedAt,
+        surfacedAt: at,
+      }).catch(() => undefined)
+    }))
+  }
+
+  /**
+   * Decide what the model should see at this step boundary.
+   *
+   * The block enters exactly ONCE per conversation: at the first step where the
+   * store has something to say. Nothing re-injects afterwards, so a long session
+   * pays for its memories once instead of once per turn, and every later recall
+   * goes through `memory_search`.
+   *
+   * "Once" is decided by the CONVERSATION, not by this process: the block is a
+   * durable user message, so {@link carriesRecall} answers whether the model can
+   * already see one. A restarted harness restores that message with the rest of
+   * the history, so it does not inject a second copy; `clear` and `compact`
+   * replace the history and therefore legitimately bring the block back (which is
+   * why {@link resetInjection} drops this process's cache there).
+   *
+   * An empty store deliberately leaves the session unmarked: the block should
+   * still appear later if the first memory arrives after the session started.
+   *
+   * @param agent - the agent whose next step is being prepared.
+   * @returns the message to enter the conversation, or `undefined` when this
+   *   conversation already carries one.
+   */
+  async injectionFor(agent: Agent): Promise<UserMessage | undefined> {
+    const session = agent.session
+    // The cache only avoids re-reading the history on every step of a turn;
+    // checking it first also keeps the common case free of a state-database read.
+    if (this.injected.has(session)) return undefined
+    if (this.sessionOff(session)) return undefined
+    if (this.carriesRecall(session)) {
+      this.injected.add(session)
+      return undefined
+    }
+    const summary = await this.summaryWithSurfaced(session, this.openingQuery(session))
+    if (summary === undefined) return undefined
+    this.injected.add(session)
+    await this.markSurfaced(session, summary.surfaced)
+    // Report what the block actually SHOWS, not how many entries were offered:
+    // the two differ by design (the byte budget drops the tail), and a log that
+    // counts the selection makes a working budget look like a broken one.
+    this.log.info('dsh-memories: injected the summary into session %s (%d bytes, %d entries listed)',
+      session.id, Buffer.byteLength(summary.text, 'utf8'), summary.surfaced.length)
+    return createUserMessage({
+      content: [{ type: 'text', text: summary.text }],
+      source: { kind: MEMORY_SOURCE_KIND, form: 'recall' },
+    })
+  }
+
+  /**
+   * Whether the model-visible history already carries a memory block.
+   *
+   * `deriveMessages` projects each surface node exactly once and caches the
+   * result, so asking is cheap even on a long session. Any failure reads as "no
+   * block", whose worst case is one redundant injection — never a failed turn.
+   */
+  private carriesRecall(session: Session): boolean {
+    try {
+      return session.deriveMessages().some((message) => {
+        const source = message.source
+        if (source.kind !== MEMORY_SOURCE_KIND || source.form !== 'recall') return false
+        // Both blocks carry this form, so the SUMMARY is the one whose frame
+        // says so: an on-demand delta must not count as the once-per-
+        // conversation block, or the summary would never be injected.
+        const blocks = message.content as readonly { type: string; text?: string }[]
+        return blocks.some((block) => block.type === 'text' && (block.text ?? '').includes(MEMORY_OPEN))
+      })
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * The conversation's opening user text, as a topic signal for injection.
+   *
+   * The summary is built before the model has seen anything, so this is the only
+   * evidence about what the session is actually for. Plugin-sourced user
+   * messages (the injected block itself) are skipped, and the result is capped
+   * because it is a relevance hint, not the transcript.
+   *
+   * @param session - session being injected.
+   * @returns the first real user text, or `undefined` when there is none yet.
+   */
+  private openingQuery(session: Session): string | undefined {
+    try {
+      for (const message of session.deriveMessages()) {
+        if (message.role !== 'user') continue
+        // 0.2.0 起 MessageSource 只剩 'user' | 'model' | 'tool' | 'system-prompt'，
+        // 不再有 'plugin'（dsh-llm/lib/types/message.d.ts:19/23/28/103）。原先那句
+        // `source.kind === 'plugin'` 已成为不可能的窄化，TS2367 报错，故删除。
+        const blocks = message.content as readonly { type: string; text?: string }[]
+        const text = blocks
+          .filter((block) => block.type === 'text' && typeof block.text === 'string')
+          .map((block) => block.text ?? '')
+          .join(' ')
+          .replace(/\s+/gu, ' ')
+          .trim()
+        if (text.length > 0) return text.slice(0, 400)
+      }
+    } catch {
+      // A history this process cannot project just means no topic hint.
+      return undefined
+    }
+    return undefined
+  }
+
+  /** Re-arm injection for one session (used on `clear`/`compact` restarts). */
+  resetInjection(session: Session): void {
+    this.injected.delete(session)
+    this.recallCounts.delete(session)
+    this.surfacedIds.delete(session)
+    this.helpedIds.delete(session)
+    // A compacted conversation is a new one, and its first near miss is worth
+    // reporting again — the budget is per conversation for a reason.
+    this.nearMissLogged.delete(session)
+  }
+
+  /**
+   * Credit the injected memories this turn is actually about.
+   *
+   * The ranking's only demand signal used to be "was this memory searched for",
+   * which measures lookup-style knowledge — the entries a session goes looking
+   * for — and misses the ones that were handed over and silently used. Measured
+   * on a real store, the top-read memories were all of the first kind, and the
+   * six rules a person had written were never read at all.
+   *
+   * The gate is the same credit rule the recall path uses, deliberately: a mere
+   * shared word must not count, or every injected memory would earn a use in
+   * every conversation and the signal would be worthless. Each entry is credited
+   * at most once per conversation.
+   *
+   * @param agent - the agent whose next step is being prepared.
+   */
+  async creditInjectedUse(agent: Agent): Promise<void> {
+    const session = agent.session
+    const injected = this.surfacedIds.get(session)
+    if (injected === undefined || injected.size === 0) return
+    if (this.sessionOff(session)) return
+    const credited = this.helpedIds.get(session) ?? new Set<string>()
+    this.helpedIds.set(session, credited)
+    const pending = [...injected].filter((id) => !credited.has(id))
+    if (pending.length === 0) return
+    const query = this.latestUserText(session)
+    if (query === undefined || !isSubstantiveTurn(query)) return
+    const root = await this.projectRoot(session)
+    const states = await this.allScopes(session)
+    const hub = this.hubFor(states)
+    for (const state of states) {
+      for (const entry of state.entries) {
+        if (!pending.includes(entry.id)) continue
+        // The same gate the recall path uses, so an injected memory is only
+        // credited as "used" under the evidence a recall would have demanded.
+        const why = matchCredit(entry, query, this.settings.recallMinScore, this.settings.recallMinTerms, {
+          ...hub === undefined ? {} : { hub },
+        })
+        if (!why.about) continue
+        credited.add(entry.id)
+        this.log.decision('dsh-memories: injected memory %s was used by the conversation (relevance %d)', entry.id, why.relevance)
+        await this.touchEntry(entry, state.scope === 'project' ? root : undefined)
+      }
+    }
+  }
+
+  /**
+   * At most one archived memory that answers this turn.
+   *
+   * The archive is a graveyard only if nothing reads it: 70% of what sits there
+   * was genuinely used before it was retired, and the recall path is the only
+   * thing that could still reach it. One entry, because a retired memory is a
+   * weaker claim than a live one and the block has a byte budget.
+   *
+   * @param session - session whose scopes to search.
+   * @param states - the live scopes; the archive is searched per scope.
+   * @param query - the turn's text.
+   * @param hub - the term discount, when enabled.
+   * @returns zero or one retired entry, best first.
+   */
+  private async archivedFor(
+    session: Session,
+    states: readonly ScopeState[],
+    query: string,
+    hub: ((term: string) => boolean) | undefined,
+  ): Promise<readonly MemoryEntry[]> {
+    const root = await this.projectRoot(session)
+    const window = parseTimeRange(query)
+    const hits: { entry: MemoryEntry; relevance: number }[] = []
+    for (const state of states) {
+      const retired = await this.store.listArchived(state.scope, state.scope === 'project' ? root : undefined)
+        .catch(() => [] as readonly MemoryEntry[])
+      // Archive hits are rare and the list only grows, so this is the first place
+      // the inverted index pays for itself: score the entries that share a token
+      // with the turn instead of every retired memory ever written.
+      for (const entry of prefilterEntries(retired, query)) {
+        const why = matchCredit(entry, query, this.settings.recallMinScore, this.settings.recallMinTerms, {
+          range: window ?? null,
+          ...hub === undefined ? {} : { hub },
+        })
+        if (why.about) hits.push({ entry, relevance: why.relevance })
+      }
+    }
+    hits.sort((left, right) => right.relevance - left.relevance || right.entry.updatedAt - left.entry.updatedAt)
+    return hits.slice(0, 1).map((hit) => hit.entry)
+  }
+
+  /**
+   * Which query terms are too common in these scopes to count as evidence.
+   *
+   * Cached against a signature of the store (entry count plus newest update), so
+   * a turn costs one comparison and the document-frequency sweep runs only when
+   * something was written. Disabled below 20 entries: with a handful of memories
+   * "more than a quarter of the scope" is not a meaningful claim about a word.
+   *
+   * @param states - the scopes this turn can see.
+   * @returns the predicate, or `undefined` when the discount is off.
+   */
+  private hubFor(states: readonly ScopeState[]): ((term: string) => boolean) | undefined {
+    const maxDf = this.settings.evidenceMaxDf
+    if (maxDf <= 0) return undefined
+    const entries = states.flatMap((state) => state.entries)
+    if (entries.length < 20) return undefined
+    let newest = 0
+    for (const entry of entries) if (entry.updatedAt > newest) newest = entry.updatedAt
+    const signature = `${entries.length}:${newest}`
+    const cached = this.hubCache.get(signature)
+    if (cached !== undefined) return cached
+    const hub = hubTerms(entries, maxDf)
+    this.hubCache.clear()
+    this.hubCache.set(signature, hub)
+    return hub
+  }
+
+  /**
+   * The on-demand recall delta for this step, or `undefined` when nothing is
+   * worth adding.
+   *
+   * `recallMode: 'on-demand'` answers the one real weakness of injecting once:
+   * the summary is a snapshot from the start of the conversation, so a memory
+   * that only becomes relevant ten turns later stays invisible unless the model
+   * thinks to search for it. The delta is deterministic — the same scorer the
+   * tool uses, with no extra model call — and bounded three ways: a score
+   * threshold, a per-conversation cap, and one entry per block. Every entry it
+   * shows is recorded, so a delta never repeats what the summary listed.
+   *
+   * @param agent - the agent whose next step is being prepared.
+   * @returns the message to enter the conversation, or `undefined`.
+   */
+  async recallFor(agent: Agent): Promise<UserMessage | undefined> {
+    if (this.settings.recallMode !== 'on-demand') return undefined
+    const session = agent.session
+    // The budget is checked before the session switch because it lives in memory:
+    // once the cap is reached, no step pays for a state-database read again.
+    const used = this.recallCounts.get(session) ?? 0
+    const remaining = this.settings.recallMaxPerConversation - used
+    if (remaining <= 0) return undefined
+    if (this.sessionOff(session)) return undefined
+    const query = this.latestUserText(session)
+    // A one-word acknowledgement has nothing a memory could be about; skipping it
+    // also avoids a full store scan on every "好" the user types.
+    if (query === undefined || !isSubstantiveTurn(query)) return undefined
+    const seen = this.seenIds(session)
+    const states = await this.allScopes(session)
+    // Resolved once for the turn: this loop scores every entry in the store.
+    const window = parseTimeRange(query)
+    // Which words are too common in these scopes to prove anything. Computed
+    // once for the turn and cached until the store changes.
+    const hub = this.hubFor(states)
+    const eligible: (MatchCredit & { entry: MemoryEntry })[] = []
+    let near: { id: string; relevance: number; terms: number } | undefined
+    for (const state of states) {
+      // The index narrows the scan to entries that share a token with the turn.
+      // It is a superset of anything the matcher can accept, and it falls back to
+      // the full list when too few candidates remain — so a recall can be slower
+      // than it needs to be, never wrong.
+      for (const entry of prefilterEntries(state.entries, query)) {
+        if (seen.has(entry.id)) continue
+        // One gate, two questions — see `matchCredit`. The floor is the caller's
+        // knob; the credit rule is structural and is what keeps a Chinese turn
+        // from recalling every memory that shares a common word like 插件 or 日志.
+        const why = matchCredit(entry, query, this.settings.recallMinScore, this.settings.recallMinTerms, {
+          range: window ?? null,
+          ...hub === undefined ? {} : { hub },
+        })
+        if (!why.about) {
+          // Remember the closest miss, so "why was nothing recalled?" has an
+          // answer in the log instead of being a silence.
+          if (why.relevance > 0 && (near === undefined || why.relevance > near.relevance)) {
+            near = { id: entry.id, relevance: why.relevance, terms: why.evidence.strongTerms }
+          }
+          continue
+        }
+        eligible.push({ entry, ...why })
+      }
+    }
+    if (eligible.length === 0) {
+      // Nothing live answers this turn. An entry retired by the cap, folded by a
+      // rewrite or aged out can still hold the answer, and "we used to say this"
+      // costs one line where silence is a miss the reader never learns about.
+      const retired = await this.archivedFor(session, states, query, hub)
+      if (retired.length > 0) {
+        const text = renderRecall([], this.settings.recallMaxBytes, retired)
+        if (text !== undefined) {
+          for (const entry of retired) seen.add(entry.id)
+          this.recallCounts.set(session, used + retired.length)
+          this.log.info('dsh-memories: session %s recalled %s from the archive (nothing live matched)',
+            session.id, retired.map((entry) => entry.id).join(', '))
+          return createUserMessage({
+            content: [{ type: 'text', text }],
+            source: { kind: MEMORY_SOURCE_KIND, form: 'recall' },
+          })
+        }
+      }
+      // The detail is RENDERED, not passed as arguments: the host's formatter
+      // understands `%s`/`%d`/`%o` and nothing else, so a nested format string
+      // passed as one `%s` arrives with its own placeholders still in it. That
+      // is not cosmetic — these lines exist to be read after the fact, and a
+      // line full of `%.1f` and `${detail}` is exactly as unreadable as silence.
+      const detail = `closest ${near?.id ?? 'none'} at relevance ${(near?.relevance ?? 0).toFixed(1)}`
+        + ` with ${near?.terms ?? 0} strong terms; needs relevance >=${this.settings.recallMinScore}`
+        + ` and either ${this.settings.recallMinTerms} strong terms, one substantive term above`
+        + ` ${this.settings.recallMinScore * QUALIFIED_SCORE_FACTOR}, or an exact phrase`
+        // The window is part of "why nothing matched": a turn that said 上周 and
+        // got nothing looks identical to one that said nothing at all, unless
+        // the line says which window it used.
+        + `${window === undefined ? '' : `; window ${window.label}`}`
+      this.log.decision('dsh-memories: session %s recalled nothing (%s)', session.id, detail)
+      // One line per conversation, and only for the case that means something:
+      // a memory that CLEARED the relevance floor and was still turned away by
+      // the evidence gate. That is the gate doing the deciding, and it is how a
+      // mis-tuned gate hides — a path that legitimately has nothing to offer
+      // looks identical from the outside. Measured here: with the shared-run rule
+      // asking for three consecutive characters, every ordinary mid-conversation
+      // turn produced one of these, and six turns in a row recalled nothing at
+      // all with the right memory sitting one shared pair away.
+      if (near !== undefined && near.relevance >= this.settings.recallMinScore && !this.nearMissLogged.has(session)) {
+        this.nearMissLogged.add(session)
+        this.log.info('dsh-memories: session %s had a near miss worth reading: %s', session.id, detail)
+      }
+      return undefined
+    }
+    // Ranked by the decayed score, so recency and the entry's own track record
+    // break ties between equally relevant memories. The one-hop neighbours go in
+    // before the sort and carry a score below every credited entry, so they can
+    // only fill slots the lexical path left empty — the case this exists for is
+    // a turn that names one fragment of something the store filed in several.
+    const related = relatedHits(
+      this.groups(states),
+      eligible.slice(0, EXPAND_SEEDS).map((item) => ({ entry: item.entry, score: item.score })),
+      { exclude: new Set([...seen, ...eligible.map((item) => item.entry.id)]), limit: remaining },
+    )
+    for (const hit of related) {
+      eligible.push({
+        entry: hit.entry,
+        about: true,
+        distinctive: false,
+        credited: false,
+        relevance: 0,
+        score: hit.score,
+        best: '',
+        evidence: { strongTerms: 0, phrase: false },
+      })
+    }
+    /** Which of the candidates arrived over a hop, and from which seed, for the log line below. */
+    const relatedVia = new Map(related.map((hit) => [hit.entry.id, hit.via ?? '']))
+    eligible.sort((left, right) => right.score - left.score
+      || right.entry.updatedAt - left.entry.updatedAt
+      || left.entry.title.localeCompare(right.entry.title))
+    const picked: (MatchCredit & { entry: MemoryEntry })[] = []
+    for (const candidate of eligible) {
+      if (picked.length >= remaining) break
+      // `renderRecall` is the budget's authority: if one more entry would not fit,
+      // it returns `undefined` and the block keeps the entries already chosen.
+      if (renderRecall([...picked, candidate].map((item) => item.entry), this.settings.recallMaxBytes) === undefined) break
+      picked.push(candidate)
+    }
+    if (picked.length === 0) return undefined
+    const text = renderRecall(picked.map((item) => item.entry), this.settings.recallMaxBytes)
+    if (text === undefined) return undefined
+    // Info, not `decision`: a delta is the rarer half of this path — at most
+    // `recallMaxPerConversation` per conversation — and the silence below is the
+    // expensive one. This plugin has already paid for a 32-hour background stall
+    // that was invisible because the only evidence sat at debug level under a
+    // stock `logLevel`; a recall that fires is cheap to report and impossible to
+    // reconstruct afterwards.
+    // Rendered, not formatted: the host's formatter handles `%s`/`%d`/`%o` and
+    // nothing else, so `%.1f` and `%j` used to reach the file verbatim — this
+    // line had been unreadable in the field the whole time.
+    //
+    // Two additions (2026-09-29), both so that the two mechanisms added the same
+    // day can be confirmed from the log instead of inferred: which time window
+    // the turn resolved to, and how many of the recalled entries came in over a
+    // hop rather than by matching the words.
+    const hopped = picked.filter((item) => relatedVia.has(item.entry.id))
+    const extras = `${window === undefined ? '' : `, window ${window.label}`}`
+      + `${hopped.length === 0 ? '' : `, +${hopped.length} related via ${[...new Set(hopped.map((item) => relatedVia.get(item.entry.id)))].join(',')}`}`
+    this.log.info('dsh-memories: session %s recalled %s (relevance %s, score %s%s, via %s)',
+      session.id, picked.map((item) => item.entry.id).join(', '),
+      picked[0]!.relevance.toFixed(1), picked[0]!.score.toFixed(1), extras,
+      JSON.stringify((picked[0]!.best ?? '').slice(0, 80)))
+    this.recallCounts.set(session, used + picked.length)
+    await this.markSurfaced(session, picked.map((item) => item.entry))
+    return createUserMessage({
+      content: [{ type: 'text', text }],
+      // The same form as the summary block; `carriesRecall` tells them apart by
+      // the frame, so a delta never suppresses the once-per-conversation block.
+      source: { kind: MEMORY_SOURCE_KIND, form: 'recall' },
+    })
+  }
+
+  /**
+   * The newest user-authored message, which is what the current turn is about.
+   *
+   * Tool results and this plugin's own injected blocks are skipped: a recall
+   * decision must be driven by the human, not by the assistant's output or by
+   * the memory block itself.
+   *
+   * @param session - session to read.
+   * @returns the text, or `undefined` when no user message is on the surface.
+   */
+  private latestUserText(session: Session): string | undefined {
+    try {
+      const messages = session.deriveMessages()
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const message = messages[index]
+        if (message === undefined || message.role !== 'user') continue
+        if (message.source.kind !== 'user') continue
+        const blocks = message.content as readonly { type: string; text?: string }[]
+        const text = blocks
+          .filter((block) => block.type === 'text' && typeof block.text === 'string')
+          .map((block) => block.text ?? '')
+          .join('\n')
+          .trim()
+        if (text.length < this.settings.recallMinQueryChars) return undefined
+        if (text.length > 0) return text.slice(0, 2_000)
+      }
+    } catch {
+      return undefined
+    }
+    return undefined
+  }
+
+  /** Whether memory is switched off for one session. */
+  private sessionOff(session: Session): boolean {
+    return this.state.getSessionMode(session.id) === 'off'
+  }
+
+  /** Entry ids already shown to one conversation, created on first use. */
+  private seenIds(session: Session): Set<string> {
+    const existing = this.surfacedIds.get(session)
+    if (existing !== undefined) return existing
+    const created = new Set<string>()
+    this.surfacedIds.set(session, created)
+    return created
+  }
+
+  /**
+   * Whether background passes are paused right now.
+   *
+   * Codex gates memory work on a provider-reported remaining-quota percentage;
+   * DSH exposes no such number, so the gate here is the refusal itself (see
+   * {@link noteLimitRefusal}).
+   *
+   * @returns true while a recorded wait has not elapsed.
+   */
+  private backgroundPaused(): boolean {
+    if (!this.settings.pauseOnQuotaError) return false
+    return this.state.isLimited()
+  }
+
+  /**
+   * Pause background passes after a provider refused for quota or rate.
+   *
+   * Only refusals pause: a malformed reply, a timeout, or a missing route says
+   * nothing about the account's remaining quota, and treating them as refusals
+   * would stop extraction for reasons the cooldown cannot fix.
+   *
+   * @param error - the failure thrown by an extraction or consolidation call.
+   */
+  private noteLimitRefusal(error: unknown): void {
+    if (!this.settings.pauseOnQuotaError) return
+    const code = (error as { code?: unknown } | null | undefined)?.code
+    const message = error instanceof Error ? error.message : String(error)
+    // 0.2.0 起 dsh-llm 把配额错误拆成两个码：QUOTA_EXCEEDED_CODE="QUOTA"（网关侧）与
+    // ACCOUNT_QUOTA_EXCEEDED_CODE="ACCOUNT_QUOTA"（账号额度用尽）。只比对前者会让「账号额度
+    // 用尽」不再触发暂停与冷却（2026-09-29 对照 0.2.0-rc.1 的 dsh-llm/lib/index.js:138/140 定位）。
+    // 本包 peer 已收紧到 ^0.2.0-rc.1，两个常量都保证存在。
+    if (code !== 'RATE_LIMIT' && code !== QUOTA_EXCEEDED_CODE && code !== ACCOUNT_QUOTA_EXCEEDED_CODE && !isQuotaExceededError(message)) return
+    const base = this.settings.quotaCooldownMinutes * 60_000
+    const max = Math.max(base, this.settings.quotaCooldownMaxMinutes * 60_000)
+    const state = this.state.noteLimitFailure(message.slice(0, 200), base, max)
+    this.log.warn(
+      'dsh-memories: provider refused background work (%s), pausing background passes for %d min',
+      typeof code === 'string' ? code : 'quota',
+      Math.round((state.until - state.at) / 60_000),
+    )
+  }
+
+  /**
+   * Record that a session was used just now.
+   *
+   * This is the input the `maxAgeDays` gate reads. It is deliberately separate
+   * from the extraction watermark: a session can be used for days without ever
+   * being mined (background extraction needs a long-lived process), and the age
+   * gate must still see it as recent.
+   */
+  recordActivity(session: Session, now = Date.now()): void {
+    this.state.touchSession(session.id, now)
+  }
+
+  /** Whether one session is eligible for extraction (scope and configuration). */
+  private eligible(session: Session): boolean {
+    if (!this.settings.autoExtract) return false
+    if (session.header.origin === 'subagent') return false
+    if (session.header.delegationDepth !== undefined && session.header.delegationDepth > 0) return false
+    return this.withinAge(session)
+  }
+
+  /**
+   * Whether a session is still young enough to mine.
+   *
+   * `maxAgeDays` keeps a pass from resurrecting very old conversations: past
+   * that horizon a fact is more likely stale than useful, and mining it costs
+   * quota. The clock is the session's last observed activity (see
+   * {@link recordActivity}), not its watermark — a session that was never mined
+   * would otherwise read as infinitely young and the gate would never fire.
+   *
+   * A session with no recorded activity yet is treated as fresh.
+   */
+  private withinAge(session: Session, now = Date.now()): boolean {
+    const limit = this.settings.maxAgeDays
+    if (limit <= 0) return true
+    const activity = this.state.getSession(session.id)?.activityAt
+    if (activity === undefined || activity === 0) return true
+    return now - activity <= limit * 86_400_000
+  }
+
+  /**
+   * Schedule the idle-time extraction pass for a settled agent.
+   *
+   * The timer is unref'd, so a background pass never keeps an otherwise finished
+   * process alive. That means a one-shot run (a headless task, a script) is
+   * normally gone before the pass could fire; extraction is a feature of
+   * long-lived surfaces such as `dsh web`, where the session is still open long
+   * after the user stopped typing. {@link flushExit} covers the remaining case
+   * as far as the process lifecycle allows.
+   */
+  scheduleExtraction(agent: Agent): void {
+    if (!this.eligible(agent.session)) return
+    this.track(agent)
+    this.idleSince.set(agent, Date.now())
+    this.armTimer(agent, backgroundDelayMs(this.settings, new Date()))
+  }
+
+  /**
+   * Arm (or re-arm) one agent's settle timer.
+   *
+   * Kept separate from {@link scheduleExtraction} because a re-arm must not touch
+   * `idleSince`: deferring a pass out of the peak window and then resetting the
+   * quiet-window clock would push the pass back by the full window every time.
+   *
+   * @param agent - the agent whose pass is being waited for.
+   * @param delayMs - how long to wait.
+   */
+  private armTimer(agent: Agent, delayMs: number): void {
+    const existing = this.idleTimers.get(agent)
+    if (existing !== undefined) clearTimeout(existing)
+    const timer = setTimeout(() => {
+      this.idleTimers.delete(agent)
+      // Still inside a peak window? Wait for it to end rather than spending now —
+      // the settle clock keeps running, so the pass runs as soon as it is cheap.
+      const penalty = peakDelayMs(this.settings.peakHours, new Date())
+      if (penalty > 0) {
+        this.log.decision('dsh-memories: session %s deferred for %s of peak hours', agent.session.id, formatDelay(penalty))
+        this.armTimer(agent, penalty)
+        return
+      }
+      void this.mine(agent).then(
+        async (outcome) => {
+          await this.afterPass(agent, outcome.stored)
+        },
+        (error: unknown) => {
+          if (!this.lifecycle.signal.aborted) this.log.warn('dsh-memories: extraction failed for session %s: %o', agent.session.id, error)
+        },
+      ).catch((error: unknown) => {
+        // The rejection handler above only covers `mine` itself. Anything the
+        // fulfilled branch throws (retention, a consolidation enqueue) would
+        // otherwise surface as an unhandled rejection, and Node's default for
+        // that is to end the process — a background memory pass must never be
+        // able to stop the host.
+        this.log.warn('dsh-memories: post-extraction bookkeeping failed for session %s: %o', agent.session.id, error)
+      })
+    }, delayMs)
+    timer.unref?.()
+    this.idleTimers.set(agent, timer)
+  }
+
+  /**
+   * The bookkeeping every pass shares once it has run.
+   *
+   * New material is what makes a consolidation pass worth running; retention
+   * costs no quota and needs no new material, so it runs on its own interval.
+   *
+   * @param agent - the session's agent.
+   * @param stored - how many drafts the pass stored.
+   */
+  private async afterPass(agent: Agent, stored: number): Promise<void> {
+    if (stored > 0) this.enqueueConsolidation(Date.now(), false, await this.projectRoot(agent.session))
+    // Awaited, not fired and forgotten: retention is local file work, it runs at
+    // most once per interval, and leaving it in flight makes the pass's side
+    // effects land after the caller thinks the pass is over.
+    await this.sweepIfDue()
+    // The consolidation pass spends a model call through the subagent seam, so it
+    // can fail in ways this file does not enumerate. It is fired and forgotten
+    // (the job lease owns its retry), which makes an unguarded rejection here an
+    // unhandled one — and an unhandled rejection ends the host by default.
+    void this.consolidateIfDue(agent).catch((error: unknown) => {
+      this.log.warn('dsh-memories: consolidation pass failed: %o', error)
+    })
+  }
+
+  /**
+   * (Re)start the periodic check from the current settings.
+   *
+   * Idempotent, so the settings watcher can call it on every commit: the old
+   * timer is cleared first, and an interval of `0` simply leaves none running.
+   */
+  startPeriodicExtraction(): void {
+    this.stopPeriodicExtraction()
+    // A notice is worth more than 30 minutes of freshness: the digest and the
+    // backlog warning are computed from the log, not from a session, so the first
+    // one should arrive shortly after the host comes up rather than at the next
+    // tick. Skipped under the test runner, which tears its temp dirs down faster
+    // than this delayed write would fire.
+    if (process.env['NODE_TEST_CONTEXT'] === undefined) {
+      const boot = setTimeout(() => {
+        void this.pumpNotices().catch(() => undefined)
+      }, 15_000)
+      boot.unref?.()
+    }
+    const minutes = this.settings.extractIntervalMinutes
+    if (!(minutes > 0)) return
+    const timer = setInterval(() => {
+      // Swallowed here as well as inside the pass: a timer callback that rejects
+      // is an unhandled rejection, and Node's default for one is to exit. No
+      // background memory pass is allowed to take the host down with it.
+      void this.runPeriodicPass().catch((error: unknown) => {
+        this.log.warn('dsh-memories: periodic pass failed: %o', error)
+      })
+    }, minutes * 60_000)
+    timer.unref?.()
+    this.periodicTimer = timer
+  }
+
+  /** Stop the periodic check, if one is running. */
+  stopPeriodicExtraction(): void {
+    if (this.periodicTimer !== undefined) clearInterval(this.periodicTimer)
+    this.periodicTimer = undefined
+  }
+
+  /** The periodic check's timer, when one is armed. */
+  private periodicTimer: NodeJS.Timeout | undefined
+
+  /**
+   * Mine every open session that has something new, in slices.
+   *
+   * This is what keeps a long working session from losing its middle: a
+   * settle-only pass reads the newest slice once and then moves the watermark
+   * past everything before it, so those messages are never mined. The idle window
+   * is deliberately not consulted here — the point is to capture while the
+   * session is still running — but peak hours and the quota gate still are, and
+   * `runMaintenance` inside {@link mine} waits for a natural gap instead of
+   * racing the conversation.
+   *
+   * A session with nothing new costs no model call.
+   *
+   * The pass reports itself in one line, and at info at least once an hour even
+   * when it did nothing. Without that, every gate that skips work (quota pause,
+   * no new material, an ineligible or already-running session, a missing service)
+   * left a trace only at the level the file is configured to drop, and "is the
+   * background extractor alive at all?" had no answer a reader could act on.
+   */
+  async runPeriodicPass(): Promise<void> {
+    if (!this.settings.autoExtract) return
+    if (!(this.settings.extractIntervalMinutes > 0)) return
+    if (this.backgroundPaused()) {
+      this.log.decision('dsh-memories: periodic extraction skipped, background passes are %s', this.backgroundLine())
+      return
+    }
+    const counts = { live: 0, tracked: 0, mined: 0, stored: 0, idle: 0, skipped: 0, failed: 0 }
+    const reasons = new Map<string, number>()
+    const note = (reason: string): void => { reasons.set(reason, (reasons.get(reason) ?? 0) + 1) }
+    // Two sources, because one of them is blind exactly when it matters. `tracked`
+    // only ever holds agents that settled during THIS process, so after a restart
+    // a session nobody has touched yet — the normal case for a restored window —
+    // is invisible to every later pass. The live registry knows about it.
+    const candidates = new Map<string, Agent>()
+    for (const reference of [...this.tracked]) {
+      const agent = reference.deref()
+      if (agent === undefined) {
+        this.tracked.delete(reference)
+        continue
+      }
+      candidates.set(agent.session.id, agent)
+    }
+    const live = this.liveAgents()
+    counts.live = live.length
+    for (const agent of live) if (!candidates.has(agent.session.id)) candidates.set(agent.session.id, agent)
+    // Newest first, and bounded by `maxSessionsPerPass`. The registry made this
+    // pass able to see sessions it never tracked before, and without a bound that
+    // means one model call per live session in a single tick — the knob has
+    // promised a per-pass ceiling all along; only the exit flush applied it.
+    const limit = this.settings.maxSessionsPerPass
+    const ordered = [...candidates.values()].sort((left, right) => this.activityOf(right) - this.activityOf(left))
+    let mined = 0
+    for (const agent of ordered) {
+      if (this.lifecycle.signal.aborted) return
+      counts.tracked += 1
+      const session = agent.session
+      if (!this.eligible(session)) {
+        counts.skipped += 1
+        note('ineligible')
+        continue
+      }
+      if (this.extracting.has(session.id)) {
+        counts.skipped += 1
+        note('already-extracting')
+        continue
+      }
+      if (this.hasNothingNew(session)) {
+        counts.idle += 1
+        note('nothing-new')
+        continue
+      }
+      // Checked before the per-pass budget for the same reason as the peak gate:
+      // a session cooling down after a capped reply would otherwise eat a slot
+      // this pass, and the slot is a model call someone else could have spent.
+      const cooling = this.cappedWaitMs(session.id)
+      if (cooling > 0) {
+        counts.skipped += 1
+        note('capped')
+        this.log.decision('dsh-memories: not mining session %s yet, its last extraction reply was capped and the next attempt is in %s',
+          session.id, formatDelay(cooling))
+        continue
+      }
+      // A refusal that costs nothing must not consume the per-pass budget.
+      // Checked before the cap so a peak window reports `peak N` instead of
+      // `peak N-1, pass-cap 1` — the cap is about model calls, and a peak hour
+      // is the one gate that spends none.
+      if (peakDelayMs(this.settings.peakHours, new Date()) > 0) {
+        counts.skipped += 1
+        note('peak')
+        continue
+      }
+      if (limit > 0 && mined >= limit) {
+        counts.skipped += 1
+        note('pass-cap')
+        break
+      }
+      mined += 1
+      try {
+        const outcome = await this.mine(agent, { ignoreIdleWindow: true })
+        // A pass that ran but stored nothing was deferred, not mined: the reason
+        // is in its own decision line, and only a real pass counts here.
+        if (outcome.stored > 0) {
+          counts.mined += 1
+          counts.stored += outcome.stored
+        } else {
+          counts.skipped += 1
+          if (outcome.reason !== undefined) note(outcome.reason)
+        }
+        await this.afterPass(agent, outcome.stored)
+      } catch (error) {
+        counts.failed += 1
+        this.log.warn('dsh-memories: periodic extraction failed for session %s: %o', session.id, error)
+      }
+    }
+    this.reportPass(counts, reasons)
+    await this.sweepIfDue()
+    // The judgement gate needs a session to route its one question through; the
+    // first candidate of this pass is as good as any. A pump with no session
+    // stays silent about undated loops rather than guessing a route.
+    const routed = [...candidates.values()][0]
+    if (routed !== undefined) {
+      await this.pumpNotices(routed.session)
+      // Reflections are weekly, but the check is cheap and runs here because this
+      // is the only place that reliably has a session to route the call through.
+      await this.runReflectionIfDue(routed.session)
+    }
+  }
+
+  /** Live agents from the harness registry, when the deployment composes one. */
+  private liveAgents(): Agent[] {
+    try {
+      const registry = this.ctx.get('agents') as AgentRegistryLike | undefined
+      if (registry === undefined) return []
+      const agents = registry.roots?.() ?? registry.list?.() ?? []
+      return Array.isArray(agents) ? agents : []
+    } catch {
+      return []
+    }
+  }
+
+  /**
+   * When a session was last seen working, for the "newest first" ordering.
+   *
+   * The state database is the authority (every status transition writes it);
+   * a session the store has never seen falls back to when it was created.
+   */
+  private activityOf(agent: Agent): number {
+    return this.state.getSession(agent.session.id)?.activityAt ?? agent.session.header.createdAt ?? 0
+  }
+
+  /** When the pass last reported itself at info level. */
+  private lastPassReportAt = 0
+
+  /**
+   * Record one periodic pass.
+   *
+   * At info when it changed something, failed, or an hour has passed since the
+   * last info report; at decision level otherwise. The hourly heartbeat is the
+   * point: a pass that does nothing is still evidence, and without it a stall
+   * (every session skipped for a reason nobody can see) is indistinguishable
+   * from a plugin that never ran.
+   */
+  private reportPass(
+    counts: { live: number; tracked: number; mined: number; stored: number; idle: number; skipped: number; failed: number },
+    reasons: ReadonlyMap<string, number> = new Map(),
+  ): void {
+    const detail = [...reasons.entries()]
+      .filter(([, count]) => count > 0)
+      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+      .map(([reason, count]) => `${reason} ${count}`)
+      .join(', ')
+    const line = 'dsh-memories: extract pass: %d live, %d considered, %d mined (%d stored), %d nothing new, %d skipped, %d failed%s'
+    const now = Date.now()
+    const args = [counts.live, counts.tracked, counts.mined, counts.stored, counts.idle, counts.skipped, counts.failed,
+      detail.length > 0 ? ` — ${detail}` : ''] as const
+    if (counts.mined > 0 || counts.failed > 0 || now - this.lastPassReportAt >= PASS_REPORT_INTERVAL_MS) {
+      this.lastPassReportAt = now
+      this.log.info(line, ...args)
+    } else {
+      this.log.decision(line, ...args)
+    }
+  }
+
+  /**
+   * Run the consolidation pass when its cooldown has elapsed.
+   *
+   * The pass needs a parent agent for the subagent seam and is process-level, so
+   * any settled agent serves; a pass already in flight is skipped because the
+   * job lease is exclusive.
+   */
+  private async consolidateIfDue(agent: Agent): Promise<void> {
+    if (!this.settings.consolidate) return
+    if (this.subagents === undefined) {
+      // Same silence the extraction pass used to have: a service that never
+      // arrived at activation would disable consolidation for the whole process
+      // without a word. Say it once.
+      if (!this.warnedNoSubagents) {
+        this.warnedNoSubagents = true
+        this.log.warn('dsh-memories: the subagents service is unavailable, so consolidation cannot run')
+      }
+      return
+    }
+    const job = this.state.getJob(CONSOLIDATE_JOB)
+    if (job === undefined) return
+    if (job.notBefore > Date.now()) return
+    if (agent.status !== 'idle') return
+    // The job stays queued: the settle timer re-arms for the end of the window,
+    // so a pass skipped here gets its turn as soon as tokens are cheap again.
+    const penalty = peakDelayMs(this.settings.peakHours, new Date())
+    if (penalty > 0) {
+      this.log.decision('dsh-memories: consolidation deferred for %s of peak hours', formatDelay(penalty))
+      return
+    }
+    await this.consolidateNow(agent)
+  }
+
+  /** When each agent last entered `idle`; cleared whenever it wakes. */
+  private readonly idleSince = new WeakMap<Agent, number>()
+
+  /**
+   * Whether a settled agent has been quiet long enough for `minIdleHours`.
+   *
+   * The idle timer already waits `autoExtractIdleMs`; this is the second,
+   * independent gate Codex applies — a session that keeps being resumed is not
+   * a finished conversation, so its facts are still moving.
+   */
+  private idleEnough(agent: Agent, now = Date.now()): boolean {
+    const hours = this.settings.minIdleHours
+    if (hours <= 0) return true
+    const since = this.idleSince.get(agent)
+    if (since === undefined) return false
+    return now - since >= hours * 3_600_000
+  }
+
+  /**
+   * Run one extraction as an agent maintenance task.
+   *
+   * `agent.runMaintenance` claims the true idle phase, so a wake that arrives
+   * while the pass runs is queued behind it instead of racing it, and the pass
+   * is cancelled if the agent is torn down. A pass that cannot claim the idle
+   * phase is skipped; the next settle pass tries again.
+   *
+   * @param agent - the settled agent to mine.
+   * @param options - which gates to ignore. The exit flush passes
+   *   `ignoreIdleWindow` (a session being torn down is finished by definition)
+   *   but still respects peak hours, because it is an automatic spend.
+   * @returns how many drafts were stored, and which gate refused when none were.
+   */
+  private async mine(agent: Agent, options: { ignoreIdleWindow?: boolean; ignorePeakHours?: boolean } = {}): Promise<{ stored: number; reason?: MineSkip }> {
+    if (this.sessionOff(agent.session)) return { stored: 0, reason: 'off' }
+    if (options.ignorePeakHours !== true) {
+      const penalty = peakDelayMs(this.settings.peakHours, new Date())
+      if (penalty > 0) {
+        this.log.decision('dsh-memories: not mining session %s, %s of peak hours remain',
+          agent.session.id, formatDelay(penalty))
+        return { stored: 0, reason: 'peak' }
+      }
+    }
+    if (options.ignoreIdleWindow !== true) {
+      if (agent.status !== 'idle') return { stored: 0, reason: 'not-idle' }
+      if (!this.idleEnough(agent)) {
+        this.log.decision('dsh-memories: session %s is not quiet enough yet, still inside the %sh window',
+          agent.session.id, this.settings.minIdleHours)
+        return { stored: 0, reason: 'quiet' }
+      }
+    }
+    // A capped window is still pending, and retrying it on the pass cadence would
+    // repeat the same call that just failed the same way. `/memories mine` does
+    // not come through here: the user asked, so the wait does not apply.
+    const cooling = this.cappedWaitMs(agent.session.id)
+    if (cooling > 0) {
+      this.log.decision('dsh-memories: not mining session %s yet, its last extraction reply was capped and the next attempt is in %s',
+        agent.session.id, formatDelay(cooling))
+      return { stored: 0, reason: 'capped' }
+    }
+    try {
+      return await agent.runMaintenance(async (signal) => this.runExtraction(agent, signal, true))
+    } catch (error) {
+      // Claiming the idle phase can be refused (a wake arrived first), and a
+      // broken seam should not be silent: the pass is skipped either way.
+      this.log.decision('dsh-memories: could not claim the idle phase for session %s: %o', agent.session.id, error)
+      return { stored: 0, reason: 'claim' }
+    }
+  }
+
+  /** Cancel a pending extraction timer. */
+  cancelExtraction(agent: Agent): void {
+    const timer = this.idleTimers.get(agent)
+    if (timer !== undefined) {
+      clearTimeout(timer)
+      this.idleTimers.delete(agent)
+    }
+    this.idleSince.delete(agent)
+  }
+
+  /** Remember an agent so a process exit can still mine it. */
+  private track(agent: Agent): void {
+    this.tracked.add(new WeakRef(agent))
+    this.installExitFlush()
+  }
+
+  /**
+   * Mine every tracked agent once, right now.
+   *
+   * Called at the disposal boundary and from `beforeExit`: a one-shot run (a
+   * headless task, a script) finishes long before the idle timer fires, and
+   * without this the session would never be mined — and its watermark would
+   * never advance, so every later run would re-read the same transcript.
+   *
+   * Each call is bounded, so it cannot hang a shutdown beyond the budget, and a
+   * session is mined at most once per process.
+   *
+   * @param timeoutMs - budget for the whole flush.
+   * @returns how many drafts were stored across every flushed session.
+   */
+  async flushExit(timeoutMs = EXIT_FLUSH_TIMEOUT_MS): Promise<number> {
+    if (!this.settings.autoExtract) return 0
+    const budget = AbortSignal.timeout(timeoutMs)
+    const limit = this.settings.maxSessionsPerPass
+    let stored = 0
+    let mined = 0
+    for (const reference of [...this.tracked]) {
+      const agent = reference.deref()
+      if (agent === undefined) {
+        this.tracked.delete(reference)
+        continue
+      }
+      // Content decides, not a per-process flag: a periodic pass may already have
+      // mined this session, and the minutes that followed it still deserve a pass.
+      // Reading the transcript is free; only the model call costs anything, and
+      // `runExtraction` skips that when the window is empty.
+      if (this.extracting.has(agent.session.id)) continue
+      if (this.hasNothingNew(agent.session)) continue
+      if (budget.aborted || mined >= limit) break
+      mined += 1
+      try {
+        // Forced past the quiet window: at this boundary the session is over, so
+        // that gate would only guarantee a process which exits before
+        // `minIdleHours` never mines anything. Peak hours still apply.
+        stored += (await this.mine(agent, { ignoreIdleWindow: true })).stored
+      } catch (error) {
+        if (!budget.aborted) this.log.warn('dsh-memories: exit extraction failed for session %s: %o', agent.session.id, error)
+      }
+    }
+    return stored
+  }
+
+  /**
+   * What a capped reply blamed: the ceiling and the route the log points at.
+   *
+   * Stored with the cooldown so that changing either one — the fix the log line
+   * asks for — retires the verdict immediately. Without it a user who raises
+   * `extractMaxOutputTokens` and watches the next pass report `capped` has been
+   * told the knob did nothing.
+   */
+  private cappedCause(): string {
+    return `${this.settings.extractMaxOutputTokens}|${this.settings.extractProvider}|${this.settings.extractModel}`
+  }
+
+  /**
+   * How long before this session may be fed to the extractor again, or `0` now.
+   *
+   * @param key - session id.
+   * @returns milliseconds left of the cooldown.
+   */
+  private cappedWaitMs(key: string): number {
+    const record = this.capped.get(key)
+    if (record === undefined) return 0
+    if (record.cause !== this.cappedCause()) {
+      this.capped.delete(key)
+      return 0
+    }
+    const left = record.until - Date.now()
+    // An elapsed cooldown is not a licence to forget the history: the record's
+    // `hits` is what makes the next cap wait longer, so deleting it here would
+    // pin every session to the ladder's first rung forever.
+    if (left <= 0) return 0
+    return left
+  }
+
+  /**
+   * Record a capped reply and return the wait before the next attempt.
+   *
+   * @param key - session id.
+   * @returns milliseconds of cooldown now in force.
+   */
+  private noteCapped(key: string): number {
+    const hits = (this.capped.get(key)?.hits ?? 0) + 1
+    const wait = cappedBackoffMs(hits, this.settings.extractIntervalMinutes * 60_000)
+    this.capped.set(key, { hits, until: Date.now() + wait, cause: this.cappedCause() })
+    return wait
+  }
+
+  /**
+   * Whether a session has nothing after its watermark.
+   *
+   * The check exists so a flush (or a periodic tick) does not spend a model call
+   * to learn that there is nothing to read: walking the surface is free.
+   *
+   * @param session - session to inspect.
+   * @returns true when there is nothing new to mine.
+   */
+  private hasNothingNew(session: Session): boolean {
+    const after = this.state.getSession(session.id)?.lastSeq ?? 0
+    const window = collectWindow(session, after, this.settings.extractWindowMessages, this.settings.extractMaxInputChars)
+    return window.lastSeq === undefined || window.text.trim().length === 0
+  }
+
+  /** Agents that have settled at least once and may need an exit flush. */
+  private readonly tracked = new Set<WeakRef<Agent>>()
+
+  /** Whether the process-exit flush hook is installed. */
+  private exitFlushInstalled = false
+
+  /**
+   * Best-effort flush of every tracked session.
+   *
+   * The primary pass is the settle timer; this exists as a safety net for a
+   * natural process exit, where the tree may already be disposed and the LLM
+   * service gone. Registered on the process rather than through `ctx.effect`,
+   * because an effect disposer runs during teardown — exactly when the flush
+   * must still be armed.
+   */
+  private installExitFlush(): void {
+    if (this.exitFlushInstalled) return
+    this.exitFlushInstalled = true
+    process.on('beforeExit', this.exitFlush)
+  }
+
+  /** Bound `beforeExit` handler. */
+  private readonly exitFlush = (): void => {
+    void this.flushExit().catch(() => undefined)
+  }
+
+  /**
+   * Mine one session's transcript tail and store what it yields.
+   *
+   * Marks the session as mined for this process even when there was nothing new
+   * to store, so the exit flush cannot repeat a call that already ran.
+   *
+   * @param agent - the settled agent to mine.
+   * @param budget - optional outer cancellation (a settle-window or shutdown deadline).
+   * @param force - skip the "is the agent idle" gate; used by the exit flush and
+   *   by `/memories mine`, where the caller has already decided to spend the call.
+   * @returns how many drafts were stored, and which gate refused when none were.
+   */
+  async runExtraction(agent: Agent, budget?: AbortSignal, force = false): Promise<{ stored: number; reason?: MineSkip }> {
+    if (!this.settings.autoExtract) return { stored: 0, reason: 'off' }
+    if (this.backgroundPaused()) {
+      const limit = this.state.getLimit()
+      this.log.debug('dsh-memories: background pass paused until %s (%d refusals)', new Date(limit?.until ?? 0).toISOString(), limit?.failures ?? 0)
+      return { stored: 0, reason: 'quiet' }
+    }
+    if (!force && agent.status !== 'idle') return { stored: 0, reason: 'not-idle' }
+    const session = agent.session
+    const key = session.id
+    if (this.extracting.has(key)) return { stored: 0, reason: 'claim' }
+    const llm = this.llm
+    if (llm === undefined) {
+      // This used to return silently, which made a background extractor that
+      // could never run indistinguishable from one with nothing to do. The
+      // service is optional (`inject` cannot require it without breaking
+      // deployments that compose no model), so the missing case has to speak.
+      if (!this.warnedNoLlm) {
+        this.warnedNoLlm = true
+        this.log.warn('dsh-memories: the llm service is unavailable, so background extraction cannot run')
+      }
+      return { stored: 0, reason: 'no-llm' }
+    }
+    this.extracting.add(key)
+    // Keep the event loop alive for the duration: a one-shot run has nothing
+    // else scheduled, and Node would exit mid-request. Released in `finally`.
+    const hold = setTimeout(() => undefined, this.settings.extractTimeoutMs + 1_000)
+    try {
+      const watermark = this.state.getSession(key)
+      const afterSeq = watermark?.lastSeq ?? 0
+      const window = collectWindow(session, afterSeq, this.settings.extractWindowMessages, this.settings.extractMaxInputChars)
+      if (window.lastSeq === undefined || window.text.trim().length === 0) return { stored: 0, reason: 'empty' }
+      const root = await this.projectRoot(session)
+      const projectLabel = root === undefined ? NO_PROJECT_LABEL : this.store.target('project', root).label
+      const knownTitles = await this.knownTitles(root)
+      // A settle-window pass deliberately does NOT inherit the plugin lifecycle
+      // signal: the plugin is disposed as the process shuts down, and tying the
+      // pass to that signal would abort exactly the pass a one-shot run needs.
+      const signal = budget ?? this.lifecycle.signal
+      let outcome
+      try {
+        outcome = await runExtraction(llm, {
+          session,
+          window,
+          projectLabel,
+          ...knownTitles.length === 0 ? {} : { knownTitles },
+          ...this.settings.extractProvider.length > 0 && this.settings.extractModel.length > 0
+            ? { provider: this.settings.extractProvider, model: this.settings.extractModel }
+            : {},
+          maxOutputTokens: this.settings.extractMaxOutputTokens,
+          maxMemories: this.settings.extractMaxMemories,
+          timeoutMs: this.settings.extractTimeoutMs,
+          signal,
+        })
+      } catch (error) {
+        // A refusal pauses every background pass, then propagates: the caller's
+        // error handling is unchanged, it just runs less often from here on.
+        this.noteLimitRefusal(error)
+        throw error
+      }
+      // Reaching the provider proves quota is available again.
+      this.state.clearLimit()
+      // The spend is reported on the same line as the result: this call belongs
+      // to no session, so the plugin log is the only place it is visible.
+      const spend = outcome.usage === undefined ? '' : ` [${outcome.usage.inputTokens} in / ${outcome.usage.outputTokens} out tokens]`
+      let refusal: MineSkip | undefined
+      if (outcome.kind === 'none') {
+        refusal = outcome.reason === 'no-route' ? 'no-route' : outcome.reason === 'max-tokens' ? 'max-tokens' : 'empty'
+        if (outcome.reason === 'max-tokens') {
+          // At info, not decision: this one is actionable. The extraction reply was
+          // cut off before it produced anything usable, which is exactly the state
+          // that says `extractMaxOutputTokens` is too small for this transcript.
+          //
+          // The route is named with it because the knob is not always the whole
+          // story: the call inherits the session's reasoning level, and a thinking
+          // model bills its reasoning against the same ceiling, so "on
+          // deepseek-flash (reasoning high)" is the difference between raising a
+          // number and putting the extractor on a route that fits the job.
+          this.log.info('dsh-memories: session %s hit the %d-token extraction cap on %s before writing anything usable; raise extractMaxOutputTokens%s',
+            key, this.settings.extractMaxOutputTokens, describeExtractionRoute(outcome.route), spend)
+        } else {
+          this.log.decision('dsh-memories: session %s produced no memories (%s)%s', key, outcome.reason, spend)
+        }
+      } else {
+        const stored: string[] = []
+        for (const draft of outcome.drafts) {
+          const result = await this.persist(session, draft, 'auto')
+          stored.push(result.entry.id)
+        }
+        // The evidence note is part of the result, not a nice-to-have: without it
+        // a memory has no history to check when its wording or age matters.
+        await this.store.writeSessionNote({
+          session: key,
+          at: Date.now(),
+          project: projectLabel,
+          summary: outcome.summary,
+          memories: stored,
+        }).catch((error: unknown) => {
+          this.log.warn('dsh-memories: could not write the evidence note for session %s: %o', key, error)
+        })
+        await this.recordLoops(key, outcome.loops)
+        this.log.info('dsh-memories: stored %d memories from session %s (%s)%s%s', outcome.drafts.length, key, stored.join(', '), spend,
+          outcome.truncated === true ? ` — the reply hit the ${this.settings.extractMaxOutputTokens}-token cap and was salvaged; raise extractMaxOutputTokens to keep the rest` : '')
+        // A pass that always lands on the cap is a pass whose ceiling is the
+        // binding constraint. Saying so is the only way anybody can tell that
+        // `extractMaxMemories` is the knob to raise — measured on a real store,
+        // 50 of 54 passes stopped exactly there and nothing ever said so.
+        if (outcome.dropped > 0) {
+          this.log.info('dsh-memories: the extractor offered %d more than the cap of %d, so they were dropped (raise extractMaxMemories to keep them)',
+            outcome.dropped, this.settings.extractMaxMemories)
+        }
+      }
+      // Only a completed extraction may consume the transcript window. A capped
+      // or incomplete reply is retryable: advancing here would turn a provider
+      // failure into `nothing-new` on every later periodic pass and lose the
+      // unmined conversation permanently. An explicit empty reply is complete
+      // and may advance because the model answered that there was no memory.
+      const advancesWatermark = outcome.kind === 'memories'
+        || outcome.kind === 'none' && outcome.reason === 'empty-reply'
+      if (advancesWatermark) {
+        this.capped.delete(key)
+        this.state.putSession(key, {
+          lastSeq: window.lastSeq,
+          at: Date.now(),
+          ...root === undefined ? {} : { root },
+          activityAt: Date.now(),
+          ...outcome.kind === 'memories' ? { contributed: true } : {},
+        })
+      } else if (outcome.kind === 'none' && outcome.reason === 'max-tokens') {
+        // Keeping the window is the point; this is what keeps it affordable. A
+        // ceiling too small for the transcript fails identically every time, and
+        // the pass cadence would pay for that forever, so consecutive caps back
+        // off. `incomplete` is not treated this way: it is a stream that did not
+        // finish, which the next pass has a real chance of getting through.
+        const wait = this.noteCapped(key)
+        this.log.decision('dsh-memories: session %s has hit the extraction cap %d time(s) in a row; the window stays unmined and the next attempt is in %s',
+          key, this.capped.get(key)?.hits ?? 1, formatDelay(wait))
+      }
+      return { stored: outcome.kind === 'memories' ? outcome.drafts.length : 0, ...refusal === undefined ? {} : { reason: refusal } }
+    } finally {
+      clearTimeout(hold)
+      this.extracting.delete(key)
+    }
+  }
+
+  /** Force an extraction now, ignoring the idle timer and the quiet window (used by `/memories mine`). */
+  async mineNow(agent: Agent): Promise<number> {
+    this.cancelExtraction(agent)
+    const outcome = await this.runExtraction(agent, undefined, true)
+    if (outcome.stored > 0) this.enqueueConsolidation(Date.now(), false, await this.projectRoot(agent.session))
+    return outcome.stored
+  }
+
+  /**
+   * Mark the global consolidation job dirty.
+   *
+   * Enqueueing is cheap and only sets a flag: the pass itself runs on the
+   * cooldown, so a burst of new memories produces one consolidation, not one
+   * per write.
+   *
+   * @param now - clock for the enqueue timestamp.
+   * @param readyNow - skip the cooldown (a manual pass), so the claim that
+   *   follows can succeed immediately.
+   * @param root - workspace root whose project scope this pass should cover;
+   *   recorded so a later pass does not consolidate a different workspace.
+   */
+  enqueueConsolidation(now = Date.now(), readyNow = false, root?: string): void {
+    if (!this.settings.consolidate) return
+    const notBefore = readyNow ? now : now + this.settings.consolidateCooldownHours * 3_600_000
+    const existing = this.state.getJob(CONSOLIDATE_JOB)
+    if (existing !== undefined) {
+      this.state.putJob({ ...existing, enqueuedAt: now, notBefore, ...root === undefined ? {} : { root } })
+      return
+    }
+    this.state.putJob({ key: CONSOLIDATE_JOB, enqueuedAt: now, notBefore, retries: 0, ...root === undefined ? {} : { root } })
+  }
+
+  /**
+   * Run one consolidation pass if the cooldown has elapsed.
+   *
+   * The pass produces a merged plan as JSON; this method is the only writer.
+   * Every failure is contained and backed off, so a broken pass never damages
+   * the store and never retries in a hot loop.
+   *
+   * @param parent - an agent whose subagent seam and lineage the pass uses.
+   * @param options - `apply` writes the result; the default only proposes it.
+   * @returns a human-readable summary, or `undefined` when nothing ran.
+   */
+  /** Why the last {@link consolidateNow} declined, for `/memories consolidate` to report. */
+  get consolidateSkipReason(): string | undefined {
+    return this.consolidateSkip
+  }
+
+  async consolidateNow(parent: Agent, options: { apply?: boolean; force?: boolean } = {}): Promise<string | undefined> {
+    this.consolidateSkip = undefined
+    if (!this.settings.consolidate) {
+      this.consolidateSkip = 'consolidate is turned off in settings (consolidate: false)'
+      return undefined
+    }
+    // A proposal is a question, and a background pass must not spend a model call
+    // to overwrite one nobody has answered yet. Inside the window it leaves the
+    // pending question alone; past it the store has moved on and a fresh proposal
+    // is the honest one. A user who types the command forces it.
+    // An unanswered question goes stale: entries keep arriving while it waits, so
+    // a decision nobody made inside the window is DROPPED rather than applied —
+    // the store has moved on, and changing nothing is the conservative outcome.
+    const pending = await readPendingPlan(this.store.memoriesDir).catch(() => undefined)
+    if (pending !== undefined && options.force !== true && !proposalIsFresh(pending, this.settings.consolidateProposalMaxAgeHours, Date.now())) {
+      await clearPendingPlan(this.store.memoriesDir)
+      this.log.info('dsh-memories: dropped %d unanswered consolidation decision(s) staged %sh ago; the store has moved on',
+        pending.disputes.length, Math.round((Date.now() - pending.at) / 3_600_000))
+    }
+    // A manual pass creates the job when none exists: the cooldown gates the
+    // BACKGROUND pass, and a user who types the command is asking for it now.
+    // Without this, `/memories consolidate` silently did nothing on a store
+    // that had never been mined.
+    const sessionRoot = await this.projectRoot(parent.session)
+    if (this.state.getJob(CONSOLIDATE_JOB) === undefined) this.enqueueConsolidation(Date.now(), true, sessionRoot)
+    // A forced pass ignores the background backoff: the retry ladder exists for a
+    // pass that keeps failing, and a person asking for one now is not that.
+    if (options.force === true) this.state.clearJobBackoff(CONSOLIDATE_JOB)
+    const token = `consolidate-${process.pid}-${Date.now().toString(36)}`
+    const job = this.state.claimJob(CONSOLIDATE_JOB, token, 600_000)
+    if (job === undefined) {
+      this.consolidateSkip = 'the job is leased by another process, or its backoff has not expired'
+      return undefined
+    }
+    // A paused account skips the pass and leaves the job in place: the cooldown
+    // is the right place to retry, not this turn.
+    if (this.backgroundPaused()) {
+      this.consolidateSkip = 'background passes are paused by a provider quota cooldown'
+      return undefined
+    }
+    // The job's recorded root wins: consolidation is process-level, so the
+    // session that happens to run the pass must not decide whose project
+    // memories get consolidated.
+    const root = job.root ?? sessionRoot
+    try {
+      const global = await this.store.list('global', undefined, { fresh: true })
+      // A job recorded against a workspace can outlive the session that queued
+      // it, and a session may have no workspace at all; either way there is
+      // simply no project scope to merge into.
+      const project = root === undefined ? [] : await this.store.list('project', root, { fresh: true })
+      const reviewed = new Map(this.state.retentionRows().map((row) => [`${row.scope}\u0000${row.id}`, row.consolidatedAt]))
+      const entries = selectForConsolidation([...global, ...project], reviewed, this.settings.consolidateMaxEntries)
+      const unreviewed = entries.filter((entry) => (reviewed.get(retentionKey(entry.scope, entry.id)) ?? 0) === 0).length
+      this.log.decision('dsh-memories: reviewing %d memories (%d never reviewed) for session %s: %s',
+        entries.length, unreviewed, parent.session.id, entries.map((entry) => entry.id).join(', '))
+      if (entries.length < 2) {
+        this.state.deleteJob(CONSOLIDATE_JOB)
+        this.consolidateSkip = `only ${entries.length} memories are eligible for a pass`
+        return undefined
+      }
+      const plan = await this.runConsolidationPass(parent, entries, root)
+      if (plan === undefined) {
+        this.state.deleteJob(CONSOLIDATE_JOB)
+        this.consolidateSkip = 'the pass produced no plan; the warn line above names the reason'
+        return undefined
+      }
+      // The pass runs unattended; what it may do unattended is the question
+      // `classifyPlan` answers. Sharpening wording, folding duplicates and
+      // retiring memories nothing ever read are reversible and visible. Killing
+      // the memory a session used, rewriting what a person typed, moving a fact
+      // between scopes, or dropping the paths that made a body checkable are not
+      // — those wait for a person, and they are the only thing that waits.
+      const { safe: classified, disputes: classifiedDisputes } = classifyPlan(plan, { entries })
+      // Contradictions are reported, not resolved: the merge child may say which
+      // statement it believes, but only the user knows which one they still mean.
+      const conflicts = plan.conflicts ?? []
+      for (const conflict of conflicts) {
+        this.log.info('dsh-memories: conflict %s vs %s — %s', conflict.keep, conflict.drop, conflict.reason)
+      }
+      const flagged = [...classifiedDisputes, ...conflictDisputes(conflicts, entries)]
+      // A mutable copy the adjudicator may fold accepted verdicts into; the
+      // classified plan itself is readonly on purpose.
+      const safe = { upserts: [...classified.upserts], retire: [...classified.retire] }
+      // The classified plan is deterministic; what it cannot judge is whether a
+      // rewrite kept the meaning. That question goes to one tool-free child, and
+      // only for the items that are a judgement rather than a promise — see
+      // `decideFlagged`.
+      const disputes = await this.decideFlagged(parent, plan, safe, flagged, entries, root)
+      const result = await applyPlan({ ...classified, upserts: safe.upserts, retire: safe.retire }, this.consolidationTarget(), root, { entries })
+      // Record the review, so the next pass starts from whatever has waited
+      // longest instead of from the same newest page again.
+      this.state.markConsolidated(entries.map((entry) => ({ scope: entry.scope, id: entry.id })))
+      // The profile is a document, not a memory: it is injected as its own block
+      // at a known budget, so it is written beside the store rather than into it.
+      if (plan.persona !== undefined && plan.persona.trim().length > 0) {
+        await writePersona(this.store.memoriesDir, plan.persona).catch((error: unknown) => {
+          this.log.warn('dsh-memories: could not write the persona profile: %s',
+            error instanceof Error ? error.message : String(error))
+        })
+      }
+      // Skill drafts are staged, not installed: a background pass must not
+      // silently grow the model's skill catalog.
+      const staged: string[] = []
+      for (const draft of plan.skills) {
+        try {
+          await writeDraft(this.store.memoriesDir, draft)
+          staged.push(draft.name)
+        } catch (error) {
+          this.log.warn('dsh-memories: could not stage skill draft %s: %o', draft.name, error)
+        }
+      }
+      // A decision worth asking about is stored, not applied, and it merges with
+      // whatever is already waiting so a later pass cannot silently replace a
+      // question somebody is part-way through answering.
+      let waiting = 0
+      if (disputes.length > 0) {
+        const disputedIds = new Set(disputes.map((row) => row.id))
+        const label = root === undefined ? NO_PROJECT_LABEL : this.store.target('project', root).label
+        // A conflict's losing id is retired by the pending plan when the user
+        // accepts it, and that id is usually NOT in plan.retire (the merge child
+        // preferred to report the contradiction instead of acting on it).
+        const retireForPending = [...new Set([...plan.retire, ...conflicts.map((conflict) => conflict.drop)])]
+        waiting = await mergePendingPlan(this.store.memoriesDir, {
+          plan: {
+            upserts: plan.upserts.filter((item) => item.id !== null && disputedIds.has(item.id)),
+            retire: retireForPending.filter((id) => disputedIds.has(id)),
+            skills: [],
+            notes: plan.notes,
+          },
+          disputes,
+          projectRoot: root ?? '',
+          at: Date.now(),
+          label,
+        })
+      }
+      this.state.deleteJob(CONSOLIDATE_JOB)
+      this.state.clearLimit()
+      this.log.info('dsh-memories: consolidated %d written, %d retired, %d skill drafts, %d decision(s) needing a person (%d waiting) for session %s',
+        result.written, result.retired, staged.length, disputes.length, waiting, parent.session.id)
+      return [
+        `Consolidated ${entries.length} memories: ${result.written} written, ${result.retired} retired.`,
+        staged.length > 0 ? `Staged skill drafts: ${staged.join(', ')} (promote with /memories promote <name>).` : '',
+        disputes.length > 0 ? `${disputes.length} decision${disputes.length === 1 ? '' : 's'} need you (${waiting} waiting): review in 设置 → 记忆 → 待裁决, or with /memories plan.` : '',
+        result.notes,
+      ].filter((line) => line.length > 0).join(' ')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      // Release the lease and back off, so a broken pass cannot spin.
+      const { lease: _lease, ...rest } = job
+      this.state.putJob({
+        ...rest,
+        leaseUntil: 0,
+        retries: job.retries + 1,
+        notBefore: Date.now() + Math.min(6, job.retries + 1) * 3_600_000,
+        lastError: message,
+      })
+      this.noteLimitRefusal(error)
+      this.log.warn('dsh-memories: consolidation failed for session %s: %s', parent.session.id, message)
+      return undefined
+    }
+  }
+
+  /**
+   * Run one consolidation pass and return the plan it produced.
+   *
+   * Three routes, in order of preference:
+   *
+   * 1. The 0.2.1-rc.2 subagent seam, with this plugin's own tool-free preset:
+   *    the child runs as a real agent that owns no tools.
+   * 2. The pre-0.2.1 seam, whose request still carries a tool filter.
+   * 3. A plain model call that owns no tools at all.
+   *
+   * The third route is not a weaker guarantee: a model handed no tool list
+   * cannot write, shell out, or delegate, which is the same property the old
+   * deny list bought. It exists because the first two need services this
+   * plugin cannot assume — the preset registry and delegation are both
+   * optional — and a pass that cannot run must leave the store alone and say
+   * so, not fail with an exception.
+   *
+   * @param parent - the agent whose lineage and route the pass uses.
+   * @param entries - the memories to review.
+   * @param root - the workspace root whose project scope is in scope.
+   * @returns the plan, or `undefined` when no route produced one.
+   */
+  /**
+   * Speak without being asked, when there is something to say.
+   *
+   * Two deterministic triggers only, for now: a daily line about what the plugin
+   * maintained, and a warning when decisions have waited long enough that the
+   * pending panel will drop them. Both are judgements a rule can make, which is
+   * why they are the first ones allowed to interrupt. Everything smarter (open
+   * loops, reflections) enters here later through the same queue, and the same
+   * rules apply: evidence or silence, and never the same subject twice.
+   *
+   * Called from the once-per-conversation hook and from the maintenance sweep. A
+   * failure is logged and swallowed: speaking is never allowed to break a turn.
+   */
+  private async pumpNotices(session?: Session): Promise<void> {
+    // The test runner has no pet and no user; a notice delivered here would be an
+    // osascript popup or a file written after a temp dir is torn down.
+    if (process.env['NODE_TEST_CONTEXT'] !== undefined) return
+    if (!this.settings.noticesEnabled) return
+    const dir = this.store.memoriesDir
+    const now = Date.now()
+    try {
+      let queue = pruneNotices(await readNotices(dir), now)
+      const policy = {
+        now,
+        quietHours: this.settings.noticeQuietHours,
+        dailyCap: 20,
+        minSpacingHours: 6,
+      }
+      // 1. Daily digest, computed from the plugin's own log since the last one.
+      const lastDigest = queue.lastDigestAt ?? 0
+      if (now - lastDigest >= 86_400_000) {
+        const counts = await this.maintenanceCounts(lastDigest)
+        if (counts.total > 0) {
+          const admitted = admitNotice(queue, {
+            kind: 'digest',
+            createdAt: now,
+            dueAt: now,
+            title: `昨天我整理了 ${counts.total} 条记忆：新增 ${counts.stored}、合并退役 ${counts.retired}、维护扫描 ${counts.sweeps} 次`,
+            body: counts.detail,
+            evidence: counts.evidence,
+            dedupeKey: 'digest:daily',
+          }, policy)
+          if (admitted.ok) queue = { ...queue, lastDigestAt: now, notices: [admitted.notice, ...queue.notices] }
+          else this.log.decision('dsh-memories: notice suppressed (%s)', admitted.reason)
+        } else {
+          queue = { ...queue, lastDigestAt: now }
+        }
+      }
+      // 2. Backlog warning: unanswered decisions go stale and are dropped.
+      const pending = await readPendingPlan(dir).catch(() => undefined)
+      if (pending !== undefined && now - pending.at >= 12 * 3_600_000) {
+        const age = Math.round((now - pending.at) / 3_600_000)
+        const admitted = admitNotice(queue, {
+          kind: 'backlog',
+          createdAt: now,
+          dueAt: now,
+          title: `有 ${pending.disputes.length} 条记忆变更等你确认（已等 ${age} 小时，超时会丢弃）`,
+          body: pending.disputes.map((row) => `- [${row.action}] ${row.title}：${row.reason}`).join('\n'),
+          evidence: pending.disputes.map((row) => row.id),
+          dedupeKey: `backlog:${pending.disputes.length}`,
+        }, policy)
+        if (admitted.ok) queue = { ...queue, notices: [admitted.notice, ...queue.notices] }
+        else this.log.decision('dsh-memories: notice suppressed (%s)', admitted.reason)
+      }
+      // 3. Open loops whose deadline has passed. This is the trigger that makes
+      // the assistant pro-active rather than reactive: it needs no question to
+      // answer, only a promise the user made and has not closed.
+      const loopNow = pruneLoops(await readLoops(dir), now)
+      const raised: string[] = []
+      for (const loop of dueLoops(loopNow, now)) {
+        const admitted = admitNotice(queue, {
+          kind: 'loop',
+          createdAt: now,
+          dueAt: now,
+          title: `还欠着：${loop.text}`,
+          body: loop.dueAt === undefined
+            ? loop.text
+            : `${loop.text}\n截止：${new Date(loop.dueAt).toISOString().slice(0, 10)}（${loop.remindCount ?? 0} 次提醒后自动放弃）`,
+          evidence: [loop.id],
+          dedupeKey: `loop:${loop.id}`,
+        }, policy)
+        if (admitted.ok) {
+          queue = { ...queue, notices: [admitted.notice, ...queue.notices] }
+          raised.push(loop.id)
+        } else {
+          this.log.decision('dsh-memories: loop notice suppressed (%s)', admitted.reason)
+        }
+      }
+      if (raised.length > 0) {
+        let ledger = loopNow
+        for (const id of raised) {
+          const loop = ledger.loops.find((item) => item.id === id)
+          if (loop !== undefined) ledger = withLoop(ledger, id, { remindedAt: now, remindCount: (loop.remindCount ?? 0) + 1 })
+        }
+        await writeLoops(dir, ledger)
+      }
+      // 4. Judgement notices: a note with no deadline that has been sitting for
+      // days. There is no rule that says it is worth an interruption, so the
+      // gate decides — and its default is silence. Without a session there is no
+      // route to ask through, and silence is the right failure.
+      if (this.settings.noticeGate) {
+        const staleAfter = 3 * 86_400_000
+        const candidates = loopNow.loops.filter((loop) => loop.state === 'open'
+          && loop.dueAt === undefined
+          && now - loop.openedAt >= staleAfter
+          && (loop.remindCount ?? 0) < 3
+          && (loop.remindedAt === undefined || now - loop.remindedAt >= 86_400_000))
+        if (candidates.length > 0) {
+          const gate = await gateNotices({
+            llm: this.llm,
+            session,
+            candidates: candidates.map((loop): GateCandidate => ({
+              id: loop.id,
+              title: `还挂着：${loop.text}`,
+              detail: `说了 ${Math.round((now - loop.openedAt) / 86_400_000)} 天，没有截止日期，已提醒 ${loop.remindCount ?? 0} 次`,
+            })),
+            ...await readPersona(dir).then((text) => text === undefined ? {} : { persona: text }),
+            provider: this.settings.extractProvider,
+            model: this.settings.extractModel,
+            timeoutMs: 20_000,
+            signal: this.lifecycle.signal,
+          })
+          this.log.info('dsh-memories: notice gate: %d candidate(s), %d allowed (%s)',
+            candidates.length, gate.deliver.size, gate.reason)
+          let ledger = loopNow
+          for (const candidate of candidates) {
+            if (!gate.deliver.has(candidate.id)) continue
+            const admitted = admitNotice(queue, {
+              kind: 'loop',
+              createdAt: now,
+              dueAt: now,
+              title: `还挂着：${candidate.text}`,
+              body: candidate.text,
+              evidence: [candidate.id],
+              dedupeKey: `loop:${candidate.id}`,
+            }, policy)
+            if (!admitted.ok) continue
+            queue = { ...queue, notices: [admitted.notice, ...queue.notices] }
+            ledger = withLoop(ledger, candidate.id, { remindedAt: now, remindCount: (candidate.remindCount ?? 0) + 1 })
+          }
+          if (ledger !== loopNow) await writeLoops(dir, ledger)
+        }
+      } else if (loopNow.loops.some((loop) => loop.state === 'open' && loop.dueAt === undefined)) {
+        this.log.decision('dsh-memories: notice gate is off, undated loops stay silent')
+      }
+      const before = JSON.stringify(queue)
+      // 5. Deliver what is due: pet first, system notification as fallback.
+      const target = this.petTarget()
+      let next = queue
+      for (const notice of dueNotices(queue, now)) {
+        const result = target === undefined ? { ok: false, reason: 'no pet configured' } : await say(target, { text: notice.title, duration: this.settings.petBubbleMs })
+        if (result.ok) {
+          next = withNotice(next, { ...notice, state: 'delivered', deliveredAt: now })
+          this.log.info('dsh-memories: notice delivered via the pet: %s', notice.title)
+          continue
+        }
+        this.log.info('dsh-memories: pet delivery failed (%s), trying the system', result.reason ?? 'unknown')
+        if (systemNotification('dsh-memories', notice.title)) {
+          next = withNotice(next, { ...notice, state: 'delivered', deliveredAt: now })
+          this.log.info('dsh-memories: notice delivered via system notification: %s', notice.title)
+        } else {
+          this.log.warn('dsh-memories: no channel for notice %s (%s)', notice.id, notice.title)
+        }
+      }
+      if (JSON.stringify(next) !== before) await writeNotices(dir, next)
+    } catch (error) {
+      this.log.warn('dsh-memories: notice pump failed: %s', error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  /**
+   * Fold the promises one extraction found into the open-loop ledger.
+   *
+   * Kept separate from `persist` because a loop is not a memory: it has a
+   * lifecycle and a deadline, it is never recalled by retrieval, and its id must
+   * stay stable across rewrites so one promise cannot become three reminders.
+   */
+  private async recordLoops(sessionKey: string, candidates: readonly { text: string; dueAt?: number }[]): Promise<void> {
+    if (candidates.length === 0) return
+    try {
+      const dir = this.store.memoriesDir
+      const now = Date.now()
+      const current = pruneLoops(await readLoops(dir), now)
+      const next = mergeLoops(current, candidates, now, sessionKey)
+      await writeLoops(dir, next)
+      this.log.info('dsh-memories: open loops now %d (from %d candidate(s))',
+        next.loops.filter((loop) => loop.state === 'open').length, candidates.length)
+    } catch (error) {
+      this.log.warn('dsh-memories: could not record open loops: %s', error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  /**
+   * Synthesize a few observations, at most once a week.
+   *
+   * Runs on the maintenance path, writes its own files, and never touches the
+   * memories it read. The interval and the material threshold are both hard
+   * requirements rather than tunables: a reflection is only worth having when
+   * something has accumulated, and one written weekly from three memories is the
+   * same generic sentence forever.
+   */
+  private async runReflectionIfDue(session?: Session): Promise<void> {
+    if (!this.settings.reflectionEnabled) return
+    const dir = this.store.memoriesDir
+    const lastAt = Number(this.state.getMeta('reflection:lastAt') ?? '0')
+    if (session === undefined) {
+      this.log.decision('dsh-memories: reflection skipped, no session to route through')
+      return
+    }
+    const states = await this.allScopes(session)
+    const entries = states.flatMap((state) => state.entries)
+      .sort((left, right) => right.updatedAt - left.updatedAt)
+      .slice(0, 80)
+    if (!reflectionDue(lastAt, Date.now(), entries.length)) return
+    const files = await listReflections(dir)
+    const outcome = await runReflection({
+      llm: this.llm,
+      session,
+      entries,
+      ...await readPersona(dir).then((text) => text === undefined ? {} : { persona: text }),
+      previous: previousInsights(files),
+      provider: this.settings.extractProvider,
+      model: this.settings.extractModel,
+      timeoutMs: 60_000,
+      signal: this.lifecycle.signal,
+    })
+    if (outcome.insights.length === 0) {
+      this.log.info('dsh-memories: reflection produced nothing (%s)', outcome.reason)
+      return
+    }
+    const path = await writeReflection(dir, outcome.insights, Date.now())
+    this.state.putMeta('reflection:lastAt', String(Date.now()))
+    this.log.info('dsh-memories: reflection wrote %d observation(s) to %s', outcome.insights.length, path)
+  }
+
+  /**
+   * Send one deliberate bubble, so the pet channel can be checked on demand.
+   *
+   * The digest is once a day and the backlog warning needs a pending plan, so
+   * without this the only way to find out whether the pet is reachable is to wait
+   * up to 24 hours for a real notice to fail quietly. Never queued: a probe is
+   * not a notice and must not spend the daily guard rail.
+   *
+   * @returns whether the pet took it, the reason when it did not, and the target.
+   */
+  async probePet(): Promise<{ ok: boolean; reason?: string; target?: string }> {
+    const target = this.petTarget()
+    if (target === undefined) {
+      return { ok: false, reason: 'no pet resolved (pet plugin missing or no pets in its config)' }
+    }
+    const described = `${target.origin} pet=${target.petId} token=${target.token === undefined ? 'none' : 'present'}`
+    const result = await say(target, { text: '测试一下，不需要处理。', duration: this.settings.petBubbleMs })
+    return { ok: result.ok, ...result.reason === undefined ? {} : { reason: result.reason }, target: described }
+  }
+
+  /** The notice queue as one short block, for the command. */
+  async describeNotices(): Promise<string> {
+    const queue = await readNotices(this.store.memoriesDir)
+    if (queue.notices.length === 0) return 'No notices yet.'
+    return queue.notices.slice(0, 10)
+      .map((notice) => `${notice.state.padEnd(9)} ${notice.kind.padEnd(8)} ${notice.title}`)
+      .join('\n')
+  }
+
+  /** Where the pet is, or `undefined` when it cannot be reached. */
+  private petTarget(): PetTarget | undefined {
+    const petId = this.settings.petId.trim().length > 0
+      ? this.settings.petId.trim()
+      : readPetId(this.deployment.dshHome)
+    if (petId === undefined) return undefined
+    const web = this.ctx.get('webServer') as { port?: number } | undefined
+    const port = web?.port
+    if (port === undefined) return undefined
+    const cleanOrigin = `http://127.0.0.1:${port}`
+    // The desktop loopback gate consults this service for its renderer capability;
+    // without the header every request is 403, which is why the first live notice
+    // fell back to a system notification.
+    const access = this.ctx.get('desktopBrowserAccess', false) as
+      | { rendererHeader?: { name?: unknown; value?: unknown } }
+      | undefined
+    const headerName = access?.rendererHeader?.name
+    const headerValue = access?.rendererHeader?.value
+    const rendererHeader = typeof headerName === 'string' && typeof headerValue === 'string' && headerValue.length > 0
+      ? { name: headerName, value: headerValue }
+      : undefined
+    // The host carries its process token as a QUERY parameter, so it is pulled out
+    // here and re-applied by `say()` on its own request (see PetTarget.token);
+    // its URL cannot be used as a path prefix.
+    const connection = this.ctx.get('connection') as { authenticatedUrl?: (url: string) => string } | undefined
+    const authenticated = connection?.authenticatedUrl?.(cleanOrigin)
+    let token: string | undefined
+    if (authenticated !== undefined) {
+      try {
+        token = new URL(authenticated).searchParams.get('token') ?? undefined
+      } catch {
+        token = undefined
+      }
+    }
+    return {
+      origin: cleanOrigin,
+      ...token === undefined ? {} : { token },
+      ...rendererHeader === undefined ? {} : { rendererHeader },
+      petId,
+      routeId: this.settings.petRouteId,
+    }
+  }
+
+  /** Count what the plugin did since one timestamp, from its own log. */
+  private async maintenanceCounts(since: number): Promise<{ total: number; stored: number; retired: number; sweeps: number; detail: string; evidence: string[] }> {
+    const text = await readFile(this.deployment.logFile, 'utf8').catch(() => '')
+    const after = new Date(since).toISOString()
+    const lines = text.split(/\r?\n/u).filter((line) => line.length > 0 && line.slice(0, 24) >= after)
+    const count = (needle: string): number => lines.filter((line) => line.includes(needle)).length
+    const stored = count(' stored ')
+    const retired = count(' retired ')
+    const sweeps = count('sweep:')
+    const consolidated = count(' consolidated ')
+    return {
+      total: stored + retired + consolidated + sweeps,
+      stored,
+      retired,
+      sweeps,
+      detail: `新增 ${stored} 条、退役 ${retired} 条、合并 ${consolidated} 次、维护扫描 ${sweeps} 次；当前 ${(await this.store.list('global', undefined, { fresh: true })).length} 条全局记忆。`,
+      evidence: ['digest'],
+    }
+  }
+
+  /**
+   * Adjudicate the flagged changes, when a person is not the right answer.
+   *
+   * The determinism this replaces was not neutral: on a real store every proposal
+   * waited on the panel because the entry had been read once, and the panel is
+   * only answered when somebody remembers it exists — an unanswered question goes
+   * stale and gets dropped. "Keep both copies" is the safe outcome for an AI that
+   * is unsure, and it is exactly the outcome of a re-read.
+   *
+   * Hard stops are filtered out here and never reach the child: permanence,
+   * a person's own words, and a scope move are promises, not judgements.
+   *
+   * @param parent - the agent whose seam runs the child.
+   * @param plan - the pass's full plan, for the bodies a rewrite would apply.
+   * @param safe - cleared plan, mutated in place with accepted verdicts.
+   * @param flagged - every dispute the classifier raised.
+   * @param entries - the reviewed page, for the request.
+   * @param root - project scope this pass covers.
+   * @returns the disputes that still need a person.
+   */
+  private async decideFlagged(
+    parent: Agent,
+    plan: ConsolidationPlan,
+    safe: { upserts: ConsolidationPlan['upserts'][number][]; retire: string[] },
+    flagged: readonly ConsolidationDispute[],
+    entries: readonly MemoryEntry[],
+    root: string | undefined,
+  ): Promise<readonly ConsolidationDispute[]> {
+    if (flagged.length === 0) return flagged
+    if (!this.settings.autoDecide) return flagged
+    const adjudicable = flagged.filter((dispute) => dispute.hard !== true)
+    if (adjudicable.length === 0) {
+      this.log.decision('dsh-memories: %d decision(s) are promises (permanent / written by a person / scope move), so they wait for a person', flagged.length)
+      return flagged
+    }
+    if (this.backgroundPaused()) {
+      this.log.decision('dsh-memories: auto-decide skipped, background passes are paused by a quota cooldown')
+      return flagged
+    }
+    const seam = this.subagents
+    if (seam === undefined || typeof seam.startActivation !== 'function' || !this.consolidatePresetReady) {
+      // Adjudication needs the same tool-free child the pass uses; without it the
+      // honest answer is "still a question", not a guessed decision.
+      this.log.decision('dsh-memories: auto-decide needs the tool-free child, so %d decision(s) wait for a person', adjudicable.length)
+      return flagged
+    }
+    const request: ConsolidateRequest = {
+      parent,
+      ...consolidationRouteOf(this.settings),
+      entries,
+      projectLabel: root === undefined ? NO_PROJECT_LABEL : this.store.target('project', root).label,
+      maxUpserts: this.settings.consolidateMaxEntries,
+      denyTools: denyToolsFor(new Set((this.ctx.get('tools')?.schemas() ?? []).map((schema) => schema.name))),
+      timeoutMs: this.settings.consolidateTimeoutMs,
+      maxOutputTokens: this.settings.extractMaxOutputTokens,
+      signal: this.lifecycle.signal,
+      agentPreset: CONSOLIDATE_PRESET_ID,
+    }
+    const verdicts = await adjudicateDisputes(seam, request, adjudicable)
+      .catch((error: unknown) => {
+        this.log.warn('dsh-memories: auto-decide failed, every decision stays with a person: %s',
+          error instanceof Error ? error.message : String(error))
+        return []
+      })
+    const remaining = applyVerdicts(safe, plan, flagged, verdicts, this.settings.autoDecideMinConfidence)
+    const byId = new Map(verdicts.map((verdict) => [verdict.id, verdict]))
+    for (const dispute of flagged) {
+      const verdict: DisputeVerdict | undefined = byId.get(dispute.id)
+      if (verdict === undefined) continue
+      this.log.info('dsh-memories: auto-decide %s %s/%s (confidence %.2f): %s',
+        verdict.accept ? 'accepted' : 'rejected', dispute.scope, dispute.id, verdict.confidence, verdict.reason)
+    }
+    if (remaining.length > 0) {
+      this.log.info('dsh-memories: %d decision(s) still need a person after auto-decide', remaining.length)
+    }
+    return remaining
+  }
+
+  private async runConsolidationPass(
+    parent: Agent,
+    entries: readonly MemoryEntry[],
+    root: string | undefined,
+  ): Promise<ConsolidationPlan | undefined> {
+    const request = {
+      parent,
+      ...consolidationRouteOf(this.settings),
+      entries,
+      // The profile as it stands, so the pass refines it instead of re-inventing
+      // one every six hours. Read before the call: the pass writes it back.
+      ...await readPersona(this.store.memoriesDir).then((text) => text === undefined ? {} : { persona: text }),
+      projectLabel: root === undefined ? NO_PROJECT_LABEL : this.store.target('project', root).label,
+      maxUpserts: this.settings.consolidateMaxEntries,
+      // The deny list only reaches the pre-0.2.1 seam, whose request still
+      // carries a tool filter. It names only tools the registry actually has:
+      // `tools.restrict()` rejects an unknown name, and the list is
+      // cross-platform.
+      denyTools: denyToolsFor(new Set((this.ctx.get('tools')?.schemas() ?? []).map((schema) => schema.name))),
+      timeoutMs: this.settings.consolidateTimeoutMs,
+      // The direct path has no output cap of its own, so it borrows the one the
+      // extraction pass already uses: a plan for a full page of memories is the
+      // same size of answer as a page of drafts.
+      maxOutputTokens: this.settings.extractMaxOutputTokens,
+      signal: this.lifecycle.signal,
+    }
+    const seam = this.subagents
+    if (seam !== undefined) {
+      const modern = typeof seam.startActivation === 'function'
+      if (modern && this.consolidatePresetReady) {
+        return await runConsolidation(seam, { ...request, agentPreset: CONSOLIDATE_PRESET_ID })
+      }
+      if (!modern && typeof seam.start === 'function') {
+        return await runConsolidation(seam, request)
+      }
+      // A modern seam without the preset would hand the child the parent's
+      // tools, so the direct route is used instead.
+      this.log.decision('dsh-memories: the subagent seam cannot run a tool-free child here, the pass runs as a plain model call')
+    }
+    const llm = this.llm
+    if (llm === undefined) {
+      if (!this.warnedNoLlm) {
+        this.warnedNoLlm = true
+        this.log.warn('dsh-memories: no llm service, so consolidation cannot run')
+      }
+      return undefined
+    }
+    const route = resolveLlmRoute(parent.session, request.provider, request.model, consolidationRouteOf(this.settings))
+    if (route === undefined) {
+      this.log.warn('dsh-memories: no model route for the consolidation pass, so it did not run')
+      return undefined
+    }
+    return await runConsolidationDirect(llm, {
+      ...request,
+      route: {
+        provider: route.provider,
+        model: route.model,
+        ...route.reasoningEffort === undefined ? {} : { reasoningEffort: route.reasoningEffort },
+      },
+    })
+  }
+
+  /**
+   * The store, narrowed to the write surface consolidation needs.
+   *
+   * The adapter drops `upsert`'s clock parameter so the target's `keepId` is the
+   * fourth argument, matching the consolidation contract.
+   */
+  private consolidationTarget(): ConsolidationTarget {
+    return {
+      upsert: (draft, projectRoot, source, keepId) => this.store.upsert(draft, projectRoot, source, Date.now(), keepId),
+      // Retirements are archival, so a wrong judgement stays recoverable.
+      archive: (scope, projectRoot, id) => this.store.archive(scope, projectRoot, id, Date.now(), 'consolidation'),
+      restore: (scope, projectRoot, id) => this.store.restore(scope, projectRoot, id),
+    }
+  }
+
+  /**
+   * Run the periodic maintenance sweep when its interval has elapsed.
+   *
+   * Retention is deterministic and costs no quota, so unlike extraction it needs
+   * no live conversation — just a store and a clock. Running it here, and once
+   * at startup before any session exists, is what makes "unused memories
+   * eventually archive" true in a workspace that never happens to produce a new
+   * memory: the pass stops being a side effect of extraction succeeding.
+   *
+   * @param now - injected clock.
+   * @returns how many entries were archived.
+   */
+  async sweepIfDue(now = Date.now()): Promise<number> {
+    if (this.settings.sweepIntervalHours <= 0 && this.settings.maxUnusedDays <= 0) return 0
+    const last = Number(this.state.getMeta(SWEEP_META_KEY) ?? '0')
+    if (this.settings.sweepIntervalHours > 0 && Number.isFinite(last) && last > 0
+      && now - last < this.settings.sweepIntervalHours * 3_600_000) {
+      this.log.decision('dsh-memories: sweep not due yet (next after %s)',
+        new Date(last + this.settings.sweepIntervalHours * 3_600_000).toISOString())
+      return 0
+    }
+    return await this.sweepNow(now)
+  }
+
+  /** Run retention now, ignoring the interval (used by `/memories sweep`). */
+  async sweepNow(now = Date.now()): Promise<number> {
+    this.state.putMeta(SWEEP_META_KEY, String(now))
+    let archived = await this.retain('global', undefined, now)
+    let scopes = 0
+    for (const slug of await this.store.listProjects()) {
+      const descriptor = await this.store.readProjectDescriptor(slug)
+      if (descriptor === undefined) continue
+      // A scope rooted in the harness home is one this plugin no longer creates
+      // (see `resolveProjectRoot`); it is kept until retention empties it, and
+      // saying so here is the only way a reader learns where those memories went.
+      if (isWithin(this.deployment.dshHome, descriptor.root)) {
+        this.log.decision('dsh-memories: project scope %s is inside the harness home; it is no longer injected and its entries will age out', slug)
+        continue
+      }
+      scopes += 1
+      archived += await this.retain('project', descriptor.root, now)
+    }
+    const rehomed = await this.store.adoptMisnamedProjects().catch(() => [])
+    for (const move of rehomed) {
+      this.log.decision('dsh-memories: re-homed project scope %s onto %s', move.from, move.to)
+    }
+    const removed = await this.store.pruneEmptyProjects().catch(() => [])
+    for (const slug of removed) {
+      this.log.decision('dsh-memories: removed empty project directory %s', slug)
+    }
+    // Citation drift belongs on the schedule, not only behind a command: a path
+    // that stopped existing is the kind of wrongness nothing else notices, and a
+    // reader who never types /memories stale should still learn it is there.
+    const stale = await this.countStale().catch(() => 0)
+    if (stale > 0) {
+      this.log.info('dsh-memories: %d memories cite a path that no longer resolves; /memories stale lists them', stale)
+    }
+    // An unseen tail is the other half of the same question ("is this store worth
+    // its size?"): retention cannot answer it, because nothing on a young store
+    // is old enough to archive yet.
+    const unseen = await this.neverSeen().catch(() => ({ count: 0, total: 0, oldestDays: 0 }))
+    if (unseen.count > 0) {
+      this.log.info('dsh-memories: %d of %d memories have never been injected or read (oldest %dd); only recall and consolidation surface them',
+        unseen.count, unseen.total, unseen.oldestDays)
+    }
+    // Consolidation is otherwise enqueued only when an extraction STORES something,
+    // so a store nobody is writing to is never reorganised — and a memory written
+    // by hand never queues a pass at all. The sweep is already a timer, so it
+    // queues one; the pass returns before any model call when there is nothing
+    // worth reviewing, so idling costs nothing.
+    const queued = await this.queueConsolidation(now).catch(() => false) ? 1 : 0
+    // One line per sweep, always: it is the only evidence that retention runs at
+    // all, and a sweep that never archives anything is exactly what somebody
+    // wondering "why is my store still this big" needs to see.
+    this.log.info('dsh-memories: sweep: archived %d memories across %d project scopes, pruned %d empty project director%s, %d stale citation%s%s',
+      archived, scopes, removed.length, removed.length === 1 ? 'y' : 'ies', stale, stale === 1 ? '' : 's',
+      queued === 1 ? ', queued a consolidation pass' : '')
+    // The sweep is the moment the plugin is awake without a turn; the digest does
+    // not need a conversation to be worth saying. Awaited, not fire-and-forget:
+    // a background write racing its own teardown is how a test suite starts
+    // failing with ENOTEMPTY, and the sweep is already off the user's path.
+    await this.pumpNotices()
+    return archived
+  }
+
+  /**
+   * Queue a consolidation pass if one is not already waiting and there is work.
+   *
+   * @param now - clock.
+   * @returns whether a pass was queued.
+   */
+  private async queueConsolidation(now: number): Promise<boolean> {
+    if (!this.settings.consolidate || this.subagents === undefined) return false
+    if (this.state.getJob(CONSOLIDATE_JOB) !== undefined) return false
+    const reviewed = new Map(this.state.retentionRows().map((row) => [retentionKey(row.scope, row.id), row.consolidatedAt]))
+    const enough = async (entries: readonly MemoryEntry[]): Promise<boolean> => {
+      const picked = selectForConsolidation(entries, reviewed, this.settings.consolidateMaxEntries)
+      // A pass reviews whatever has waited longest, so "enough" means "there is a
+      // page to review", not "there is something never reviewed" — the latter
+      // would stop short on a store whose entries were all seen once.
+      return picked.length >= 2
+    }
+    if (await enough(await this.store.list('global', undefined, { fresh: true }))) {
+      this.enqueueConsolidation(now, true)
+      return true
+    }
+    for (const slug of await this.store.listProjects()) {
+      const descriptor = await this.store.readProjectDescriptor(slug)
+      if (descriptor === undefined) continue
+      // The harness home owns no memories any more (see `resolveProjectRoot`).
+      if (isWithin(this.deployment.dshHome, descriptor.root)) continue
+      if (await enough(await this.store.list('project', descriptor.root, { fresh: true }))) {
+        this.enqueueConsolidation(now, true, descriptor.root)
+        return true
+      }
+    }
+    return false
+  }
+
+  /**
+   * Every memory that cites a path no longer present in any known checkout.
+   *
+   * The full scan, without a session: the periodic sweep has no workspace of its
+   * own, so it checks each project's memories against that project's root (plus
+   * the harness home) and global memories against the harness home.
+   *
+   * @returns one row per flagged memory, most specific scope first.
+   */
+  private async staleRows(): Promise<{ scope: string; id: string; title: string; missing: string[] }[]> {
+    const rows: { scope: string; id: string; title: string; missing: string[] }[] = []
+    const collect = (label: string, entries: readonly MemoryEntry[], root: string | undefined): void => {
+      const roots = citationRoots(root, [this.deployment.dshHome])
+      if (roots.length === 0) return
+      // Generated paths do not count as stale: each scope's own repository says
+      // which of its files are build output or runtime state.
+      const ignored = ignoredUnder(root ?? this.deployment.dshHome)
+      for (const entry of entries) {
+        const missing = missingCitations(entry.body, roots, undefined, { isIgnored: ignored })
+        if (missing.length > 0) rows.push({ scope: label, id: entry.id, title: entry.title, missing })
+      }
+    }
+    collect('global', await this.store.list('global', undefined, { fresh: true }), undefined)
+    for (const slug of await this.store.listProjects()) {
+      const descriptor = await this.store.readProjectDescriptor(slug)
+      if (descriptor === undefined) continue
+      const entries = await this.store.list('project', descriptor.root, { fresh: true })
+      if (entries.length > 0) collect(slug, entries, descriptor.root)
+    }
+    return rows
+  }
+
+  /**
+   * How many memories cite a path that no longer resolves, for the sweep line.
+   *
+   * @returns the count.
+   */
+  private async countStale(): Promise<number> {
+    return (await this.staleRows()).length
+  }
+
+  /**
+   * How many memories have never been injected and never read.
+   *
+   * Retention is purely age-based, so on a young store nothing is old enough to
+   * archive and a large unseen tail can sit there with nothing to say so —
+   * measured on a real store twelve days in, 100 of 346 entries had never been
+   * injected into a session nor returned by the tool. The count, plus the age of
+   * the oldest, is what separates "recent entries nobody needed yet" from "the
+   * ranking never reaches these".
+   *
+   * @returns the never-seen count, the store size, and the oldest never-seen age in days.
+   */
+  private async neverSeen(): Promise<{ count: number; total: number; oldestDays: number }> {
+    const rows = new Map(this.state.retentionRows().map((row) => [retentionKey(row.scope, row.id), row]))
+    const now = Date.now()
+    let count = 0
+    let total = 0
+    let oldest = now
+    const consider = (entries: readonly MemoryEntry[]): void => {
+      for (const entry of entries) {
+        total += 1
+        const row = rows.get(retentionKey(entry.scope, entry.id))
+        // Both views are read: a hand-written entry carries its counters in the
+        // file, and a concurrent session's newer counter lives in the database.
+        const surfaced = (row?.surfacedAt ?? 0) > 0 || entry.lastSurfacedAt > 0
+        const used = (row?.lastUsedAt ?? 0) > 0 || entry.lastUsedAt > 0
+        if (surfaced || used) continue
+        count += 1
+        oldest = Math.min(oldest, entry.createdAt)
+      }
+    }
+    consider(await this.store.list('global', undefined, { fresh: true }))
+    for (const slug of await this.store.listProjects()) {
+      const descriptor = await this.store.readProjectDescriptor(slug)
+      if (descriptor === undefined) continue
+      consider(await this.store.list('project', descriptor.root, { fresh: true }))
+    }
+    return { count, total, oldestDays: count === 0 ? 0 : Math.floor((now - oldest) / 86_400_000) }
+  }
+
+  /**
+   * Apply retention to one scope.
+   *
+   * @param scope - scope to sweep.
+   * @param root - workspace root for a project scope.
+   * @param now - injected clock.
+   * @returns how many entries were archived.
+   */
+  private async retain(scope: MemoryScope, root: string | undefined, now: number): Promise<number> {
+    const days = this.settings.maxUnusedDays
+    const snapshotDays = this.settings.snapshotMaxAgeDays
+    if (days <= 0 && snapshotDays <= 0) return 0
+    const entries = await this.store.list(scope, root, { fresh: true })
+    const expired = planRetention(entries, this.state.retentionRows(), {
+      maxUnusedDays: days,
+      snapshotMaxAgeDays: snapshotDays,
+      now,
+    })
+    let archived = 0
+    for (const decision of expired) {
+      this.log.decision('dsh-memories: archiving %s/%s, unused for %d days', decision.scope, decision.id, Math.round(decision.ageDays))
+      if (await this.store.archive(scope, root, decision.id, now, 'retention')) archived += 1
+    }
+    return archived
+  }
+
+  /** One line describing the sweep schedule, for `/memories stats`. */
+  private sweepLine(): string {
+    if (this.settings.sweepIntervalHours <= 0) return ', sweep off'
+    const last = Number(this.state.getMeta(SWEEP_META_KEY) ?? '0')
+    const when = Number.isFinite(last) && last > 0 ? new Date(last).toISOString() : 'never'
+    return `, sweep every ${this.settings.sweepIntervalHours}h (last ${when})`
+  }
+
+  /**
+   * Record one failed `/memories` invocation.
+   *
+   * The command facade returns an error RESULT instead of letting an exception
+   * cross into the harness; this is where the same failure stays visible in the
+   * plugin's own log.
+   */
+  noteCommandFailure(name: string, error: unknown): void {
+    this.log.warn('dsh-memories: command %s failed: %o', name, error)
+  }
+
+  /**
+   * Record one failed injection attempt.
+   *
+   * Called from the pre-step seam, which runs on every step of every turn: the
+   * turn continues without the memory block rather than failing, and the reason
+   * stays in the log.
+   */
+  notePreStepFailure(sessionId: string, error: unknown): void {
+    this.log.warn('dsh-memories: injection failed for session %s, the turn continues without it: %o', sessionId, error)
+  }
+
+  /** One line describing how much of the store has ever reached a session. */
+  private async exposureLine(): Promise<string> {    const unseen = await this.neverSeen().catch(() => ({ count: 0, total: 0, oldestDays: 0 }))
+    if (unseen.total === 0) return 'no memories stored'
+    if (unseen.count === 0) return `every one of ${unseen.total} memories has been injected or read`
+    return `${unseen.count} of ${unseen.total} never injected or read (oldest ${unseen.oldestDays}d)`
+  }
+
+  /**
+   * Warn about tunables whose text did not parse.
+   *
+   * A `peakHours` typo silently disables the whole restriction — exactly the kind
+   * of quiet failure this plugin keeps working to avoid — so the settings watcher
+   * calls this and a bad edit says so immediately.
+   */
+  reportSettingsIssues(): void {
+    const spec = this.settings.peakHours
+    if (spec.length === 0) return
+    const { invalid } = parsePeakHours(spec)
+    if (invalid.length === 0) return
+    this.log.warn('dsh-memories: peakHours entries not understood, so they are ignored: %s', invalid.join('; '))
+  }
+
+  /** Where this plugin's log is going, or why it is not. */
+  private logDestination(): string {
+    if (this.deployment.logFile.length === 0) return 'off'
+    return this.logSinkError ?? this.deployment.logFile
+  }
+
+  /**
+   * One line describing the peak-hours rule, for `/memories stats`.
+   *
+   * It reports whether a pass would be deferred *right now*, because that is the
+   * question somebody reading the line is actually asking ("why isn't it
+   * mining?").
+   */
+  private peakLine(now = new Date()): string {
+    const spec = this.settings.peakHours
+    if (spec.length === 0) return 'off'
+    const { invalid } = parsePeakHours(spec)
+    const penalty = peakDelayMs(spec, now)
+    const state = penalty > 0 ? `deferring for ${formatDelay(penalty)}` : 'clear now'
+    return `${spec} (${state})${invalid.length > 0 ? ` — unparsed: ${invalid.join('; ')}` : ''}`
+  }
+
+  /** This session's memory switch. */
+  sessionMode(session: Session): SessionMode {
+    return this.state.getSessionMode(session.id)
+  }
+
+  /**
+   * Turn memory off or on for one session.
+   *
+   * Per session rather than global: the useful case is "this repository is full
+   * of credentials, remember nothing from it", and a switch that silenced every
+   * other project too would be the wrong shape.
+   *
+   * @param session - session to change.
+   * @param value - `on`, `off`, or anything else to report the current state.
+   * @returns a human-readable confirmation.
+   */
+  setSessionMode(session: Session, value: string): string {
+    if (value !== 'on' && value !== 'off') {
+      return `Memory is ${this.sessionMode(session)} for this session. Usage: /memories mode [on|off]`
+    }
+    this.state.setSessionMode(session.id, value)
+    if (value === 'off') this.resetInjection(session)
+    return value === 'off'
+      ? 'Memory is off for this session: nothing injected and nothing mined. The memory tool still works.'
+      : 'Memory is on for this session.'
+  }
+
+  /** List one scope's archived entries. */
+  async archived(session: Session, scope: MemoryScope): Promise<string> {
+    const root = scope === 'project' ? await this.projectRoot(session) : undefined
+    if (scope === 'project' && root === undefined) {
+      return renderScopeListing({ scope, label: `${NO_PROJECT_LABEL} archive`, entries: [] })
+    }
+    const entries = await this.store.listArchived(scope, root)
+    return renderScopeListing({ scope, label: `${this.store.target(scope, root).label} archive`, entries })
+  }
+
+  /**
+   * Restore one archived entry, project scope first.
+   *
+   * @param session - session whose workspace to search.
+   * @param id - entry id.
+   * @returns a human-readable outcome.
+   */
+  async restore(session: Session, id: string): Promise<string> {
+    for (const scope of ['project', 'global'] as const) {
+      const root = scope === 'project' ? await this.projectRoot(session) : undefined
+      if (scope === 'project' && root === undefined) continue
+      if (await this.store.restore(scope, root, id)) {
+        return `Restored ${slugify(id)} into ${this.store.target(scope, root).label}.`
+      }
+    }
+    return `No archived memory with id ${JSON.stringify(id)}, or it is live again already.`
+  }
+
+  /** One line describing whether background passes are running, for `/memories stats`. */
+  private backgroundLine(now = Date.now()): string {
+    const limit = this.state.getLimit()
+    if (limit === undefined || !this.settings.pauseOnQuotaError) return 'running'
+    if (limit.until <= now) return `running (last refusal ${new Date(limit.at).toISOString()})`
+    return `paused until ${new Date(limit.until).toISOString()} after ${limit.failures} refusal${limit.failures === 1 ? '' : 's'}${limit.reason === undefined ? '' : `: ${limit.reason}`}`
+  }
+
+  /** A one-line status used by `/memories` and diagnostics. */
+  async stats(session: Session): Promise<string> {
+    const states = await this.allScopes(session)
+    const drafts = await listDrafts(this.store.memoriesDir, this.deployment.dshHome).catch(() => [])
+    const lines = [
+      `memory home: ${this.store.memoriesDir}`,
+      ...states.map((scope) => `${scope.label}: ${scope.entries.length} memories`),
+      `auto-extract: ${this.settings.autoExtract ? `on (every ${formatDelay(this.settings.extractIntervalMinutes * 60_000)}${this.settings.minIdleHours > 0 ? ` + ${formatDelay(extractionDelayMs(this.settings))} quiet to settle` : ''}, ≤${this.settings.maxAgeDays}d old)` : 'off'}`,
+      `peak-hours: ${this.peakLine()}`,
+      `recall: ${this.settings.recallMode} (relevance ≥${this.settings.recallMinScore} plus ${this.settings.recallMinTerms} terms or a shared run, ≤${this.settings.recallMaxPerConversation} memories and ≤${this.settings.recallMaxBytes}B per conversation)`,
+      `summary: ≤${this.settings.maxSummaryEntries} per scope with ${this.settings.summaryFreshSlots} reserved for never-listed memories`,
+      `skills: ${drafts.length === 0 ? 'no staged drafts' : `${drafts.length} staged draft${drafts.length === 1 ? '' : 's'} waiting (promote with /memories promote <name>)`}`,
+      `consolidation: ${await this.consolidationLine()}`,
+      `retention: ${this.settings.maxUnusedDays > 0 ? `archive after ${this.settings.maxUnusedDays}d unused` : 'off'}${this.sweepLine()}`,
+      `exposure: ${await this.exposureLine()}`,
+      `session mode: ${this.sessionMode(session)}`,
+      `logging: ${this.settings.logLevel}${this.settings.traceMaintenance ? ' + maintenance trace' : ''} → ${this.logDestination()}`,
+      `sessions: ${this.state.minedCount()} mined / ${this.state.sessionCount()} tracked`,
+      `background: ${this.backgroundLine()}`,
+      `state store: ${this.state.durable ? 'sqlite' : `memory-only (${this.state.degradedReason ?? 'driver unavailable'})`}`,
+    ]
+    return lines.join('\n')
+  }
+
+  /**
+   * Warning text for the entries a summary is about to list.
+   *
+   * Only the entries that actually reach the model are checked, which is what
+   * makes a filesystem check affordable on every injection: a handful of paths
+   * instead of the whole store. Roots are the workspace the session is in plus
+   * the harness home, because a memory states paths relative to the repository it
+   * is about.
+   *
+   * @param session - session whose summary is being built.
+   * @param entries - the entries the summary will list.
+   * @returns entry id → warning clause, empty when nothing is stale.
+   */
+  private async citationFlags(session: Session, entries: readonly MemoryEntry[]): Promise<Map<string, string>> {
+    const flags = new Map<string, string>()
+    if (entries.length === 0) return flags
+    const projectRoot = await this.projectRoot(session)
+    const roots = citationRoots(projectRoot, [this.deployment.dshHome])
+    if (roots.length === 0) return flags
+    const ignored = ignoredUnder(projectRoot ?? this.deployment.dshHome)
+    for (const entry of entries) {
+      const warning = citationWarning(missingCitations(entry.body, roots, undefined, { isIgnored: ignored }))
+      if (warning.length > 0) flags.set(entry.id, warning)
+    }
+    return flags
+  }
+
+  /**
+   * List every memory that cites a file which no longer resolves.
+   *
+   * The injected block only warns about what it is showing; this is the full
+   * sweep, so a stale reference can be found and fixed before it misleads a
+   * session that never happened to list it.
+   *
+   * @param session - session whose scopes to scan.
+   * @returns a human-readable report.
+   */
+  async stale(session: Session): Promise<string> {
+    const roots = citationRoots(await this.projectRoot(session), [this.deployment.dshHome])
+    const rows = await this.staleRows()
+    if (rows.length === 0) return `No stale citations: every cited path resolves under ${roots.length} known root(s).`
+    const lines: string[] = [`${rows.length} memories cite a path that no longer resolves:`]
+    for (const row of rows) {
+      lines.push(`[${row.scope}] ${row.title}`)
+      lines.push(`  id: ${row.id}`)
+      lines.push(`  找不到: ${row.missing.join('  ')}`)
+    }
+    lines.push('', 'These paths were true when the memory was written. Verify before acting on them, and rewrite the memory (memory action=write, same title) once you know the current path.')
+    return lines.join('\n')
+  }
+
+  /**
+   * One line describing where consolidation stands, for `/memories stats`.
+   *
+   * A staged proposal is the one piece of maintenance state that needs a person,
+   * and it is otherwise invisible: the background pass produces it and then waits.
+   *
+   * @returns the line.
+   */
+  private async consolidationLine(): Promise<string> {
+    if (!this.settings.consolidate) return 'off'
+    const pending = await readPendingPlan(this.store.memoriesDir).catch(() => undefined)
+    if (pending === undefined) {
+      return `no proposal staged; a background pass proposes (never writes) after ${this.settings.consolidateCooldownHours}h of cooldown`
+    }
+    const ageHours = Math.round((Date.now() - pending.at) / 3_600_000)
+    return `proposal staged ${ageHours}h ago for ${pending.label}: ${pending.plan.upserts.length} to write, ${pending.plan.retire.length} to retire (review with /memories plan, then apply or reject)`
+  }
+
+  /** Render one scope's entries for a human-facing command. */
+  async list(session: Session, scope: MemoryScope): Promise<string> {    const state = await this.scopeState(scope, session)
+    return renderScopeListing({ scope: state.scope, label: state.label, entries: state.entries })
+  }
+
+  /** List the staged skill drafts that still need a person. */
+  async skills(): Promise<string> {
+    const drafts = await listDrafts(this.store.memoriesDir, this.deployment.dshHome)
+    if (drafts.length === 0) return 'No skill drafts staged.'
+    return [
+      `${drafts.length} staged skill ${drafts.length === 1 ? 'draft' : 'drafts'}:`,
+      ...drafts.map((draft) => `- ${draft.name} — ${draft.description || '(no description)'}`),
+      '',
+      'Promote one with /memories promote <name>; discard with /memories discard <name>.',
+    ].join('\n')
+  }
+
+  /** Copy one staged draft into the harness skill root. */
+  async promoteSkill(name: string): Promise<string> {
+    const target = await promote(this.store.memoriesDir, this.deployment.dshHome, name)
+    if (target === undefined) return `No staged skill draft named ${JSON.stringify(name)}.`
+    return `Promoted ${JSON.stringify(name)} to ${target}. It joins the skill catalog on the next catalog refresh.`
+  }
+
+  /** Delete one staged draft. */
+  async discardSkill(name: string): Promise<string> {
+    return await discardDraft(this.store.memoriesDir, name)
+      ? `Discarded staged skill draft ${JSON.stringify(name)}.`
+      : `No staged skill draft named ${JSON.stringify(name)}.`
+  }
+}
+
+/**
+ * Split an optional `--kind <kind>` flag out of one command's arguments.
+ *
+ * The flag is accepted anywhere after the verb, so `add global text --kind
+ * preference` and `search query --kind failure` both work. An unknown kind is
+ * ignored rather than rejected: a typo should not silently filter everything
+ * out, and the caller's text is still meaningful.
+ * @param raw - the text after the subcommand.
+ * @returns the text with the flag removed, and the requested kinds.
+ */
+function parseKindFlag(raw: string): { text: string; kinds?: readonly MemoryKind[] } {
+  const match = /(?:^|\s)--kind[= ]([A-Za-z]+)/u.exec(raw)
+  if (match === null) return { text: raw.trim() }
+  const value = match[1]?.toLowerCase()
+  const kind = MEMORY_KINDS.find((candidate) => candidate === value)
+  const text = `${raw.slice(0, match.index)} ${raw.slice(match.index + match[0].length)}`.trim()
+  return kind === undefined ? { text } : { text, kinds: [kind] }
+}
+
+/** Narrow the `/memories` argument grammar. */
+function parseCommandInput(raw: string): { verb: string; rest: string } {  const trimmed = raw.trim()
+  if (trimmed.length === 0) return { verb: 'help', rest: '' }
+  const separator = trimmed.search(/\s/u)
+  if (separator < 0) return { verb: trimmed.toLowerCase(), rest: '' }
+  return { verb: trimmed.slice(0, separator).toLowerCase(), rest: trimmed.slice(separator + 1).trim() }
+}
+
+/** Render the `/memories` help text. */
+function helpText(): string {
+  return [
+    'Usage: /memories [subcommand]',
+    '  list [global|project]   list stored memories',
+    '  search <query> [--kind <kind>]   search both scopes',
+    '  show <id>               show one memory (project first)',
+    '  add <global|project> <text> [--kind <kind>]   store a memory by hand',
+    '  forget <id>             delete a memory for good',
+    '  archive [global|project]   list archived (retired) memories',
+    '  restore <id>            bring an archived memory back',
+    '  mode [on|off]           switch memory off or on for this session',
+    '  mine                    extract memories from this session now',
+    '  consolidate             run a merge/reconcile pass now (safe changes apply at once)',
+    '  plan                    list the consolidation decisions waiting for you',
+    '  apply                   accept every waiting decision',
+    '  reject                  discard every waiting decision',
+    '  sweep                   archive unused memories now',
+    '  notices [test]          list raised notices, or send a test bubble to the pet',
+    '  loops [done <id>]       list promises the user made and has not closed',
+    '  reflect [list]          weekly observations synthesized from the store',
+    '  stale                   list memories that cite a file that no longer exists',
+    '  skills                  list staged skill drafts',
+    '  promote <name>          copy a staged draft into the harness skill root',
+    '  discard <name>          delete a staged draft',
+    '  stats                   store location and counters',
+  ].join('\n')
+}
+
+/**
+ * Register the memory tool, the injector, the idle extractor, and `/memories`.
+ *
+ * The tunables live in this plugin's own entry config, marked live in
+ * {@link Config}: that is what puts them in the DSH settings surface and what
+ * makes a committed write take effect on the next read — no restart.
+ *
+ * @param ctx - the plugin context.
+ * @param config - entry configuration (paths, workspace discovery, tunables).
+ */
+export function apply(ctx: Context, config: MemoriesConfig = {}): void {
+  const deployment = resolveConfig(config)
+  // Every line this plugin emits goes through its own named logger: the name is
+  // what keeps other plugins' traffic out of this plugin's log file, and using it
+  // here too means a failure during composition is recorded like any other.
+  const log = pluginLogger(ctx.logger)
+  /**
+   * Authoritative tunables.
+   *
+   * Read from the entry config rather than snapshotted: the fields are live, so
+   * the Loader hands them over as references and a committed settings write
+   * updates them in place. `loader/volatile-update` announces that they moved,
+   * and re-reading on it is what makes a knob take effect without a restart —
+   * one source, so the settings page and the runtime can never disagree.
+   */
+  let current: MemoriesSettings = readTunables(config)
+  const read = (): MemoriesSettings => current
+  /** Assigned once the live registrations exist; a no-op until then. */
+  let liveRegistrations = (): void => undefined
+  /** Assigned once the runtime exists, so a settings commit can act on it. */
+  let onSettingsCommit = (): void => undefined
+
+  /**
+   * The plugin's own log file, opened before anything else can fail.
+   *
+   * Two reasons for the position. The host logger drops `warn` and `debug`
+   * before any sink sees them — the only exporter a stock composition installs
+   * declares no level, so the threshold falls back to 1 and `warn` (2) is
+   * filtered out — and registering our own exporter for this plugin's logger
+   * name raises that threshold for our lines only, which is what makes a failed
+   * extraction, a quota refusal, or a retention decision observable at all. And
+   * a composition error is the one failure this file used to miss entirely,
+   * because its sink only existed once the runtime did.
+   *
+   * The runtime is assigned below; the callback reaches it only when a write
+   * actually fails.
+   */
+  let runtime!: MemoriesRuntime
+  const sink = createFileSink(deployment.logFile, undefined, (reason) => {
+    // A failed write is the one failure the log file cannot report about itself:
+    // the very channel is broken. Record it on the runtime so `/memories stats`
+    // (and the settings card, which reads the same field) can say the file is
+    // stale instead of leaving a user to trust something that stopped growing.
+    runtime.logSinkError = `write failed: ${reason}`
+  })
+  if (sink !== undefined) {
+    ctx.logger.exporter(createLogExporter(sink, () => current.logLevel))
+  } else if (deployment.logFile.trim().length > 0) {
+    // Recorded on the runtime rather than only logged: this very message cannot
+    // reach the file that failed to open, and the host's own sink is a ring
+    // buffer that a stock profile never reads. `stats` is where a user looks.
+    runtime.logSinkError = `unwritable: ${deployment.logFile}`
+    log.warn('dsh-memories: could not open the log file %s', deployment.logFile)
+  }
+  // The Memories page is this plugin's own, so the settings domain is asked not
+  // to derive a second one from the schema. Optional throughout: a deployment
+  // that composes no domain keeps every model-facing surface and simply has no
+  // page.
+  ctx.inject(['settings'], (child) => {
+    const domain = child.get('settings') as unknown as SettingsDomainLike | undefined
+    if (domain === undefined) return
+    child.effect(() => domain.configure({ auto: false }, ctx.fiber), 'dsh-memories.settingsPage')
+  })
+  ctx.on('loader/volatile-update', () => {
+    current = readTunables(config)
+    liveRegistrations()
+    onSettingsCommit()
+  })
+
+  runtime = new MemoriesRuntime(ctx, config, read)
+  ctx.effect(() => () => runtime.dispose(), 'dsh-memories.lifecycle')
+  // The consolidation child needs a composition of its own. Since 0.2.1-rc.2 a
+  // subagent takes its tool set from the preset it names, and a child that
+  // names none inherits the parent's composition — the parent's tools, which is
+  // exactly what this pass must withhold. This preset declares no plugin rows
+  // at all, so the child can read nothing, write nothing and delegate nothing:
+  // it can only answer with the plan.
+  //
+  // Optional throughout: a deployment that composes no preset registry keeps
+  // every other surface, and the consolidation pass falls back to a plain model
+  // call that owns no tools either.
+  ctx.inject(['agentPresets'], (child) => {
+    const presets = child.get('agentPresets') as AgentPresetRegistryLike | undefined
+    if (presets === undefined) return
+    void presets.register({
+      id: CONSOLIDATE_PRESET_ID,
+      name: '记忆合并（只读）',
+      description: '合并与重整记忆时使用的子代理组成：不含任何工具，只能返回 JSON 方案。',
+      plugins: [],
+    }).then((unregister) => {
+      runtime.markConsolidatePresetReady(true)
+      child.effect(() => () => { void unregister() }, 'dsh-memories.consolidatePreset')
+      log.info('dsh-memories: registered the tool-free preset %s for the consolidation child', CONSOLIDATE_PRESET_ID)
+    }, (error: unknown) => {
+      log.warn('dsh-memories: could not register the consolidation preset, the pass will run without a subagent: %s',
+        error instanceof Error ? error.message : String(error))
+    })
+  })
+  onSettingsCommit = () => {
+    runtime.startPeriodicExtraction()
+    runtime.reportSettingsIssues()
+  }
+  runtime.startPeriodicExtraction()
+  runtime.reportSettingsIssues()
+
+  // The Memories page reads and edits memories through the Typert gateway, so
+  // registering the invocation manifest and providing the `memories` service
+  // are what make `ctx.remote.memories.*` callable from the browser. Both are
+  // optional: a deployment that composes no gateway (headless, tui) keeps every
+  // model-facing and command-facing surface and simply has no browser page.
+  //
+  // Reached through `ctx.inject` rather than `ctx.get`: a service only reads
+  // once its providing fiber is active, and in 0.1.7 the gateway registers after
+  // the rows that consume it — the same trap the settings domain above
+  // documents, and the one that silently left the page without an API.
+  ctx.inject(['typert'], (child) => {
+    const typert = child.get('typert') as TypertRegistryLike | undefined
+    if (typert === undefined) return
+    try {
+      const withdraw = typert.register(REMOTE_CONTRIBUTION)
+      child.effect(() => withdraw, 'dsh-memories.remoteContribution')
+      const service = createRemoteService({
+        store: runtime.store,
+        dshHome: deployment.dshHome,
+        disputes: () => runtime.disputes(),
+        resolveDispute: (id, decision) => runtime.resolveDispute(id, decision),
+      })
+      // Provided on the plugin's own context, not the child's: the gateway is a
+      // sibling scope and resolves the service as a peer.
+      ctx.effect(() => ctx.provide(REMOTE_SERVICE, service), 'dsh-memories.remoteService')
+      log.info('dsh-memories: exposed the %s Remote namespace to the browser (%d methods)',
+        REMOTE_NAMESPACE, REMOTE_CONTRIBUTION.invocations.length)
+    } catch (error) {
+      // The logger serializes `%o` to `{}` for an Error, which hides the one
+      // line a human needs here; log the message instead.
+      log.warn('dsh-memories: remote registration failed, the settings page stays unavailable: %s',
+        error instanceof Error ? error.message : String(error))
+    }
+  })
+  // Import (and remove) a pre-SQLite watermark file once, so upgrading does not
+  // re-mine conversations that were already processed.
+  void importLegacyState(runtime.state, runtime.store.memoriesDir).then((imported) => {
+    if (imported === undefined) return
+    log.info('dsh-memories: imported %d watermarks from the legacy state file', imported)
+  }).catch((error: unknown) => {
+    log.warn('dsh-memories: legacy state import failed: %o', error)
+  })
+  // The first sweep runs here rather than waiting for a session to settle: a
+  // process that starts and stops (a script, a one-shot task) then still gets
+  // the periodic cleanup it would otherwise never reach.
+  void runtime.sweepIfDue().catch((error: unknown) => {
+    log.warn('dsh-memories: startup sweep failed: %o', error)
+  })
+  // Activation facts belong at `debug`, not at the file's default verbosity: a
+  // hot reload writes this line on every edit, and measured over nine days it
+  // was a quarter of the whole log while saying nothing a reader could act on.
+  // `/memories stats` reports the same facts on demand.
+  log.debug(
+    'dsh-memories: store at %s autoExtract=%s idle=%d log=%s',
+    runtime.store.memoriesDir,
+    String(runtime.settings.autoExtract),
+    runtime.settings.autoExtractIdleMs,
+    deployment.logFile.length > 0 ? `${deployment.logFile} (${runtime.settings.logLevel})` : 'off',
+  )
+
+  // `enableTool`/`enableCommand` are live: each registration is torn down and
+  // re-created when the toggle flips, so the model's catalog follows the entry
+  // config without a restart.
+  const registerTool = (): (() => void) => registerMemoryTool(ctx, runtime)
+  const registerCommand = (): (() => void) => ctx.commands.register({
+    name: 'memories',
+    description: 'Inspect and manage cross-session memories',
+    input: { hint: 'list | search <query> [--kind <k>] | show <id> | add <scope> <text> [--kind <k>] | forget <id> | archive | restore <id> | mode [on|off] | mine | consolidate | sweep | skills | stats' },
+    // The handler never throws: an exception here crosses into the harness's
+    // command layer, which reports it verbatim and — measured 2026-09-23 — is
+    // where a truncated extraction surfaced to the user as a failed command.
+    // Every failure inside this plugin becomes an error RESULT instead.
+    handler: async (invocation: CommandInvocation) => {
+      try {
+        return await handleCommand(runtime, invocation)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        runtime.noteCommandFailure(invocation.rawInput.trim().split(/\s+/u)[0] ?? 'memories', error)
+        return { kind: 'error' as const, text: `dsh-memories: ${message}` }
+      }
+    },
+  })
+  let toolDisposer: (() => void) | undefined
+  let commandDisposer: (() => void) | undefined
+  const syncRegistrations = (): void => {
+    const wantTool = runtime.settings.enableTool
+    if (wantTool && toolDisposer === undefined) toolDisposer = registerTool()
+    else if (!wantTool && toolDisposer !== undefined) {
+      toolDisposer()
+      toolDisposer = undefined
+    }
+    const wantCommand = runtime.settings.enableCommand
+    if (wantCommand && commandDisposer === undefined) commandDisposer = registerCommand()
+    else if (!wantCommand && commandDisposer !== undefined) {
+      commandDisposer()
+      commandDisposer = undefined
+    }
+  }
+  syncRegistrations()
+  liveRegistrations = syncRegistrations
+  ctx.effect(() => () => {
+    toolDisposer?.()
+    commandDisposer?.()
+  }, 'dsh-memories.registrations')
+
+  ctx.on('agent/status', ({ agent, status }) => {
+    if (status === 'idle') runtime.scheduleExtraction(agent)
+    else runtime.cancelExtraction(agent)
+    // Record real activity on every transition, so `maxAgeDays` judges a
+    // session by when it was last USED rather than by when it was last mined —
+    // a session that is never mined would otherwise look infinitely young.
+    runtime.recordActivity(agent.session)
+  })
+
+  ctx.on('agent/disposed', ({ agent }) => {
+    runtime.cancelExtraction(agent)
+    // A short-lived process may exit before the idle timer ever fires; the
+    // disposal boundary is the last moment an extraction can still run.
+    void runtime.flushExit().catch(() => undefined)
+  })
+
+  // 0.1.7-rc.1 起宿主把 `agent/session-start` 改名为 `agent/created`（公告见 v0.1.7-rc.1
+  // release notes）。payload 形状不变，仍是 `{ agent, source }`，`source` 取值同为
+  // 'startup' | 'resume' | 'clear' | 'compact'（0.2.0-rc.1 dsh-agent/lib/types/runtime-types.d.ts:105/229）。
+  // 旧名在 0.1.7-alpha.2 / 0.2.0-rc.1 里都不存在 → 原监听器是死代码，clear/compact 后
+  // 不会重置注入状态。2026-09-29 用 tsc 对照真实 0.2.0 类型（TS2345）定位。
+  ctx.on('agent/created', ({ agent, source }: { agent: Agent; source: SessionStartSource }): undefined => {
+    // `clear`/`compact` replace the conversation, so the summary the model saw
+    // is gone: forget it and let the next pre-step re-inject. Fresh and resumed
+    // sessions need no work here — the first step of the first turn injects.
+    if (source === 'clear' || source === 'compact') runtime.resetInjection(agent.session)
+    // 返回 undefined（而不是 void）：0.2.0 的 'agent/created' 监听器签名要求
+    // `Promise<undefined> | undefined`，隐式 void 会报 TS2345。
+    return undefined
+  })
+
+  ctx.on('agent/pre-step', async ({ agent }, next) => {
+    const decision = await next()
+    if (decision.kind === 'reject') return decision
+    // Memory is an enhancement, never a precondition: this seam runs on every
+    // step of every turn, and an exception here fails the user's turn. Contain
+    // everything and fall through to the unmodified decision instead.
+    try {
+      const addition: UserMessage[] = []
+      const summary = await runtime.injectionFor(agent)
+      if (summary !== undefined) addition.push(summary)
+      // Credit the memories the block already handed over and this turn is now
+      // actually about. Without it the only "demand" signal the ranking has is a
+      // search hit, which measures lookup-style knowledge and misses the memory
+      // that was injected and used.
+      await runtime.creditInjectedUse(agent)
+      // The on-demand delta is a second, independent decision: a conversation can
+      // already carry the summary and still meet a memory that only matters now.
+      const delta = await runtime.recallFor(agent)
+      if (delta !== undefined) addition.push(delta)
+      const fresh = addition.filter((message) => !decision.messages.some((existing) => existing.id === message.id))
+      if (fresh.length === 0) return decision
+      // APPEND ONLY. DeepSeek's context cache is keyed on an unchanged prefix, so
+      // this seam may extend the tail and nothing else: no rewriting, reordering,
+      // or dropping an existing message, and never moving a memory block into the
+      // system prompt. The harness deep-freezes request messages for the same
+      // reason; see the "前缀缓存约束" section of README.md before changing this.
+      return { ...decision, messages: [...decision.messages, ...fresh] }
+    } catch (error) {
+      runtime.notePreStepFailure(agent.session.id, error)
+      return decision
+    }
+  })
+}
+
+/** Execute one `/memories` invocation. */
+async function handleCommand(runtime: MemoriesRuntime, invocation: CommandInvocation): Promise<{ kind: 'success' | 'error'; text: string }> {
+  const { verb, rest } = parseCommandInput(invocation.rawInput)
+  const session = invocation.agent.session
+  switch (verb) {
+    case 'help':
+      return { kind: 'success', text: helpText() }
+    case 'stats':
+      return { kind: 'success', text: await runtime.stats(session) }
+    case 'stale':
+      return { kind: 'success', text: await runtime.stale(session) }
+    case 'list': {
+      const scope = rest.trim().toLowerCase()
+      if (scope === 'global' || scope === 'project') return { kind: 'success', text: await runtime.list(session, scope) }
+      const [global, project] = await runtime.allScopes(session)
+      return {
+        kind: 'success',
+        text: [
+          renderScopeListing({ scope: 'global', label: global?.label ?? 'global', entries: global?.entries ?? [] }),
+          '',
+          renderScopeListing({ scope: 'project', label: project?.label ?? 'project', entries: project?.entries ?? [] }),
+        ].join('\n'),
+      }
+    }
+    case 'search': {
+      if (rest.length === 0) return { kind: 'error', text: 'Usage: /memories search <query> [--kind <kind>]' }
+      const { text: query, kinds } = parseKindFlag(rest)
+      if (query.length === 0) return { kind: 'error', text: 'Usage: /memories search <query> [--kind <kind>]' }
+      const hits = await runtime.search(session, query, { limit: 10, ...kinds === undefined ? {} : { kinds } })
+      if (hits.length === 0) return { kind: 'success', text: `No memories match ${JSON.stringify(query)}.` }
+      return { kind: 'success', text: hits.map((hit, index) => renderHit(hit, index)).join('\n') }
+    }
+    case 'show': {
+      if (rest.length === 0) return { kind: 'error', text: 'Usage: /memories show <id>' }
+      const entry = await runtime.read(session, 'project', rest) ?? await runtime.read(session, 'global', rest)
+      if (entry === undefined) return { kind: 'error', text: `No memory with id ${JSON.stringify(rest)}.` }
+      return { kind: 'success', text: renderEntry(entry) }
+    }
+    case 'add': {
+      const { text: body, kinds } = parseKindFlag(rest)
+      const separator = body.search(/\s/u)
+      const scope = (separator < 0 ? body : body.slice(0, separator)).trim().toLowerCase()
+      const text = separator < 0 ? '' : body.slice(separator + 1).trim()
+      if ((scope !== 'global' && scope !== 'project') || text.length === 0) {
+        return { kind: 'error', text: 'Usage: /memories add <global|project> <text> [--kind <kind>]' }
+      }
+      const title = text.length <= 80 ? text : `${text.slice(0, 77)}...`
+      const result = await runtime.write(session, {
+        scope,
+        title,
+        body: text,
+        tags: [],
+        ...kinds === undefined ? {} : { kind: kinds[0] },
+      }, 'user')
+      return { kind: 'success', text: `${result.action === 'created' ? 'Stored' : 'Updated'} ${scope} ${result.entry.kind} memory ${result.entry.id}.` }
+    }
+    case 'forget': {
+      if (rest.length === 0) return { kind: 'error', text: 'Usage: /memories forget <id>' }
+      const project = await runtime.forget(session, 'project', rest)
+      const global = project ? false : await runtime.forget(session, 'global', rest)
+      if (!project && !global) return { kind: 'error', text: `No memory with id ${JSON.stringify(rest)}.` }
+      return { kind: 'success', text: `Forgot ${slugify(rest)}.` }
+    }
+    case 'skills':
+      return { kind: 'success', text: await runtime.skills() }
+    case 'promote': {
+      if (rest.length === 0) return { kind: 'error', text: 'Usage: /memories promote <name>' }
+      return { kind: 'success', text: await runtime.promoteSkill(rest) }
+    }
+    case 'discard': {
+      if (rest.length === 0) return { kind: 'error', text: 'Usage: /memories discard <name>' }
+      return { kind: 'success', text: await runtime.discardSkill(rest) }
+    }
+    case 'archive': {
+      const scope = rest.trim().toLowerCase()
+      if (scope === 'global' || scope === 'project') return { kind: 'success', text: await runtime.archived(session, scope) }
+      return { kind: 'success', text: `${await runtime.archived(session, 'global')}\n\n${await runtime.archived(session, 'project')}` }
+    }
+    case 'restore': {
+      if (rest.length === 0) return { kind: 'error', text: 'Usage: /memories restore <id>' }
+      return { kind: 'success', text: await runtime.restore(session, rest) }
+    }
+    case 'sweep': {
+      const archived = await runtime.sweepNow()
+      return { kind: 'success', text: archived === 0 ? 'Nothing to archive.' : `Archived ${archived} unused memories.` }
+    }
+    case 'reflect': {
+      const dir = runtime.store.memoriesDir
+      const argument = rest.trim().toLowerCase()
+      if (argument === 'list') {
+        const files = await listReflections(dir)
+        if (files.length === 0) return { kind: 'success', text: 'No reflections yet.' }
+        return { kind: 'success', text: files.slice(0, 5).map((file) => `${file.name}\n${file.body.split('\n').filter((line) => line.startsWith('- ')).join('\n') || '(empty)'}`).join('\n\n') }
+      }
+      if (argument.length > 0 && argument !== 'now') return { kind: 'error', text: 'Usage: /memories reflect [now|list]' }
+      return { kind: 'success', text: 'Reflection runs on the maintenance path (weekly, needs 20+ recent memories). See the log line starting with "reflection".' }
+    }
+    case 'loops': {
+      const dir = runtime.store.memoriesDir
+      const ledger = await readLoops(dir)
+      const argument = rest.trim()
+      if (argument.startsWith('done ')) {
+        const closed = closeLoop(ledger, argument.slice(5).trim())
+        if (closed.closed === undefined) return { kind: 'error', text: closed.reason ?? 'could not close that loop' }
+        await writeLoops(dir, closed.store)
+        return { kind: 'success', text: `Closed: ${closed.closed.text}` }
+      }
+      if (argument.length > 0 && argument !== 'list') return { kind: 'error', text: 'Usage: /memories loops [done <id>]' }
+      return { kind: 'success', text: describeLoops(ledger, Date.now()) }
+    }
+    case 'notices': {
+      // `rest` is the remainder of the line as ONE STRING, not argv: indexing it
+      // reads a character, so `notices test` used to fall through to the usage
+      // error ("Usage: /memories notices [test]") whenever an argument was given.
+      const argument = rest.trim().toLowerCase()
+      if (argument.length === 0) return { kind: 'success', text: await runtime.describeNotices() }
+      if (argument === 'test') {
+        const probe = await runtime.probePet()
+        return probe.ok
+          ? { kind: 'success', text: `The pet accepted a test bubble (${probe.target}).` }
+          : { kind: 'error', text: `Pet delivery failed: ${probe.reason ?? 'unknown'}${probe.target === undefined ? '' : ` (${probe.target})`}` }
+      }
+      return { kind: 'error', text: 'Usage: /memories notices [test]' }
+    }
+    case 'mode': {
+      return { kind: 'success', text: runtime.setSessionMode(session, rest.trim().toLowerCase()) }
+    }
+    case 'on':
+      return { kind: 'success', text: runtime.setSessionMode(session, 'on') }
+    case 'off':
+      return { kind: 'success', text: runtime.setSessionMode(session, 'off') }
+    case 'consolidate': {
+      const summary = await runtime.consolidateNow(invocation.agent, { apply: false, force: true })
+      // The old fallback listed three causes and named the real one only by luck;
+      // every silent path now records why it declined.
+      return { kind: 'success', text: summary ?? `Nothing to consolidate: ${runtime.consolidateSkipReason ?? 'unknown reason'}` }
+    }
+    case 'plan': {
+      const pending = await runtime.pendingPlan()
+      return { kind: 'success', text: pending ?? 'No consolidation proposal is waiting.' }
+    }
+    case 'apply': {
+      const summary = await runtime.applyPendingPlan(invocation.agent)
+      return { kind: 'success', text: summary ?? 'No consolidation proposal is waiting.' }
+    }
+    case 'reject': {
+      const dropped = await clearPendingPlan(runtime.store.memoriesDir)
+      return { kind: 'success', text: dropped ? 'Discarded the pending consolidation proposal. The store is unchanged.' : 'No consolidation proposal is waiting.' }
+    }
+    case 'mine': {
+      const count = await runtime.mineNow(invocation.agent)
+      return { kind: 'success', text: count === 0 ? 'Nothing new worth remembering.' : `Stored ${count} memories.` }
+    }
+    default:
+      return { kind: 'error', text: helpText() }
+  }
+}
+
+/** Loader schema re-exported under the name the Cordis loader discovers. */
+export const Config = ConfigSchema
