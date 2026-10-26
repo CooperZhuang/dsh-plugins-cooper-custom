@@ -9,6 +9,10 @@ DSH 就把这个目录作为工作区切入，并进到里面的一个空白会�
 - **不会闪任何窗口**——没有控制台窗口，也不会多开浏览器
 - **桌面版**：DSH 没开就把它启动起来，开着却被挡住或缩在托盘里就把它提到最前
 
+macOS 上没有资源管理器动词，等价物是 Finder 的**快速操作** + 终端命令 `dsh-open`；
+而且 mac 桌面版会拒掉外部 HTTP 请求，所以那边**不走这条路由**，改用外壳自带的启动参数
+交接——见「安装（macOS）」。
+
 ## 装在哪个 DSH 上
 
 同一台机器上可能有两个宿主，本插件两个都支持，靠**这台机器装没装桌面版**来分辨：
@@ -37,6 +41,10 @@ authenticated URL；直接开 `http://127.0.0.1:19387/` 得到的是
 所以桌面版模式下的冷启动只能是**启动应用本身**，不能是打开一个 URL。
 
 显式钉住端口就按端口走：`-Port 3080` 即使在装了桌面版的机器上也保持 `dsh web` 的行为。
+
+macOS 两样都不一样：桌面版端口不固定（默认 43120，被占用自动 +1），而且外壳在进路由之前
+就把非 Electron renderer 的请求拒成 `403 forbidden`，所以上面这条 HTTP 链路在 mac 上
+从外部**根本打不通**——那边改用启动参数交接（见「安装（macOS）」）。
 
 ## 内核版本（DSH 0.2.1-rc.2）
 
@@ -103,6 +111,54 @@ pwsh -File scripts\install-menu.ps1 -Action install
 菜单本身**就在 Windows 11 的顶层菜单里**（实测 build 26200，和 PowerShell 7、通过 Code 打开并列），
 不用点「显示更多选项」。
 
+## 安装（macOS）
+
+mac 上插件的那条 HTTP 路由**从外部打不进来**：桌面外壳（2.0.18-beta.1）在进路由之前就把非
+Electron renderer 的请求拒成 `403 forbidden`，而「允许在浏览器中打开」只在兼容模式下才存在。
+所以 mac 不走路由，用外壳自带的目录交接：
+
+```sh
+packages/dsh-open-in-dsh/scripts/macos/install-macos.sh install
+# 卸载：… uninstall     查看当前状态与「点一下会发生什么」：… status
+```
+
+装完两样东西：
+
+| 位置 | 是什么 |
+|---|---|
+| `~/Library/Services/通过 DSH 打开.workflow` | Automator 快速操作，只收文件夹。Finder 里右键文件夹 → **快速操作** → 通过 DSH 打开；可以多选，也可以给它配快捷键 |
+| `~/bin/dsh-open` | 终端命令；不带参数就是当前目录 |
+
+启动器（`scripts/macos/open-in-dsh`）只做三件事：把路径规范化（软链、相对路径、结尾斜杠、
+空格与引号）→ 找 app（先看正在跑的那个，再看 `/Applications`，最后按 bundle id 走 Spotlight）→
+
+- **已经开着**：再执行一次 `Contents/MacOS/DSH Desktop Beta --dsh-desktop-workspace=<目录>`，
+  单实例把它交给主实例（主实例提窗 + 交接），这个进程不到一秒就退出，不会开出第二个窗口；
+- **没开**：`open -a "<app>" --args --dsh-desktop-workspace=<目录>`，冷启动直接把目录带进去；
+- **没装桌面版**：回落到插件路由（`dsh web`，默认 3080；`--port` 或 `DSH_OPEN_PORT` 可改）。
+
+「这个文件夹算什么」不由启动器决定：外壳拿到参数后走的是 `workspaces.create({ path })` +
+`uiWorkspace.openWorkspace(id)`，和浏览器半边同一套逻辑——已登记的直接切、没有就新建，
+空白会话能复用就复用。所以 Windows 上用 HTTP 模拟的那件事，mac 上外壳自己做。
+
+实测（本机，`open-in-dsh --print`）：
+
+```
+mode=desktop app=/Applications/DSH Desktop Beta.app exe=… running=1 path=/Users/example/.dsh
+```
+
+带参数再启动一次：**0.57 s 退出、进程数不变**。
+
+限制：
+
+- 快速操作在**子菜单**里（「快速操作」/「服务」）。要 Windows 那种**顶层**右键条目只有
+  Finder Sync 扩展一条路——要 Xcode 工程和签名，桌面版每次升级还得重签，所以没做。
+- 右键**文件夹空白处**在 macOS 上没有对应入口：服务总要有选中项。
+- `--dsh-desktop-workspace` 是桌面外壳的内部契约（不是公开 API）。启动器把它当能力用，
+  外壳改名就得跟着改。
+- 首次安装后如果菜单不出现：`killall Finder`，或注销重登；开关/快捷键在
+  系统设置 → 键盘 → 键盘快捷键 → 服务。
+
 ## 桌面版怎么把窗口提到最前
 
 页面里的 `window.focus()` 对 Electron 窗口基本无效：它只动页面自己的焦点，不动 OS 层的
@@ -162,7 +218,9 @@ dsh://open
 路径则通过**进程环境变量**传（`DSH_OPEN_PATH` / `DSH_OPEN_PORT` / `DSH_OPEN_APP`），
 一个引号都不用转义——单引号目录名、`D:\` 这类边界情况于是自然消失。
 
-## 它怎么工作
+## 它怎么工作（Windows 链路）
+
+macOS 不经过这里：那边是启动参数交接，见「安装（macOS）」。
 
 右键动词是个独立进程，浏览器拿不到「用户刚才右键了哪个目录」，中间必须有碰头点，
 而 DSH 宿主本来就在跑，就用它：
@@ -275,11 +333,14 @@ bundle 自带的 `cordis.patch.yml` 是默认值；profile 的 `cordis.patch.yml
 - 桌面版**登录页（welcome 窗口）**出现时页面还没跑起来：请求会待在回放窗口里，
   等你登录进去、页面加载后才落地；超过 `backlogTtlMs` 就过期了，需要重按一次。
 - 宿主半边改代码要重启宿主才生效（见上，模块缓存）；桌面版必须整个退出再打开。
+- macOS：快速操作在子菜单里，不是顶层条目；右键文件夹空白处没有入口；`--dsh-desktop-workspace`
+  是桌面外壳的内部契约，外壳改名时启动器要跟着改。
 
 ## 验证
 
 ```powershell
 npm test        # 24 个测试
+node --test test/macos.test.mjs   # macOS：11 个测试（不需要装 node_modules）
 ```
 
 - `test/host.test.mjs`：序号/回放/宿主重启回退 + `%V` 的各种形态。

@@ -28,7 +28,7 @@
   ],
   "scripts": {
     "build": "node scripts/build-client.mjs",
-    "test": "node --check lib/index.js && node --check lib/client.js && node --test test/host.test.mjs test/routes.test.mjs test/scripts.test.mjs"
+    "test": "node --check lib/index.js && node --check lib/client.js && node --test test/host.test.mjs test/routes.test.mjs test/scripts.test.mjs test/macos.test.mjs"
   },
   "engines": {
     "node": ">=20"
