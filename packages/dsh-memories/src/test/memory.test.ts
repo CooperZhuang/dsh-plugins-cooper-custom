@@ -4,7 +4,7 @@
  * @module dsh-memories/test/storage.test
  */
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
@@ -30,12 +30,55 @@ test('slugify produces stable ids and falls back for empty input', () => {
   assert.equal(slugify('中文 记忆'), '中文-记忆')
 })
 
-test('projectSlug is stable per root and distinct across roots', () => {
-  const a = projectSlug('C:\\Code\\alpha')
-  const b = projectSlug('C:\\Code\\beta')
-  assert.equal(a, projectSlug('C:\\Code\\alpha'))
-  assert.notEqual(a, b)
-  assert.match(a, /^alpha-[0-9a-f]{8}$/u)
+test('projectSlug is the project name, so one project keeps one slug on every machine', () => {
+  assert.equal(projectSlug('C:\\Code\\alpha'), 'alpha')
+  assert.equal(projectSlug('/Users/cooper/Documents/Code/alpha'), 'alpha', 'a different machine path resolves to the same slug')
+  assert.equal(projectSlug('/Users/cooper/Documents/Code/Mubea_Invoice-Insight/'), 'mubea-invoice-insight')
+  assert.notEqual(projectSlug('/Code/alpha'), projectSlug('/Code/beta'))
+})
+
+test('adopting a legacy path-hashed directory merges its entries instead of dropping them', async () => {
+  const { store, dir } = await tempStore()
+  const root = '/Users/cooper/Documents/Code/alpha'
+  // The directory the old path-hashed scheme produced, with one entry only it has.
+  const legacy = join(dir, 'projects', 'alpha-1a2b3c4d')
+  await mkdir(join(legacy, 'entries'), { recursive: true })
+  await writeFile(join(legacy, 'project.json'), JSON.stringify({ root, name: 'alpha', slug: 'alpha-1a2b3c4d', updatedAt: 1 }))
+  await writeFile(join(legacy, 'entries', 'shared.md'), [
+    '---', 'id: shared', 'scope: project', 'kind: fact', 'title: Shared', 'tags:',
+    'created: 2026-01-01T00:00:00.000Z', 'updated: 2026-01-01T00:00:00.000Z', '---', '', 'old text', '',
+  ].join('\n'))
+  await writeFile(join(legacy, 'entries', 'only-legacy.md'), [
+    '---', 'id: only-legacy', 'scope: project', 'kind: fact', 'title: Only legacy', 'tags:',
+    'created: 2026-01-01T00:00:00.000Z', 'updated: 2026-01-01T00:00:00.000Z', '---', '', 'kept', '',
+  ].join('\n'))
+  // The canonical directory the current scheme derives: same id, newer revision.
+  const canonical = join(dir, 'projects', 'alpha', 'entries')
+  await mkdir(canonical, { recursive: true })
+  await writeFile(join(canonical, 'shared.md'), [
+    '---', 'id: shared', 'scope: project', 'kind: fact', 'title: Shared', 'tags:',
+    'created: 2026-01-01T00:00:00.000Z', 'updated: 2026-02-01T00:00:00.000Z', '---', '', 'new text', '',
+  ].join('\n'))
+
+  const moved = await store.adoptMisnamedProjects()
+
+  assert.deepEqual(moved, [{ from: 'alpha-1a2b3c4d', to: 'alpha' }])
+  assert.deepEqual(await store.listProjects(), ['alpha'])
+  const entries = await store.list('project', root, { fresh: true })
+  assert.deepEqual(entries.map((entry) => entry.id).sort(), ['only-legacy', 'shared'])
+  assert.equal(entries.find((entry) => entry.id === 'shared')?.body, 'new text', 'the newer revision wins')
+})
+
+test('a project directory records every machine that used it', async () => {
+  const { store, dir } = await tempStore()
+  const root = '/Users/cooper/Documents/Code/alpha'
+  await store.writeProjectDescriptor(root, 1000)
+  const hostsDir = join(dir, 'projects', 'alpha', 'hosts')
+  const files = (await readdir(hostsDir)).filter((name) => name.endsWith('.json'))
+  assert.equal(files.length, 1, 'one descriptor for this machine')
+  const descriptor = JSON.parse(await readFile(join(hostsDir, files[0]!), 'utf8')) as { root: string; host: string }
+  assert.equal(descriptor.root, root)
+  assert.equal(typeof descriptor.host, 'string')
 })
 
 test('the consolidation route falls back to the extraction route, then to the session', () => {

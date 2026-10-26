@@ -20,9 +20,9 @@
  *
  * @module dsh-memories/storage
  */
-import { createHash } from 'node:crypto'
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
-import { basename, dirname, join, relative, resolve } from 'node:path'
+import { basename, dirname, join, relative, resolve, sep } from 'node:path'
+import { hostname } from 'node:os'
 import type { MemoryDraft, MemoryEntry, MemoryScope, ScopeTarget, UpsertResult } from './types.js'
 import { toMemoryDurability, toMemoryKind } from './types.js'
 
@@ -39,6 +39,27 @@ export interface ProjectDescriptor {
   readonly slug: string
   /** Unix epoch milliseconds of the last write. */
   readonly updatedAt: number
+}
+
+/**
+ * One machine's view of a project directory.
+ *
+ * Stored as `projects/<slug>/hosts/<hostname>.json`. The point is honesty about
+ * the trade in {@link projectSlug}: a slug is now the project *name*, so two
+ * unrelated projects sharing a basename share one directory, and this file is
+ * how a reader sees that a directory has been used from more than one root.
+ */
+export interface ProjectHostDescriptor {
+  /** Machine that wrote this file. */
+  readonly host: string
+  /** `process.platform` of that machine. */
+  readonly platform: string
+  /** That machine's absolute checkout of the project. */
+  readonly root: string
+  /** First time this machine used the directory. */
+  readonly firstSeen: number
+  /** Last time this machine used the directory. */
+  readonly lastSeen: number
 }
 
 /** Whether a filesystem error means "absent". */
@@ -104,15 +125,33 @@ export function normalizeTag(value: string): string {
 }
 
 /**
- * Derive a stable, collision-resistant directory slug for one workspace root.
+ * Derive the directory slug of one project from its **name**, not its path.
+ *
+ * Memory is about the project, and one project is usually checked out at a
+ * different absolute path on every machine (`/Users/x/Code/alpha` here,
+ * `C:/CodeRepository/alpha` there). Deriving the slug from the resolved path
+ * split that one project's memories into one directory per machine, which made
+ * "the same repo, remembered twice" the normal case. The name is the identity
+ * both machines agree on.
+ *
+ * Two unrelated projects that happen to share a basename therefore share one
+ * directory. That is the accepted trade: the directory records every root that
+ * ever used it under `hosts/`, so a collision is visible rather than silent.
+ *
  * @param root - absolute workspace root.
- * @returns `<basename>-<8 hex chars of sha1(root)>`.
+ * @returns The slugified basename.
  */
 export function projectSlug(root: string): string {
-  const name = slugify(root.replace(/[\\/]+$/u, '').split(/[\\/]/u).pop() ?? 'workspace')
-  const digest = createHash('sha1').update(resolve(root)).digest('hex').slice(0, 8)
-  return `${name}-${digest}`
+  return slugify(root.replace(/[\\/]+$/u, '').split(/[\\/]/u).pop() ?? 'workspace')
 }
+
+/**
+ * The legacy slug shape: `<name>-<8 hex chars of sha1(resolved root)>`.
+ *
+ * Only migration reads this: a directory matching it was named by the old
+ * path-derived scheme and has to be re-homed onto {@link projectSlug}.
+ */
+export const LEGACY_PROJECT_SLUG = /^.+?-[0-9a-f]{8}$/u
 
 /** Serialize one entry as a markdown file with frontmatter. */
 export function formatEntry(entry: MemoryEntry): string {
@@ -621,13 +660,61 @@ export class MemoryStore {
   /** Record how one project slug was derived, for diagnostics. */
   async writeProjectDescriptor(projectRoot: string, now = Date.now()): Promise<void> {
     const slug = projectSlug(projectRoot)
+    const name = projectRoot.replace(/[\\/]+$/u, '').split(/[\\/]/u).pop() ?? 'workspace'
     const descriptor: ProjectDescriptor = {
       root: resolve(projectRoot),
-      name: projectRoot.replace(/[\\/]+$/u, '').split(/[\\/]/u).pop() ?? 'workspace',
+      name,
       slug,
       updatedAt: now,
     }
     await writeAtomic(join(this.memoriesDir, 'projects', slug, 'project.json'), `${JSON.stringify(descriptor, undefined, 2)}\n`)
+    await this.writeHostDescriptor(slug, projectRoot, now).catch(() => undefined)
+  }
+
+  /**
+   * Record that this machine uses one project directory.
+   *
+   * One file per host (`hosts/<hostname>.json`) rather than one shared file: the
+   * store is synced between machines, and a single descriptor rewritten by both
+   * would make every sync a conflict over fields neither party changed.
+   *
+   * @param slug - project slug, the directory the file lives under.
+   * @param projectRoot - this machine's checkout of that project.
+   * @param now - write time.
+   */
+  async writeHostDescriptor(slug: string, projectRoot: string, now = Date.now()): Promise<void> {
+    const dir = join(this.memoriesDir, 'projects', slug, 'hosts')
+    const file = join(dir, `${slugify(hostname())}.json`)
+    let firstSeen = now
+    try {
+      const existing = JSON.parse(await readFile(file, 'utf8')) as { firstSeen?: number }
+      if (typeof existing.firstSeen === 'number') firstSeen = existing.firstSeen
+    } catch {
+      // first write on this machine
+    }
+    const descriptor = { host: hostname(), platform: process.platform, root: resolve(projectRoot), firstSeen, lastSeen: now }
+    await mkdir(dir, { recursive: true })
+    await writeAtomic(file, `${JSON.stringify(descriptor, undefined, 2)}\n`)
+  }
+
+  /** Every host that has used one project slug, newest write first. */
+  async listHostDescriptors(slug: string): Promise<readonly ProjectHostDescriptor[]> {
+    const dir = join(this.memoriesDir, 'projects', slug, 'hosts')
+    let names: string[]
+    try {
+      names = (await readdir(dir)).filter((name) => name.endsWith('.json'))
+    } catch {
+      return []
+    }
+    const hosts: ProjectHostDescriptor[] = []
+    for (const name of names) {
+      try {
+        hosts.push(JSON.parse(await readFile(join(dir, name), 'utf8')) as ProjectHostDescriptor)
+      } catch {
+        // unreadable host file: absence is honest, a fabricated root is not
+      }
+    }
+    return hosts.sort((a, b) => b.lastSeen - a.lastSeen)
   }
 
   /** Read a project descriptor, when present. */
@@ -702,19 +789,23 @@ export class MemoryStore {
   }
 
   /**
-   * Move a project scope whose directory name is not the slug its own root
-   * derives onto the canonical directory.
+   * Move every project scope whose directory name is not the slug its own root
+   * derives onto the canonical directory, merging entries when both exist.
    *
-   * A slug is derived from the workspace path, so a scope written by an older
-   * derivation can sit under a name the current one never produces — and then
-   * every read path (`list`, `read`, search, the injected summary) resolves the
-   * canonical directory, finds nothing there, and the memories are invisible
-   * while still occupying disk. Measured on a real store, one project's two
-   * memories were unreachable exactly this way.
+   * Two reasons a misspelled directory appears, and the second is the common one:
    *
-   * A canonical directory that already holds markdown is left alone and reported
-   * instead of merged: two directories' worth of memories is a decision for a
-   * person, not for a sweep.
+   * 1. A slug derived by an older scheme. Before 0.2.1 the slug carried a hash of
+   *    the resolved path, so the same project checked out at two paths wrote two
+   *    directories.
+   * 2. The same project on two machines. The slug is now the project name, so the
+   *    directories converge — and the first device to see the other's copy merges
+   *    them here.
+   *
+   * Merging is safe because an entry is one memory identified by its id: the same
+   * id in both directories is the same memory with two revisions, so the newer
+   * `updated` wins and the older text is simply dropped (it stays in the git
+   * history of the synced store). `index.json` is a rebuildable cache and is not
+   * copied.
    *
    * @returns the slug pairs that were re-homed, for the caller to report.
    */
@@ -729,24 +820,37 @@ export class MemoryStore {
         continue
       }
       if (typeof descriptor.root !== 'string' || descriptor.root.length === 0) continue
-      const target = dirname(this.entriesDir('project', descriptor.root))
-      const canonical = basename(target)
+      const canonical = projectSlug(descriptor.root)
       if (canonical === slug) continue
-      if (await exists(join(target, 'index.json'))) {
-        // The canonical directory already has its own index: re-homing would
-        // overwrite one of the two. Leave both for a human to reconcile.
-        this.cache.delete(dir)
-        continue
-      }
+      const target = join(this.memoriesDir, 'projects', canonical)
       try {
         await mkdir(target, { recursive: true })
         const dirents = await readdir(dir, { recursive: true, withFileTypes: true })
         for (const dirent of dirents) {
           if (!dirent.isFile()) continue
           const from = join(dirent.parentPath, dirent.name)
-          const to = join(target, relative(dir, from))
-          await mkdir(dirname(to), { recursive: true })
-          await rename(from, to)
+          const rel = relative(dir, from)
+          if (rel === 'index.json') continue
+          const to = join(target, rel)
+          if (rel === 'project.json') {
+            // Keep the canonical descriptor when one exists: its root is the path
+            // this machine actually resolves, and either root derives the same slug.
+            if (!(await exists(to))) {
+              await mkdir(dirname(to), { recursive: true })
+              await rename(from, to)
+            }
+            continue
+          }
+          if (!(await exists(to))) {
+            await mkdir(dirname(to), { recursive: true })
+            await rename(from, to)
+            continue
+          }
+          // Same file on both sides: for entries keep the newer revision.
+          if (!rel.startsWith('entries' + sep) || !rel.endsWith('.md')) continue
+          const incoming = await this.entryTimeOf(from)
+          const existing = await this.entryTimeOf(to)
+          if (incoming > existing) await rename(from, to)
         }
         await rm(dir, { recursive: true, force: true })
       } catch {
@@ -760,6 +864,20 @@ export class MemoryStore {
       moved.push({ from: slug, to: canonical })
     }
     return moved
+  }
+
+  /** The `updated` stamp of one entry file, or its mtime when it has none. */
+  private async entryTimeOf(file: string): Promise<number> {
+    const text = await readText(file)
+    if (text !== undefined) {
+      const entry = parseEntry(text, 'project', basename(file, '.md'))
+      if (entry !== undefined && Number.isFinite(entry.updatedAt)) return entry.updatedAt
+    }
+    try {
+      return (await stat(file)).mtimeMs
+    } catch {
+      return 0
+    }
   }
 
   /**
