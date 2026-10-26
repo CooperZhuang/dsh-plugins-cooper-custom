@@ -7,7 +7,7 @@ one host-plane plugin row and one browser half.
 | Half | Was | Still provides |
 | --- | --- | --- |
 | delete | `dsh-session-admin` | `/session-admin/api/*`, model tool `session_admin`, right-pane "会话管理" tab, conversation-header trash icon, settings section |
-| move | `dsh-session-move` | `/session-move/api/*`, model tool `session_move`, right-pane "会话归位" tab, sidebar footer entry |
+| move | `dsh-session-move` | `/session-move/api/*`, model tool `session_move`, right-pane "会话归位" tab |
 
 Both halves are **copied verbatim** (`lib/admin.js` ← `dsh-session-admin/lib/index.js`,
 `lib/move.js` ← `dsh-session-move/lib/index.js`, plus `lib/engine.js` / `lib/memory.js` /
@@ -51,7 +51,6 @@ original halves (not a single line had to be renamed). Every externally visible 
 
 - tab kinds `dsh-session-admin:manager` / `dsh-session-move:panel`
   (`…-via-better-sidebar` when dsh-better-sidebar is present);
-- footer entry `sidebar.footer.action` id `dsh-session-move:open`;
 - header trash icon `dsh-session-admin:delete-current` (an icon plus two confirmations; the
   switch is `headerDeleteButton`, default on);
 - settings section id changed from `session-admin` to `session-toolbox` (it stays: that page

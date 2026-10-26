@@ -1,6 +1,6 @@
 {
   "name": "dsh-session-toolbox",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Session toolbox for DeepSeek Harness: real deletion of persisted sessions (with workspace/archive/subagent filters and running-session guards) plus real moves between workspaces (log relocation, header.cwd rewrite, workspace registry follow). One host half with two HTTP prefixes and two model tools, one browser half with two right-pane tabs and one merged config card.",
   "keywords": [
