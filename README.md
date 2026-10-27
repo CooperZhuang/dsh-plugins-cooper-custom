@@ -51,6 +51,23 @@ pnpm add "github:CooperZhuang/dsh-plugins-cooper-custom#path:/packages/dsh-sessi
 
 装好后把包名加进 profile 的 `dsh.profile.bundles`（或依赖它自己的 bundle patch），宿主是否需要重启见各插件 README 与 `dsh-plugin-hot-load` 技能。
 
+## App 包补丁（不进 profile）
+
+有些上游行为编译期就定死了，配置改不了，只能动桌面端 `.app` 里的构建产物：
+
+| 脚本 | 改什么 | 生效条件 |
+|---|---|---|
+| `scripts/patch-open-in-app-qspace.mjs` | 会话头部「打开方式」加 QSpace Pro，排第一（即默认项），访达保留 | 重启桌面端；**DSH 升级会整体替换 .app，升级后重跑 `--apply --verify`** |
+
+```bash
+node scripts/patch-open-in-app-qspace.mjs --check    # 只报告两个补丁点状态
+node scripts/patch-open-in-app-qspace.mjs --apply    # 打补丁（幂等）
+node scripts/patch-open-in-app-qspace.mjs --verify   # 真跑宿主解析：apps 列表 + 图标 + 语法闸
+node scripts/patch-open-in-app-qspace.mjs --revert   # 只删自己插的行
+```
+
+宿主半边（`dsh-host-open-in-app` 的目录白名单）与浏览器半边（`dsh-client-ui-open-in-app` 的 `APP_LABEL_KEY`）都要插一行：只改一边的话，条目会被菜单过滤掉或显示空名字。
+
 ## 依赖关系
 
 - `dsh-session-toolbox` 运行期依赖 `dsh-session-store`，在 `peerDependencies` 里声明；monorepo 内由**根 devDependencies 的 `link:./packages/dsh-session-store`** 提供（`autoInstallPeers: false` 不自动装 peer）。装进 profile 时**两个包都作为 profile 的直接依赖安装**，靠 hoisted 解析。历史遗留的写死路径 `link:C:/code/dsh-session-store` 已移除。
