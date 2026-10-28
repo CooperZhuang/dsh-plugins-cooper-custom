@@ -57,16 +57,25 @@ pnpm add "github:CooperZhuang/dsh-plugins-cooper-custom#path:/packages/dsh-sessi
 
 | 脚本 | 改什么 | 生效条件 |
 |---|---|---|
-| `scripts/patch-open-in-app-qspace.mjs` | 会话头部「打开方式」加 QSpace Pro，排第一（即默认项），访达保留 | 重启桌面端；**DSH 升级会整体替换 .app，升级后重跑 `--apply --verify`** |
+| `scripts/patch-open-in-app-qspace.mjs` | 会话头部「打开方式」加 QSpace Pro，排第一（即默认项），访达保留 | 重启桌面端；**DSH 升级会整体替换 .app，升级后重跑 `--apply`** |
 
 ```bash
 node scripts/patch-open-in-app-qspace.mjs --check    # 只报告两个补丁点状态
-node scripts/patch-open-in-app-qspace.mjs --apply    # 打补丁（幂等）
-node scripts/patch-open-in-app-qspace.mjs --verify   # 真跑宿主解析：apps 列表 + 图标 + 语法闸
-node scripts/patch-open-in-app-qspace.mjs --revert   # 只删自己插的行
+node scripts/patch-open-in-app-qspace.mjs --apply    # 打补丁 -> 自检 -> 不过就自动回滚
+node scripts/patch-open-in-app-qspace.mjs --verify   # 自检：归档 + 语法 + 用 Electron 真跑路由
+node scripts/patch-open-in-app-qspace.mjs --revert   # 从 .dsh-bak 恢复 app.asar 与 Info.plist
 ```
 
 宿主半边（`dsh-host-open-in-app` 的目录白名单）与浏览器半边（`dsh-client-ui-open-in-app` 的 `APP_LABEL_KEY`）都要插一行：只改一边的话，条目会被菜单过滤掉或显示空名字。
+
+### 两种打包布局
+
+| 版本 | 目标 | 怎么做 |
+|---|---|---|
+| ≤ 2.0.18 | `Contents/Resources/app/node_modules/...` | 直接改两个 `lib/*.js`（`--revert` 删掉插入的行） |
+| ≥ 2.0.19 | `Contents/Resources/app.asar` | 重建归档（`scripts/lib/asar.mjs`），并改写 `Info.plist` 的 `ElectronAsarIntegrity.hash` |
+
+asar 的坑，都在 `scripts/lib/asar.mjs` 顶注里：header 是 Chromium pickle、**条目 `offset` 相对数据区起点而不是文件开头**、改过的文件要重算 `integrity`（Electron 只校验 header JSON 的 SHA256，但 header 里的 per-file 哈希得自洽）。不施加改动重建时产物与原归档逐字节相同，可以拿它当回归测试。
 
 ## 依赖关系
 
