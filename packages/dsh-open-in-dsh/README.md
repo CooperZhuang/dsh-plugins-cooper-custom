@@ -113,9 +113,15 @@ pwsh -File scripts\install-menu.ps1 -Action install
 
 ## 安装（macOS）
 
-mac 上插件的那条 HTTP 路由**从外部打不进来**：桌面外壳（2.0.18-beta.1）在进路由之前就把非
-Electron renderer 的请求拒成 `403 forbidden`，而「允许在浏览器中打开」只在兼容模式下才存在。
-所以 mac 不走路由，用外壳自带的目录交接：
+mac 上那条 HTTP 端口**从外部打不进来**：桌面外壳在进路由之前就把非 Electron renderer 的请求
+拒成 403，而「允许在浏览器中打开」只在兼容模式下才存在。所以 mac 走**同一个路由的第二个传输层**：
+插件在宿主里监听一个 Unix 域套接字（`~/.dsh/run/dsh-open-in-dsh.sock`，权限 0600），启动器把
+同样的 JSON 打到那个套接字上。
+
+> 2.0.19 之前这里用的是外壳的 `--dsh-desktop-workspace` 启动参数。外壳在新版把它删了，而且不是
+> 「忽略」——把它传给打包后的可执行文件会在 Chromium 的选项解析里直接崩：
+> `bad option: --dsh-desktop-workspace=…`、退出码 9。于是 warm 交接（第二实例转 argv）和冷启动
+> （`open -a --args`）两条路一起失效，右键点了像没反应。套接字方案是插件的自有通道，不依赖外壳契约。
 
 ```sh
 packages/dsh-open-in-dsh/scripts/macos/install-macos.sh install
@@ -133,22 +139,28 @@ packages/dsh-open-in-dsh/scripts/macos/install-macos.sh install
 启动器（`scripts/macos/open-in-dsh`）只做三件事：把路径规范化（软链、相对路径、结尾斜杠、
 空格与引号）→ 找 app（先看正在跑的那个，再看 `/Applications`，最后按 bundle id 走 Spotlight）→
 
-- **已经开着**：再执行一次 `Contents/MacOS/DSH Desktop Beta --dsh-desktop-workspace=<目录>`，
-  单实例把它交给主实例（主实例提窗 + 交接），这个进程不到一秒就退出，不会开出第二个窗口；
-- **没开**：`open -a "<app>" --args --dsh-desktop-workspace=<目录>`，冷启动直接把目录带进去；
-- **没装桌面版**：回落到插件路由（`dsh web`，默认 3080；`--port` 或 `DSH_OPEN_PORT` 可改）。
+- **已经开着**：`curl --unix-socket <socket> -X POST http://localhost/dsh-open-in-dsh/api/v1/open`
+  投路径，然后不带参数再执行一次 app 可执行文件把窗口提到最前（第二实例拿不到单实例锁、
+  主实例收到 `second-instance` 后聚焦，这个进程 0.1 秒内以 0 退出）；
+- **没开**：`open -a "<app>"` 起应用，等宿主把套接字绑上（默认最多 30 s，`DSH_OPEN_WAIT` 可改）
+  再投递——页面还没连上时请求落在 hub 的 backlog 里，页面一连上来就补收；
+- **没装桌面版**：回落到同一条路由的 TCP 版（`dsh web`，默认 3080；`--port` 或 `DSH_OPEN_PORT` 可改）。
 
-「这个文件夹算什么」不由启动器决定：外壳拿到参数后走的是 `workspaces.create({ path })` +
-`uiWorkspace.openWorkspace(id)`，和浏览器半边同一套逻辑——已登记的直接切、没有就新建，
-空白会话能复用就复用。所以 Windows 上用 HTTP 模拟的那件事，mac 上外壳自己做。
+「这个文件夹算什么」不由启动器决定，也不由外壳决定：mac 和 Windows 一样，宿主只负责把路径
+publish 到 hub，页面（浏览器半边）再走 `workspaces.create({ path })` + `uiWorkspace.openWorkspace(id)`
+——已登记的直接切、没有就新建，空白会话能复用就复用。
 
-实测（本机，`open-in-dsh --print`）：
+实测（本机，DSH Desktop Beta 2.0.20-beta.1 / 内核 0.2.1-rc.3）：
 
 ```
-mode=desktop app=/Applications/DSH Desktop Beta.app exe=… running=1 path=/Users/example/.dsh
+$ open-in-dsh --print /tmp/x
+mode=desktop app=/Applications/DSH Desktop Beta.app exe=… running=1 socket=/Users/example/.dsh/run/dsh-open-in-dsh.sock path=/tmp/x
+
+$ time open-in-dsh --app "/Applications/DSH Desktop Beta.app" /tmp/x   # warm
+opened /tmp/x (desktop, app=/Applications/DSH Desktop Beta.app, running=1)    0.16 s
 ```
 
-带参数再启动一次：**0.57 s 退出、进程数不变**。
+套接字文件权限实测 `srw-------`（0600）：只有本用户能投递，和端口版的「只收 loopback」是同一条边界。
 
 ### 为什么 QSpace 要单独一个 workflow
 
@@ -174,8 +186,9 @@ QSpace 的右键菜单本身就是一份可排序清单（`~/Library/Application
 - 快速操作在**子菜单**里（「快速操作」/「服务」）。要 Windows 那种**顶层**右键条目只有
   Finder Sync 扩展一条路——要 Xcode 工程和签名，桌面版每次升级还得重签，所以没做。
 - 右键**文件夹空白处**在 macOS 上没有对应入口：服务总要有选中项。
-- `--dsh-desktop-workspace` 是桌面外壳的内部契约（不是公开 API）。启动器把它当能力用，
-  外壳改名就得跟着改。
+- mac 的交接依赖**插件自己监听的套接字**：改了插件代码要重启桌面端（宿主半边在插件初始化时绑定）。
+  套接字不在时启动器会明确报错并写日志，不会假装成功。路径可用 config `socketPath`（宿主）与
+  `DSH_OPEN_SOCKET`（启动器）一起改到别处。
 - 首次安装后如果菜单不出现：`killall Finder`，或注销重登；开关/快捷键在
   系统设置 → 键盘 → 键盘快捷键 → 服务。
 

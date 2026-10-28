@@ -7,15 +7,24 @@
 # the app on macOS: the Desktop shell's WebServer rejects every request that did
 # not come from its own renderer ("403 forbidden", decided before route
 # matching), and the "ordinary browser access" escape hatch only exists in
-# compatibility mode. So this launcher uses the shell's own folder hand-off:
+# compatibility mode.
 #
-#     <app>/Contents/MacOS/<CFBundleExecutable> --dsh-desktop-workspace=<abs folder>
+# So the folder goes over the plugin's own Unix domain socket instead
+# (~/.dsh/run/dsh-open-in-dsh.sock, mode 0600, the same open route as the port):
 #
-# Cold start: the main process reads that argument at boot and delivers it to
-# the page once the page can take it. Warm: the second process hits the
-# single-instance lock, the running instance receives "second-instance", raises
-# its window and opens the folder, and the second process exits in under a
-# second (measured 0.57 s, no second window, process count unchanged).
+#     printf '{"path":"…"}' | curl --unix-socket <socket> -X POST http://localhost<ROUTE_OPEN>
+#
+# That replaced the old `--dsh-desktop-workspace` launch argument, which the
+# shell dropped in 2.0.19: passing it to the packaged executable now fails in
+# Chromium's option parser ("bad option", exit 9), so the second instance never
+# started and nothing was delivered. Warm start still raises the window by
+# launching the executable with no argument at all: that process loses the
+# single-instance lock, the running app gets "second-instance", focuses, and it
+# exits 0.
+#
+# Cold start: `open -a` the app, then wait for the socket the plugin binds while
+# the host boots; a request that lands before the page is following is replayed
+# from the hub's backlog.
 #
 # What a folder means — register-or-reuse the Workspace, then reuse-or-create a
 # blank Session — is not decided here. The Desktop shell calls the very same
@@ -27,17 +36,21 @@
 # that drifts fails silently, so `test/macos.test.mjs` asserts they still match.
 #
 # Environment: DSH_OPEN_APP, DSH_OPEN_PORT, DSH_OPEN_LOG (log file),
+# DSH_OPEN_SOCKET (handoff socket), DSH_OPEN_WAIT (cold-start wait seconds),
 # DSH_OPEN_DRY_RUN=1 (same as --print).
 set -u
 
-# Mirrored from lib/index.js by hand; test/macos.test.mjs keeps the copy honest.
+# Mirrored from lib/index.js by hand; test/macos.test.mjs keeps the copies honest.
 ROUTE_OPEN='/dsh-open-in-dsh/api/v1/open'
 DEFAULT_WEB_PORT=3080
+SOCKET_PATH_DEFAULT="$HOME/.dsh/run/dsh-open-in-dsh.sock"
 
 log_file=${DSH_OPEN_LOG:-$HOME/Library/Logs/dsh-open-in-dsh.log}
 print_only=0
 app_override=${DSH_OPEN_APP:-}
 port_override=${DSH_OPEN_PORT:-}
+socket_path=${DSH_OPEN_SOCKET:-$SOCKET_PATH_DEFAULT}
+socket_wait=${DSH_OPEN_WAIT:-30}
 [ "${DSH_OPEN_DRY_RUN:-0}" = "1" ] && print_only=1
 
 log() {
@@ -178,6 +191,41 @@ hand_off_web() {
   return 3
 }
 
+# Is the host's handoff socket there yet? A socket file outlives a crashed host,
+# so connectability is the real question; curl's failure is the answer.
+socket_ready() {
+  curl -fsS -m 2 --unix-socket "$socket_path" "http://localhost$ROUTE_STATUS" >/dev/null 2>&1
+}
+
+# Hand one folder over the plugin's Unix socket and report the host's JSON.
+# Same route, same body as the Windows verb: one handler on the host side.
+hand_off_socket() {
+  _dir=$1
+  _payload=$(printf '{"path":"%s"}' "$(json_path "$_dir")")
+  curl -fsS -m 5 --unix-socket "$socket_path" -X POST \
+    -H 'content-type: application/json' --data "$_payload" \
+    "http://localhost$ROUTE_OPEN" 2>/dev/null
+}
+
+# Wait for a just-started app's host to bind the socket (plugin load + host boot).
+wait_for_socket() {
+  _deadline=$(($(date +%s) + socket_wait))
+  while [ "$(date +%s)" -lt "$_deadline" ]; do
+    if socket_ready; then
+      return 0
+    fi
+    sleep 0.2
+  done
+  return 1
+}
+
+# Raise the running app: a second instance loses the single-instance lock, the
+# running app receives "second-instance" and focuses, and this one exits 0.
+raise_window() {
+  [ -n "$exe" ] || return 0
+  "$exe" >/dev/null 2>&1 || true
+}
+
 app=$(resolve_app) || app=''
 mode='web'
 port=${port_override:-$DEFAULT_WEB_PORT}
@@ -208,27 +256,32 @@ for target in "$@"; do
   fi
   if [ "$mode" = 'desktop' ]; then
     if [ "$print_only" = 1 ]; then
-      printf 'mode=desktop app=%s exe=%s running=%s path=%s\n' "$app" "$exe" "$running" "$dir"
+      printf 'mode=desktop app=%s exe=%s running=%s socket=%s path=%s\n' "$app" "$exe" "$running" "$socket_path" "$dir"
       continue
     fi
-    if [ "$running" = 1 ]; then
-      # Second instance: takes the single-instance lock, hands its argv to the
-      # running app (which raises its window and opens the folder) and exits.
-      # Measured at ~0.6 s. No external timeout on purpose: a hang here would
-      # mean the app itself is stuck, which is something the user needs to see.
-      if ! "$exe" "--dsh-desktop-workspace=$dir" >/dev/null 2>&1; then
-        say_error "handing $dir to the running app failed"
-        status=3
-        continue
-      fi
-    else
-      # Cold start: LaunchServices delivers the argument and does the normal
-      # app activation, so the window comes up where the user expects it.
-      if ! open -a "$app" --args "--dsh-desktop-workspace=$dir"; then
+    if [ "$running" != 1 ]; then
+      # Cold start: start the app first, then wait for its host to bind the
+      # handoff socket (the plugin is what listens; the shell knows nothing
+      # about folders any more). A request that arrives before the page is
+      # following is replayed from the hub's backlog.
+      if ! open -a "$app"; then
         say_error "starting $app failed"
         status=3
         continue
       fi
+      if ! wait_for_socket; then
+        say_error "started $app but no handoff socket at $socket_path after ${socket_wait}s — is dsh-open-in-dsh loaded in its profile?"
+        status=3
+        continue
+      fi
+    fi
+    if ! hand_off_socket "$dir" >/dev/null; then
+      say_error "no handoff socket at $socket_path — restart DSH (or reload dsh-open-in-dsh) so it can listen"
+      status=3
+      continue
+    fi
+    if [ "$running" = 1 ]; then
+      raise_window
     fi
     log "opened $dir (desktop, app=$app, running=$running)"
   else

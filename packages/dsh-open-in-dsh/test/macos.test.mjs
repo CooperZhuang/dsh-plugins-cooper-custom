@@ -61,7 +61,7 @@ function parseReport(stdout) {
   const line = stdout.trim().split('\n').pop() ?? ''
   // Values contain spaces (app bundles, folder names), so split on the known
   // keys rather than on whitespace.
-  const markers = [...line.matchAll(/(?:^| )(mode|app|exe|running|port|path)=/g)]
+  const markers = [...line.matchAll(/(?:^| )(mode|app|exe|running|socket|port|path)=/g)]
   const fields = {}
   markers.forEach((marker, index) => {
     const start = marker.index + marker[0].length
@@ -76,6 +76,22 @@ test('the launcher and the host half agree on the route they both use', () => {
   const declared = read('lib/index.js').match(/export const ROUTE_OPEN = '([^']+)'/)
   assert.ok(declared, 'lib/index.js no longer declares ROUTE_OPEN')
   assert.match(read('scripts/macos/open-in-dsh'), new RegExp(`ROUTE_OPEN='${declared[1]}'`))
+})
+
+test('the launcher and the host half agree on the handoff socket path', () => {
+  assert.match(read('lib/index.js'), /DEFAULT_SOCKET_PATH = join\(homedir\(\), '\.dsh', 'run', 'dsh-open-in-dsh\.sock'\)/)
+  assert.match(read('scripts/macos/open-in-dsh'), /SOCKET_PATH_DEFAULT="\$HOME\/\.dsh\/run\/dsh-open-in-dsh\.sock"/)
+})
+
+test('the desktop handoff no longer passes the launch argument 2.0.19 removed', () => {
+  // Passing --dsh-desktop-workspace to the packaged executable now dies in
+  // Chromium's option parser ("bad option", exit 9), so the launcher must not
+  // mention it at all — the socket is the whole hand-off.
+  const launcherText = read('scripts/macos/open-in-dsh')
+  // 注释里可以提它为什么被替换，但不能再把它当参数传出去。
+  assert.ok(!/"\$exe" "--dsh-desktop-workspace/.test(launcherText), 'launcher still passes the removed argument to the executable')
+  assert.ok(!/--args "--dsh-desktop-workspace/.test(launcherText), 'cold start still passes the removed argument')
+  assert.match(launcherText, /--unix-socket "\$socket_path"/)
 })
 
 test('a folder with spaces, quotes and a trailing separator reports its real path', { skip: !darwin }, () => {

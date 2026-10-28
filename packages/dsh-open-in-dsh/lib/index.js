@@ -9,6 +9,13 @@
  *   POST /dsh-open-in-dsh/api/v1/open     a launcher hands over one folder path
  *   GET  /dsh-open-in-dsh/api/v1/events   the page follows requests over SSE
  *
+ * On macOS the same open route is also served on a Unix domain socket
+ * (`DEFAULT_SOCKET_PATH`). Nothing outside the Electron renderer can reach the
+ * Desktop shell's web server, and 2.0.19 removed the `--dsh-desktop-workspace`
+ * launch argument that used to carry a folder into the app, so the Finder Quick
+ * Action needs a channel of its own. The socket file is mode 0600: the same
+ * "this user, this machine" boundary as loopback — see `startHandoffSocket`.
+ *
  * The verb only *announces* a path. What a folder means — register-or-switch
  * Workspace, then a blank Session — is decided by the browser half, because
  * the Client already owns Workspace navigation; deciding it here would fork
@@ -27,12 +34,24 @@
  *
  * @module dsh-open-in-dsh
  */
-import { statSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { chmodSync, mkdirSync, statSync, unlinkSync } from 'node:fs'
+import { createServer } from 'node:http'
+import { homedir } from 'node:os'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import z from '@deepseek-ai/schemastery'
 
 /** Cordis plugin name; the profile row's `id` is independent of it. */
 export const name = 'open-in-dsh'
+
+/**
+ * macOS 交接套接字。**手抄**进 `scripts/macos/open-in-dsh`（`SOCKET_PATH_DEFAULT`），
+ * `test/macos.test.mjs` 保证两份一致；`DSH_OPEN_SOCKET`（脚本）与 config `socketPath`
+ * （宿主）都能覆盖。
+ *
+ * 放 `~/.dsh/run/` 而不是 `$TMPDIR`：Quick Action 由 Finder 拉起，它的 TMPDIR 与终端
+ * 是不是同一个目录不值得赌。
+ */
+export const DEFAULT_SOCKET_PATH = join(homedir(), '.dsh', 'run', 'dsh-open-in-dsh.sock')
 
 /**
  * 部署层配置。
@@ -69,6 +88,14 @@ export const Config = z.object({
   allowNonLoopback: z.boolean().default(false),
   /** 冷启动补收的时间窗：页面没开着时，请求在这段时间内仍可被补收。 */
   backlogTtlMs: z.number().default(60000),
+  /**
+   * macOS 交接套接字路径；空串表示不监听。
+   *
+   * 桌面外壳 2.0.19 起不再接受 `--dsh-desktop-workspace`（Chromium 的选项解析会以
+   * `bad option` 直接退出），也不再转发 second-instance 的 argv，所以快速操作改由本插件
+   * 自己在套接字上收路径，与 Windows 那条 HTTP 路由共用同一个 handler。
+   */
+  socketPath: z.string().default(DEFAULT_SOCKET_PATH),
 })
 
 /** The endpoint the Explorer verb's launcher calls. Mirrored in `scripts/`. */
@@ -159,6 +186,11 @@ export function apply(ctx, rawConfig = {}) {
           handler: createStatusHandler(hub, allowNonLoopback),
         }),
       'dsh-open-in-dsh: status route',
+    )
+    // macOS 的交接通道：同一个 open handler，第二个传输层。
+    host.effect(
+      () => startHandoffSocket(ctx, hub, allowNonLoopback, config.socketPath),
+      'dsh-open-in-dsh: handoff socket',
     )
     // Streams outlive the route registration only by accident; close them when
     // the plugin unloads so a reload never leaves the old page holding a socket.
@@ -285,13 +317,113 @@ export function expectsPage(hub, now = Date.now()) {
 }
 
 /**
+ * Serve the launcher's open route on a Unix domain socket.
+ *
+ * Why a second transport: on macOS nothing outside the Electron renderer can
+ * reach the Desktop shell's web server (it rejects those requests before route
+ * matching), and 2.0.19 removed the `--dsh-desktop-workspace` launch argument
+ * that used to carry a folder into the app — passing it now makes Chromium's own
+ * option parser exit with "bad option". A socket owned by this user, mode 0600,
+ * is the one channel the Finder Quick Action shares with the running app.
+ *
+ * The request shape is the HTTP route's on purpose: one handler, two transports,
+ * so the launcher reuses its JSON body and the page never learns which one
+ * delivered the path. A request that arrives after a cold start is still
+ * replayable through the hub's backlog, exactly like the port version.
+ *
+ * @param ctx - host plugin context, for logs.
+ * @param hub - the shared request hub.
+ * @param allowNonLoopback - kept for symmetry; a socket peer is always local.
+ * @param socketPath - absolute socket path; empty disables the transport.
+ * @returns disposer that closes the server and removes the socket file.
+ */
+function startHandoffSocket(ctx, hub, allowNonLoopback, socketPath) {
+  const path = typeof socketPath === 'string' ? socketPath.trim() : ''
+  if (path === '') return () => {}
+  if (!isAbsolute(path)) {
+    ctx.logger?.warn?.('dsh-open-in-dsh: socketPath is not absolute, handoff socket disabled: %s', path)
+    return () => {}
+  }
+
+  const openHandler = createOpenHandler(ctx, hub, allowNonLoopback, true)
+  const statusHandler = createStatusHandler(hub, allowNonLoopback, true)
+  const server = createServer((request, response) => {
+    let pathname = '/'
+    try {
+      pathname = new URL(request.url ?? '/', 'http://localhost').pathname
+    } catch {
+      sendJson(response, 400, { ok: false, reason: 'bad-request' })
+      return
+    }
+    if (pathname === ROUTE_OPEN) {
+      openHandler(request, response).catch((error) => {
+        ctx.logger?.warn?.('dsh-open-in-dsh: socket open failed: %s', messageOf(error))
+        if (!response.headersSent) sendJson(response, 500, { ok: false, reason: 'handler-failed' })
+      })
+      return
+    }
+    if (pathname === ROUTE_STATUS) {
+      statusHandler(request, response)
+      return
+    }
+    sendJson(response, 404, { ok: false, reason: 'not-found' })
+  })
+
+  let closed = false
+  let replaced = false
+  server.on('error', (error) => {
+    if (closed) return
+    // A crashed host leaves the file behind. A live one never lets us bind, so
+    // the stale file is safe to replace exactly once.
+    if (error?.code === 'EADDRINUSE' && !replaced) {
+      replaced = true
+      try {
+        unlinkSync(path)
+      } catch {}
+      server.listen(path)
+      return
+    }
+    ctx.logger?.warn?.('dsh-open-in-dsh: handoff socket failed (%s): %s', path, messageOf(error))
+  })
+  server.on('listening', () => {
+    try {
+      // The file mode is the access policy: only this user may hand paths over.
+      chmodSync(path, 0o600)
+    } catch (error) {
+      ctx.logger?.warn?.('dsh-open-in-dsh: could not tighten socket mode: %s', messageOf(error))
+    }
+    ctx.logger?.info?.('dsh-open-in-dsh: handoff socket listening at %s', path)
+  })
+
+  try {
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+  } catch (error) {
+    ctx.logger?.warn?.('dsh-open-in-dsh: cannot create %s: %s', dirname(path), messageOf(error))
+  }
+  server.listen(path)
+
+  return () => {
+    closed = true
+    try {
+      server.close()
+    } catch {}
+    try {
+      unlinkSync(path)
+    } catch {}
+  }
+}
+
+/**
  * Build the request handler that the Explorer launcher posts to.
  * @param ctx - host plugin context, for the log line.
  * @param hub - the shared request hub.
  * @param allowNonLoopback - whether a non-loopback peer may announce a path.
+ * @param peerIsTrusted - true when the transport already proved a local peer (the
+ *   Unix socket, whose file mode admits only this user); a socket has no
+ *   `remoteAddress`, so the loopback test cannot speak for it.
  * @returns the exact-route handler.
  */
-function createOpenHandler(ctx, hub, allowNonLoopback) {
+function createOpenHandler(ctx, hub, allowNonLoopback, peerIsTrusted = false) {
   return async (request, response) => {
     if (request.method !== 'POST') {
       sendJson(response, 405, { ok: false, reason: 'method-not-allowed' }, { allow: 'POST' })
@@ -301,7 +433,7 @@ function createOpenHandler(ctx, hub, allowNonLoopback) {
       sendJson(response, 403, { ok: false, reason: 'cross-origin' })
       return
     }
-    if (!allowNonLoopback && !isLoopback(request)) {
+    if (!allowNonLoopback && peerIsTrusted !== true && !isLoopback(request)) {
       // Opening a folder is opening a Workspace: shell commands run there.
       sendJson(response, 403, { ok: false, reason: 'remote-not-supported' })
       return
@@ -392,9 +524,10 @@ function createEventsHandler(ctx, hub, allowNonLoopback) {
  * Build the side-effect-free follower count the launcher polls.
  * @param hub - the shared request hub.
  * @param allowNonLoopback - whether a non-loopback peer may ask.
+ * @param peerIsTrusted - true for the Unix socket transport (see createOpenHandler).
  * @returns the exact-route handler.
  */
-function createStatusHandler(hub, allowNonLoopback) {
+function createStatusHandler(hub, allowNonLoopback, peerIsTrusted = false) {
   return (request, response) => {
     if (request.method !== 'GET') {
       sendJson(response, 405, { ok: false, reason: 'method-not-allowed' }, { allow: 'GET' })
@@ -404,7 +537,7 @@ function createStatusHandler(hub, allowNonLoopback) {
       sendJson(response, 403, { ok: false, reason: 'cross-origin' })
       return
     }
-    if (!allowNonLoopback && !isLoopback(request)) {
+    if (!allowNonLoopback && peerIsTrusted !== true && !isLoopback(request)) {
       sendJson(response, 403, { ok: false, reason: 'remote-not-supported' })
       return
     }

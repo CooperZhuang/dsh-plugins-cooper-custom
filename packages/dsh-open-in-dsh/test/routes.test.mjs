@@ -53,7 +53,10 @@ async function mount(config = {}) {
   }
   routes.disposers = []
 
-  apply(ctx, config)
+  // No handoff socket by default: a test must not bind the path the real
+  // desktop host owns (~/.dsh/run/dsh-open-in-dsh.sock). A test that wants the
+  // socket transport passes its own socketPath.
+  apply(ctx, { socketPath: '', ...config })
 
   const server = createServer((request, response) => {
     const pathname = new URL(request.url ?? '/', 'http://localhost').pathname
