@@ -214,6 +214,39 @@ export function withNotice(queue: NoticeQueue, updated: Notice): NoticeQueue {
   return { ...queue, notices: queue.notices.map((notice) => (notice.id === updated.id ? updated : notice)) }
 }
 
+/**
+ * Record that a person answered one notice.
+ *
+ * This is the only feedback the plugin gets, and it is the difference between a
+ * proactive assistant that learns and one that just talks: a dismissal stretches
+ * the same subject's silence (see {@link admitNotice}), and the probe reports the
+ * acted/dismissed ratio so a week of reminders can be judged instead of guessed.
+ *
+ * @param queue - the current queue.
+ * @param idOrPrefix - full id or an unambiguous prefix, as typed by a person.
+ * @param outcome - what they did about it.
+ * @param now - clock.
+ * @returns the new queue and the answered notice, or why nothing matched.
+ */
+export function ackNotice(
+  queue: NoticeQueue,
+  idOrPrefix: string,
+  outcome: NoticeOutcome,
+  now: number,
+): { queue: NoticeQueue; notice?: Notice; reason?: string } {
+  const needle = idOrPrefix.trim()
+  if (needle.length === 0) return { queue, reason: 'an id is required' }
+  const matches = queue.notices.filter((notice) => notice.id.startsWith(needle)
+    && (notice.state === 'delivered' || notice.state === 'open'))
+  if (matches.length === 0) return { queue, reason: `no unacknowledged notice matches ${needle}` }
+  if (matches.length > 1) return { queue, reason: `${matches.length} notices match ${needle}; be more specific` }
+  const notice = matches[0] as Notice
+  return {
+    queue: withNotice(queue, { ...notice, state: 'acked', outcome, ackedAt: now }),
+    notice,
+  }
+}
+
 /** Expire notices nobody ever took, so the queue cannot grow forever. */
 export function pruneNotices(queue: NoticeQueue, now: number): NoticeQueue {
   return {

@@ -42,7 +42,7 @@ import type { MatchCredit, ScopeEntries } from './search.js'
 import { readFile } from 'node:fs/promises'
 import { readPersona, renderPersonaBlock, writePersona } from './persona.js'
 import { StoreSyncService } from './sync-runtime.js'
-import { admitNotice, dueNotices, pruneNotices, readNotices, withNotice, writeNotices } from './notices.js'
+import { ackNotice, admitNotice, dueNotices, pruneNotices, readNotices, withNotice, writeNotices } from './notices.js'
 import { systemNotification } from './notify.js'
 import { closeLoop, describeLoops, dueLoops, mergeLoops, pruneLoops, readLoops, withLoop, writeLoops } from './loops.js'
 import { gateNotices } from './gate.js'
@@ -2683,9 +2683,34 @@ export class MemoriesRuntime {
   async describeNotices(): Promise<string> {
     const queue = await readNotices(this.store.memoriesDir)
     if (queue.notices.length === 0) return 'No notices yet.'
-    return queue.notices.slice(0, 10)
-      .map((notice) => `${notice.state.padEnd(9)} ${notice.kind.padEnd(8)} ${notice.title}`)
-      .join('\n')
+    const lines = queue.notices.slice(0, 10).map((notice) => {
+      const state = notice.state === 'acked' ? `acked/${notice.outcome ?? '?'}` : notice.state
+      return `${notice.id}  ${state.padEnd(13)} ${notice.kind.padEnd(8)} ${notice.title}`
+    })
+    const open = queue.notices.filter((notice) => notice.state === 'delivered' || notice.state === 'open')
+    return [...lines, '', `${open.length} unanswered. Answer one with /memories notices ack <id> [acted|dismissed|snoozed]`].join('\n')
+  }
+
+  /**
+   * Record a person's answer to one notice.
+   *
+   * The plugin has no other way to learn whether a reminder was useful: without
+   * this, the acted/dismissed counters stay at zero forever and the only signal
+   * left is whether the user complained. Logged at info so the record survives the
+   * command output.
+   *
+   * @param idOrPrefix - full id or unique prefix.
+   * @param outcome - acted, dismissed, or snoozed.
+   * @returns the answered notice, or why nothing matched.
+   */
+  async answerNotice(idOrPrefix: string, outcome: 'acted' | 'dismissed' | 'snoozed'): Promise<{ title?: string; reason?: string }> {
+    const dir = this.store.memoriesDir
+    const queue = await readNotices(dir)
+    const acked = ackNotice(queue, idOrPrefix, outcome, Date.now())
+    if (acked.notice === undefined) return { reason: acked.reason ?? 'could not answer that notice' }
+    await writeNotices(dir, acked.queue)
+    this.log.info('dsh-memories: notice %s answered %s (%s)', acked.notice.id, outcome, acked.notice.title)
+    return { title: acked.notice.title }
   }
 
   /** Count what the plugin did since one timestamp, from its own log. */
@@ -3397,6 +3422,7 @@ function helpText(): string {
     '  reject                  discard every waiting decision',
     '  sweep                   archive unused memories now',
     '  notices [test]          list raised notices, or send a test system notification',
+    '  notices ack <id> [kind] answer a notice: acted (default), dismissed, snoozed',
     '  loops [done <id>]       list promises the user made and has not closed',
     '  reflect [list]          weekly observations synthesized from the store',
     '  stale                   list memories that cite a file that no longer exists',
@@ -3816,7 +3842,15 @@ async function handleCommand(runtime: MemoriesRuntime, invocation: CommandInvoca
           ? { kind: 'success', text: 'A test notification was handed to the operating system.' }
           : { kind: 'error', text: `Notification failed: ${probe.reason ?? 'unknown'}` }
       }
-      return { kind: 'error', text: 'Usage: /memories notices [test]' }
+      const answer = /^ack\s+(\S+)(?:\s+(acted|dismissed|snoozed))?$/u.exec(argument)
+      if (answer !== null) {
+        const outcome = (answer[2] ?? 'acted') as 'acted' | 'dismissed' | 'snoozed'
+        const answered = await runtime.answerNotice(answer[1] as string, outcome)
+        return answered.title === undefined
+          ? { kind: 'error', text: answered.reason ?? 'could not answer that notice' }
+          : { kind: 'success', text: `Answered ${outcome}: ${answered.title}` }
+      }
+      return { kind: 'error', text: 'Usage: /memories notices [test | ack <id> [acted|dismissed|snoozed]]' }
     }
     case 'mode': {
       return { kind: 'success', text: runtime.setSessionMode(session, rest.trim().toLowerCase()) }

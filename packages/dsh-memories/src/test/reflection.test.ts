@@ -17,6 +17,7 @@ import {
   REFLECTION_MIN_ENTRIES,
   listReflections,
   parseReflection,
+  replyStats,
   previousInsights,
   reflectionDue,
   renderReflectionFile,
@@ -66,4 +67,14 @@ test('a reflection round-trips as a dated markdown file with its evidence', asyn
   const files = await listReflections(dir)
   assert.equal(files.length, 1)
   assert.deepEqual(previousInsights(files), ['他会为一个错误重启三次，然后要求把验证做成探针'])
+})
+test('a zero result reports whether the reply was empty or merely uncited', () => {
+  const reply = JSON.stringify({ insights: [
+    { text: '有依据的观察', evidence: ['mem-a'] },
+    { text: '没有依据的观察', evidence: ['made-up'] },
+    { text: '也提了依据', evidence: ['mem-b'] },
+  ] })
+  assert.deepEqual(replyStats(reply, known), { raw: 3, cited: 2 })
+  assert.equal(replyStats('not json', known), undefined)
+  assert.deepEqual(replyStats('{"insights":"nope"}', known), { raw: 0, cited: 0 })
 })

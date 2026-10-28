@@ -9,7 +9,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { admitNotice, dueNotices, pruneNotices, quietHoursEnd, readNotices, withNotice, writeNotices, NOTICE_TTL_MS } from '../notices.js'
+import { ackNotice, admitNotice, dueNotices, pruneNotices, quietHoursEnd, readNotices, withNotice, writeNotices, NOTICE_TTL_MS } from '../notices.js'
 import type { Notice, NoticeQueue } from '../notices.js'
 import { gateNotices, parseGateReply } from '../gate.js'
 
@@ -115,4 +115,39 @@ test('the gate only authorises ids it was shown, and fails to silence', async ()
   assert.equal(noLlm.skipped, 'no-llm')
   const nothing = await gateNotices({ llm: undefined, session: undefined, candidates: [], timeoutMs: 1000, signal: new AbortController().signal })
   assert.equal(nothing.deliver.size, 0)
+})
+test('answering a notice records the outcome, and only once', () => {
+  const first = admitNotice({ version: 1, notices: [] }, CANDIDATE, policy)
+  assert.equal(first.ok, true)
+  if (!first.ok) return
+  const queue: NoticeQueue = { version: 1, notices: [{ ...first.notice, state: 'delivered', deliveredAt: NOW }] }
+
+  const answered = ackNotice(queue, first.notice.id.slice(0, 12), 'dismissed', NOW + 1000)
+  assert.equal(answered.notice?.id, first.notice.id, 'a unique prefix is enough to answer')
+  const stored = answered.queue.notices[0]
+  assert.equal(stored?.state, 'acked')
+  assert.equal(stored?.outcome, 'dismissed')
+  assert.equal(stored?.ackedAt, NOW + 1000)
+
+  const again = ackNotice(answered.queue, first.notice.id, 'acted', NOW + 2000)
+  assert.equal(again.notice, undefined, 'an answered notice is not answered twice')
+  assert.match(again.reason ?? '', /no unacknowledged notice/u)
+})
+
+test('an ambiguous or unknown prefix is refused instead of guessing', () => {
+  const one = admitNotice({ version: 1, notices: [] }, CANDIDATE, policy)
+  const two = admitNotice({ version: 1, notices: [] }, { ...CANDIDATE, dedupeKey: 'other' }, policy)
+  if (!one.ok || !two.ok) return
+  const queue: NoticeQueue = {
+    version: 1,
+    notices: [
+      { ...one.notice, state: 'delivered', deliveredAt: NOW },
+      { ...two.notice, state: 'delivered', deliveredAt: NOW },
+    ],
+  }
+  const ambiguous = ackNotice(queue, 'digest-', 'acted', NOW)
+  assert.equal(ambiguous.notice, undefined)
+  assert.match(ambiguous.reason ?? '', /be more specific/u)
+  const unknown = ackNotice(queue, 'zzzz', 'acted', NOW)
+  assert.equal(unknown.notice, undefined)
 })
