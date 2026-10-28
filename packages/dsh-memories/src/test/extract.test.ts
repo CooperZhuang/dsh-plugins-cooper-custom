@@ -15,12 +15,25 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { MemoriesRuntime } from '../index.js'
+import type { MemoryEntry } from '../types.js'
 import { EXTRACT_JSON_SCHEMA, collectWindow, parseExtraction, redactSecrets, runExtraction } from '../extract.js'
 import { normalizeSettings } from '../config.js'
 import { peakDelayMs } from '../schedule.js'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
+
+/**
+ * Project entries this session actually maps to.
+ *
+ * The scope root is resolved from the session cwd by walking up for project
+ * markers (see resolveProjectRoot); inside the monorepo that walks past this
+ * package to the workspace root, so a test that hard-coded process.cwd() asserted
+ * against a directory the plugin never writes to.
+ */
+async function projectEntries(runtime: MemoriesRuntime, session: Session): Promise<readonly MemoryEntry[]> {
+  return runtime.store.list('project', await runtime.projectRoot(session), { fresh: true })
+}
 
 /** A streaming text delta in the shape the assembler consumes. */
 function textChunk(text: string, index = 0): StreamChunk {
@@ -315,7 +328,7 @@ test('runExtraction stores drafts, advances the watermark, and never mines twice
     const agent = { id: 'extract-session', session, status: 'idle' } as unknown as Agent
 
     assert.equal((await runtime.runExtraction(agent)).stored, 1)
-    const stored = await runtime.store.list('project', process.cwd(), { fresh: true })
+    const stored = await projectEntries(runtime, session)
     assert.equal(stored.length, 1)
     assert.equal(stored[0]?.source, 'auto')
     assert.match(stored[0]?.body ?? '', /pnpm run ship/u)
@@ -326,7 +339,7 @@ test('runExtraction stores drafts, advances the watermark, and never mines twice
 
     // Nothing new on the surface, so a second pass is a no-op.
     assert.equal((await runtime.runExtraction(agent)).stored, 0)
-    assert.equal((await runtime.store.list('project', process.cwd(), { fresh: true })).length, 1)
+    assert.equal((await projectEntries(runtime, session)).length, 1)
   t.after(() => rm(dir, { recursive: true, force: true }))
 })
 
@@ -353,7 +366,7 @@ test('an llm service that arrives after activation is still used', async (t) => 
 
   live = fakeLlm(reply)
   assert.equal((await runtime.runExtraction(agent)).stored, 1, 'the pass picks the service up when it appears')
-  assert.equal((await runtime.store.list('project', process.cwd(), { fresh: true })).length, 1)
+  assert.equal((await projectEntries(runtime, session)).length, 1)
   t.after(() => rm(dir, { recursive: true, force: true }))
 })
 
@@ -387,7 +400,7 @@ test('a session the registry knows but this process never settled is still mined
   // window is invisible to it. The live registry is the second source.
   await runtime.runPeriodicPass()
 
-  assert.equal((await runtime.store.list('project', process.cwd(), { fresh: true })).length, 1,
+  assert.equal((await projectEntries(runtime, session)).length, 1,
     'a registry session is mined without ever settling here')
   const pass = lines.find((line) => line.startsWith('dsh-memories: extract pass:'))
   assert.ok(pass !== undefined, 'the pass reports itself')
@@ -695,7 +708,7 @@ test('a failing extraction call leaves the store and watermark untouched', async
     const agent = { id: 'extract-session', session, status: 'idle' } as unknown as Agent
 
     await assert.rejects(() => runtime.runExtraction(agent), /provider exploded/u)
-    assert.equal((await runtime.store.list('project', process.cwd(), { fresh: true })).length, 0)
+    assert.equal((await projectEntries(runtime, session)).length, 0)
     assert.equal(runtime.state.getSession('extract-session'), undefined)
     // The watermark is only written on success.
     assert.equal(runtime.state.sessionCount(), 0)
@@ -789,7 +802,7 @@ test('a successful pass writes the evidence note behind the drafts', async (t) =
   const note = await runtime.store.readSessionNote('extract-session')
   assert.equal(note?.summary, 'The user explained how this project ships.')
   assert.deepEqual(note?.memories, ['deploy-with-pnpm-run-ship'])
-  const stored = (await runtime.store.list('project', process.cwd(), { fresh: true }))[0]
+  const stored = (await projectEntries(runtime, session))[0]
   assert.equal(stored?.sourceSession, 'extract-session')
   t.after(() => rm(dir, { recursive: true, force: true }))
 })
@@ -820,7 +833,7 @@ test('the settle timer actually runs a pass once its wait elapses', async (t) =>
   runtime.scheduleExtraction(agent)
   await new Promise((settle) => setTimeout(settle, 1_400))
   assert.equal(runtime.state.getSession('extract-session')?.lastSeq, 1, 'the settle timer mined the session')
-  assert.equal((await runtime.store.list('project', process.cwd(), { fresh: true })).length, 1)
+  assert.equal((await projectEntries(runtime, session)).length, 1)
   t.after(() => rm(dir, { recursive: true, force: true }))
 })
 

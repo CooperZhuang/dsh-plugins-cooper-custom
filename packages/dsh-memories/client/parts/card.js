@@ -104,22 +104,7 @@ const FIELDS = [
   {
     field: 'noticesEnabled', kind: 'boolean',
     label: { zh: '允许它主动开口', en: 'Let it speak first' },
-    hint: { zh: '每天一条整理简报、待裁决积压超时提醒。先走桌宠气泡，桌宠不在时退回系统通知。关掉则只在你问的时候回答。', en: 'A daily digest of maintenance and a warning when decisions have waited too long. Desktop pet bubble first, system notification as fallback. Off means it only answers.' },
-  },
-  {
-    field: 'petId', kind: 'text',
-    label: { zh: '桌宠 id', en: 'Desktop pet id' },
-    hint: { zh: '留空则从 dsh-pet 的配置里读第一个宠物的 id（本机是 main / 蓝毛小女仆）。', en: 'Empty reads the first pet from the pet plugin\'s own config (main on this machine).' },
-  },
-  {
-    field: 'petRouteId', kind: 'text',
-    label: { zh: '桌宠路由 id', en: 'Pet route id' },
-    hint: { zh: '桌宠注册的 HTTP 前缀里的那一段（/dsh-pet-<id>）。只有换桌宠版本时才需要改。', en: 'Route segment in the pet HTTP prefix (/dsh-pet-<id>). Only change it if the pet changes it.' },
-  },
-  {
-    field: 'petBubbleMs', kind: 'number', min: 1000, step: 1000,
-    label: { zh: '气泡停留时长', en: 'Bubble duration' },
-    hint: { zh: '一条通知在桌宠上停留多久（毫秒）。', en: 'How long one notice stays on screen, in milliseconds.' },
+    hint: { zh: '每天一条整理简报、待裁决积压超时提醒、到期承诺提醒，以系统通知的形式送达。关掉则只在你问的时候回答。', en: 'A daily digest, a backlog warning, and overdue-promise reminders, delivered as system notifications. Off means it only answers.' },
   },
   {
     field: 'noticeQuietHours', kind: 'text',

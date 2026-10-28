@@ -43,7 +43,7 @@ const oldestOpen = notices.filter((notice) => notice.state === 'open')
   .map((notice) => notice.createdAt).sort((a, b) => a - b)[0]
 
 const personas = {}
-for (const block of ['human', 'assistant']) {
+for (const block of ['human']) {
   const path = join(store, 'persona', block + '.md')
   personas[block] = { bytes: size(path), exists: existsSync(path) }
 }
@@ -99,7 +99,7 @@ if (flags['json'] === 'true') {
   console.log('at', report.at, ' home', report.home, ' live', report.live)
   console.log('notices  total', report.notices.total, ' states', JSON.stringify(byState), ' kinds', JSON.stringify(byKind))
   console.log('         acted', acted, ' dismissed', dismissed, ' oldest open (h)', report.notices.oldestOpenHours)
-  console.log('persona  human', personas.human.bytes + 'B', ' assistant', personas.assistant.bytes + 'B', legacy > 0 ? '(legacy single file still present: ' + legacy + 'B)' : '')
+  console.log('persona  human', personas.human.bytes + 'B', legacy > 0 ? '(legacy single file still present: ' + legacy + 'B)' : '')
   console.log('loops    open', report.loops.open, ' overdue', report.loops.overdue, ' total', report.loops.total)
   console.log('reflect  files', report.reflections.files, ' latest', report.reflections.latest ?? 'none')
   console.log('pending ', pending === undefined ? 'none' : pending.disputes + ' dispute(s), staged ' + pending.stagedHours + 'h ago')

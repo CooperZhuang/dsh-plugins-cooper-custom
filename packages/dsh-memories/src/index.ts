@@ -43,8 +43,7 @@ import { readFile } from 'node:fs/promises'
 import { readPersona, renderPersonaBlock, writePersona } from './persona.js'
 import { StoreSyncService } from './sync-runtime.js'
 import { admitNotice, dueNotices, pruneNotices, readNotices, withNotice, writeNotices } from './notices.js'
-import { readPetId, say, systemNotification } from './pet.js'
-import type { PetTarget } from './pet.js'
+import { systemNotification } from './notify.js'
 import { closeLoop, describeLoops, dueLoops, mergeLoops, pruneLoops, readLoops, withLoop, writeLoops } from './loops.js'
 import { gateNotices } from './gate.js'
 import { listReflections, previousInsights, reflectionDue, runReflection, writeReflection } from './reflection.js'
@@ -2573,17 +2572,12 @@ export class MemoriesRuntime {
         this.log.decision('dsh-memories: notice gate is off, undated loops stay silent')
       }
       const before = JSON.stringify(queue)
-      // 5. Deliver what is due: pet first, system notification as fallback.
-      const target = this.petTarget()
+      // 5. Deliver what is due. The only channel is the operating system's
+      // notification: this plugin used to hand the sentence to a desktop pet, and
+      // that dependency is gone — a notice is worth having only if it arrives
+      // without a second plugin being installed and configured correctly.
       let next = queue
       for (const notice of dueNotices(queue, now)) {
-        const result = target === undefined ? { ok: false, reason: 'no pet configured' } : await say(target, { text: notice.title, duration: this.settings.petBubbleMs })
-        if (result.ok) {
-          next = withNotice(next, { ...notice, state: 'delivered', deliveredAt: now })
-          this.log.info('dsh-memories: notice delivered via the pet: %s', notice.title)
-          continue
-        }
-        this.log.info('dsh-memories: pet delivery failed (%s), trying the system', result.reason ?? 'unknown')
         if (systemNotification('dsh-memories', notice.title)) {
           next = withNotice(next, { ...notice, state: 'delivered', deliveredAt: now })
           this.log.info('dsh-memories: notice delivered via system notification: %s', notice.title)
@@ -2641,6 +2635,14 @@ export class MemoriesRuntime {
       .sort((left, right) => right.updatedAt - left.updatedAt)
       .slice(0, 80)
     if (!reflectionDue(lastAt, Date.now(), entries.length)) return
+    // An attempt that produces nothing must not be retried by every periodic pass:
+    // measured over five days, a reply the parser rejected cost one model call
+    // every 30 minutes and left no trace of having been tried. One attempt per day
+    // is the ceiling; a success is still bounded by REFLECTION_INTERVAL_MS.
+    const now = Date.now()
+    const lastAttempt = Number(this.state.getMeta('reflection:lastAttemptAt') ?? '0')
+    if (lastAttempt > 0 && now - lastAttempt < 24 * 3_600_000) return
+    this.state.putMeta('reflection:lastAttemptAt', String(now))
     const files = await listReflections(dir)
     const outcome = await runReflection({
       llm: this.llm,
@@ -2654,7 +2656,7 @@ export class MemoriesRuntime {
       signal: this.lifecycle.signal,
     })
     if (outcome.insights.length === 0) {
-      this.log.info('dsh-memories: reflection produced nothing (%s)', outcome.reason)
+      this.log.info('dsh-memories: reflection produced nothing (%s); next attempt in 24h', outcome.reason)
       return
     }
     const path = await writeReflection(dir, outcome.insights, Date.now())
@@ -2663,23 +2665,18 @@ export class MemoriesRuntime {
   }
 
   /**
-   * Send one deliberate bubble, so the pet channel can be checked on demand.
+   * Send one deliberate notification, so the channel can be checked on demand.
    *
    * The digest is once a day and the backlog warning needs a pending plan, so
-   * without this the only way to find out whether the pet is reachable is to wait
-   * up to 24 hours for a real notice to fail quietly. Never queued: a probe is
-   * not a notice and must not spend the daily guard rail.
+   * without this the only way to find out whether notifications arrive at all is
+   * to wait up to 24 hours for a real notice. Never queued: a probe is not a
+   * notice and must not spend the daily guard rail.
    *
-   * @returns whether the pet took it, the reason when it did not, and the target.
+   * @returns whether the operating system accepted it.
    */
-  async probePet(): Promise<{ ok: boolean; reason?: string; target?: string }> {
-    const target = this.petTarget()
-    if (target === undefined) {
-      return { ok: false, reason: 'no pet resolved (pet plugin missing or no pets in its config)' }
-    }
-    const described = `${target.origin} pet=${target.petId} token=${target.token === undefined ? 'none' : 'present'}`
-    const result = await say(target, { text: '测试一下，不需要处理。', duration: this.settings.petBubbleMs })
-    return { ok: result.ok, ...result.reason === undefined ? {} : { reason: result.reason }, target: described }
+  async probeNotification(): Promise<{ ok: boolean; reason?: string }> {
+    const sent = systemNotification('dsh-memories', '测试通知：看到这条说明通知通道正常。')
+    return sent ? { ok: true } : { ok: false, reason: 'osascript was rejected or unavailable' }
   }
 
   /** The notice queue as one short block, for the command. */
@@ -2689,49 +2686,6 @@ export class MemoriesRuntime {
     return queue.notices.slice(0, 10)
       .map((notice) => `${notice.state.padEnd(9)} ${notice.kind.padEnd(8)} ${notice.title}`)
       .join('\n')
-  }
-
-  /** Where the pet is, or `undefined` when it cannot be reached. */
-  private petTarget(): PetTarget | undefined {
-    const petId = this.settings.petId.trim().length > 0
-      ? this.settings.petId.trim()
-      : readPetId(this.deployment.dshHome)
-    if (petId === undefined) return undefined
-    const web = this.ctx.get('webServer') as { port?: number } | undefined
-    const port = web?.port
-    if (port === undefined) return undefined
-    const cleanOrigin = `http://127.0.0.1:${port}`
-    // The desktop loopback gate consults this service for its renderer capability;
-    // without the header every request is 403, which is why the first live notice
-    // fell back to a system notification.
-    const access = this.ctx.get('desktopBrowserAccess', false) as
-      | { rendererHeader?: { name?: unknown; value?: unknown } }
-      | undefined
-    const headerName = access?.rendererHeader?.name
-    const headerValue = access?.rendererHeader?.value
-    const rendererHeader = typeof headerName === 'string' && typeof headerValue === 'string' && headerValue.length > 0
-      ? { name: headerName, value: headerValue }
-      : undefined
-    // The host carries its process token as a QUERY parameter, so it is pulled out
-    // here and re-applied by `say()` on its own request (see PetTarget.token);
-    // its URL cannot be used as a path prefix.
-    const connection = this.ctx.get('connection') as { authenticatedUrl?: (url: string) => string } | undefined
-    const authenticated = connection?.authenticatedUrl?.(cleanOrigin)
-    let token: string | undefined
-    if (authenticated !== undefined) {
-      try {
-        token = new URL(authenticated).searchParams.get('token') ?? undefined
-      } catch {
-        token = undefined
-      }
-    }
-    return {
-      origin: cleanOrigin,
-      ...token === undefined ? {} : { token },
-      ...rendererHeader === undefined ? {} : { rendererHeader },
-      petId,
-      routeId: this.settings.petRouteId,
-    }
   }
 
   /** Count what the plugin did since one timestamp, from its own log. */
@@ -3442,7 +3396,7 @@ function helpText(): string {
     '  apply                   accept every waiting decision',
     '  reject                  discard every waiting decision',
     '  sweep                   archive unused memories now',
-    '  notices [test]          list raised notices, or send a test bubble to the pet',
+    '  notices [test]          list raised notices, or send a test system notification',
     '  loops [done <id>]       list promises the user made and has not closed',
     '  reflect [list]          weekly observations synthesized from the store',
     '  stale                   list memories that cite a file that no longer exists',
@@ -3857,10 +3811,10 @@ async function handleCommand(runtime: MemoriesRuntime, invocation: CommandInvoca
       const argument = rest.trim().toLowerCase()
       if (argument.length === 0) return { kind: 'success', text: await runtime.describeNotices() }
       if (argument === 'test') {
-        const probe = await runtime.probePet()
+        const probe = await runtime.probeNotification()
         return probe.ok
-          ? { kind: 'success', text: `The pet accepted a test bubble (${probe.target}).` }
-          : { kind: 'error', text: `Pet delivery failed: ${probe.reason ?? 'unknown'}${probe.target === undefined ? '' : ` (${probe.target})`}` }
+          ? { kind: 'success', text: 'A test notification was handed to the operating system.' }
+          : { kind: 'error', text: `Notification failed: ${probe.reason ?? 'unknown'}` }
       }
       return { kind: 'error', text: 'Usage: /memories notices [test]' }
     }

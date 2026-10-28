@@ -11,7 +11,6 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { admitNotice, dueNotices, pruneNotices, quietHoursEnd, readNotices, withNotice, writeNotices, NOTICE_TTL_MS } from '../notices.js'
 import type { Notice, NoticeQueue } from '../notices.js'
-import { say } from '../pet.js'
 import { gateNotices, parseGateReply } from '../gate.js'
 
 const NOW = Date.parse('2026-10-23T12:00:00Z')
@@ -96,39 +95,6 @@ test('the queue round-trips, delivers once, and expires', async (t) => {
   assert.equal(stale.notices[0]?.state, 'expired', 'nothing sits in the queue forever')
 })
 
-test('the pet channel reports failure instead of throwing', async () => {
-  const target = { origin: 'http://127.0.0.1:43120', petId: 'main', routeId: '7340' }
-  const ok = await say(target, { text: 'hi', duration: 1 }, (async () => new Response('{"ok":true}', { status: 200 })) as unknown as typeof fetch)
-  assert.equal(ok.ok, true)
-  const refused = await say(target, { text: 'hi', duration: 1 }, (async () => new Response('{"ok":false,"reason":"occupied"}', { status: 200 })) as unknown as typeof fetch)
-  assert.equal(refused.ok, false)
-  assert.match(refused.reason ?? '', /occupied/u)
-  const broken = await say(target, { text: 'hi', duration: 1 }, (async () => { throw new Error('ECONNREFUSED') }) as unknown as typeof fetch)
-  assert.equal(broken.ok, false)
-  assert.match(broken.reason ?? '', /ECONNREFUSED/u)
-})
-test('the broadcast URL keeps its path before the token and carries the renderer header', async () => {
-  let seenUrl = ''
-  let seenHeaders: Record<string, string> = {}
-  const capture = (async (url: string, init: { headers?: Record<string, string> }) => {
-    seenUrl = url
-    seenHeaders = init.headers ?? {}
-    return new Response('{"ok":true}', { status: 200 })
-  }) as unknown as typeof fetch
-  const result = await say(
-    { origin: 'http://127.0.0.1:43120', token: 'tok123', rendererHeader: { name: 'x-dsh-desktop-renderer', value: 'cap' }, petId: 'main', routeId: '7340' },
-    { text: 'hi', duration: 1 },
-    capture,
-  )
-  assert.equal(result.ok, true)
-  // Regression: the authenticated URL ends in ?token=..., so appending a path puts
-  // it inside the token value and the request never reaches the pet route.
-  assert.match(seenUrl, /^http:\/\/127\.0\.0\.1:43120\/dsh-pet-7340\/broadcast\?/u)
-  assert.match(seenUrl, /pet=main/u)
-  assert.match(seenUrl, /token=tok123/u)
-  assert.match(seenUrl, /surface=any/u, 'the pet refuses a broadcast without a surface')
-  assert.equal(seenHeaders['x-dsh-desktop-renderer'], 'cap', 'the desktop gate needs the renderer capability')
-})
 test('the gate only authorises ids it was shown, and fails to silence', async () => {
   const candidates = [
     { id: 'loop-a', title: '还挂着：把报销单交给财务', detail: '说了 4 天' },
