@@ -1,9 +1,9 @@
 # dsh-folder-path
 
-DSH（DeepSeek Harness）Web 插件：在输入框里 **Ctrl+V 粘贴一个从资源管理器复制来的文件夹**时，
+DSH（DeepSeek Harness）Web 插件：在输入框里**粘贴一个刚从资源管理器 / Finder 复制来的文件夹**时，
 不再尝试把它当成附件上传（原版会显示「上传失败，点击重试」），而是把它的**完整路径**作为文本插进输入框。
 
-- 复制一个文件夹 → `Ctrl+V` → 输入框出现 `D:\项目\数据\2026Q1`
+- 复制一个文件夹 → `Ctrl+V`（macOS `Cmd+V`）→ 输入框出现 `D:\项目\数据\2026Q1` / `/Users/me/项目/数据`
 - 复制多个文件夹 → 每行一条
 - 普通文本、图片、真实文件的粘贴**完全不受影响**（插件只在粘贴载荷里出现目录时才接管）
 
@@ -13,8 +13,9 @@ DSH（DeepSeek Harness）Web 插件：在输入框里 **Ctrl+V 粘贴一个从�
 浏览器交出的是一个 `size: 0`、`type: ''` 的 `File`——字节不可读，因此 DSH 原版的上传链路必然失败；
 而路径也根本不在粘贴载荷里（`File.name` 只有文件夹名）。
 
-但剪贴板是**进程级**的：运行 `dsh web` 的那台机器上，剪贴板里此刻装的正是你刚复制的那份文件列表。
-所以本插件由**宿主半边**去读 Windows 剪贴板的文件列表（CF_HDROP），把真实全路径交回浏览器半边。
+但剪贴板是**进程级**的：运行宿主的那台机器上，剪贴板里此刻装的正是你刚复制的那份文件列表。
+所以本插件由**宿主半边**去读系统剪贴板的文件列表——Windows 走 CF_HDROP，macOS 走 NSPasteboard 的文件 URL——
+再把真实全路径交回浏览器半边。
 
 ## 安装
 
@@ -46,23 +47,25 @@ dsh plugin --profile web add C:\code\dsh-folder-path    # 本地路径
 
 ## 使用
 
-1. 在资源管理器里选中一个或多个文件夹，`Ctrl+C`
-2. 回到 DSH Web 输入框，`Ctrl+V`
+1. 在资源管理器（Windows）或 Finder（macOS）里选中一个或多个文件夹，`Ctrl+C`（macOS `Cmd+C`）
+2. 回到 DSH Web 输入框，`Ctrl+V`（macOS `Cmd+V`）
 3. 路径作为文本出现在草稿里；解析失败时右下角出现一条提示，草稿不动
 
 ## 工作原理
 
 | 半边 | 位置 | 职责 |
 |---|---|---|
-| Host 半 `lib/index.js` | 宿主进程（`webServer` 服务） | 精确路由 `POST /dsh-folder-path/api/v1/clipboard-paths`：读 Windows 剪贴板文件列表、按浏览器报来的文件夹名匹配、返回真实全路径 |
+| Host 半 `lib/index.js` | 宿主进程（`webServer` 服务） | 精确路由 `POST /dsh-folder-path/api/v1/clipboard-paths`：读系统剪贴板的文件列表（Windows CF_HDROP / macOS NSPasteboard）、按浏览器报来的文件夹名匹配、返回真实全路径 |
 | Client 半 `lib/client.js` | 浏览器（`__ModuleLoader__` bundle） | document 捕获阶段拦截 `paste`，只有载荷里含**目录**时才接管；向宿主取路径，再把文本按 DSH 自己的粘贴通路插进 composer |
 
 插入不是直接改 DOM：客户端补发一个只带 `text/plain` 的合成 `paste` 事件，
 走的是 DSH 编辑器**原生的文本粘贴命令**（草稿状态、命令菜单、撤销历史、已有 chip 都不受影响）；
 引擎不允许构造带数据的 `ClipboardEvent` 时，退化为 `document.execCommand('insertText')`。
 
-宿主用 PowerShell 读剪贴板（`System.Windows.Forms.Clipboard`），输出 **base64(UTF-8 JSON)**，
-所以中文/空格路径不会被重定向进程的代码页破坏。同一时刻的多次粘贴会合并成一次探测。
+宿主按平台读剪贴板：Windows 用 PowerShell（`System.Windows.Forms.Clipboard`，输出 **base64(UTF-8 JSON)**，
+中文/空格路径不会被重定向进程的代码页破坏）；macOS 用 `osascript -l JavaScript` 读 NSPasteboard 的
+`public.file-url` 条目，并合并 Finder 的旧格式 `NSFilenamesPboardType` 列表，避免多选文件夹被折叠成一条。
+目录还是文件由宿主进程自己 `stat` 判断。同一时刻的多次粘贴会合并成一次探测。
 
 ## 配置
 
@@ -77,6 +80,7 @@ dsh plugin --profile web add C:\code\dsh-folder-path    # 本地路径
         enabled: true          # false = 宿主半边空转（客户端因此不再接管，行为退回原版）
         timeoutMs: 5000        # 单次剪贴板探测预算
         powershell: powershell.exe   # 也可用环境变量 DSH_FOLDER_PATH_POWERSHELL 覆盖
+        osascript: /usr/bin/osascript # 也可用环境变量 DSH_FOLDER_PATH_OSASCRIPT 覆盖
         allowNonLoopback: false      # true = 允许远程浏览器读取宿主机剪贴板（见下）
 ```
 
@@ -90,11 +94,13 @@ dsh plugin --profile web add C:\code\dsh-folder-path    # 本地路径
 
 ## 已知限制
 
-- **仅 Windows**。其它平台宿主返回 `unsupported-platform`，客户端给出提示，行为退回原版。
+- **只支持 Windows 与 macOS**。其它平台宿主返回 `unsupported-platform`，客户端给出提示，行为退回原版。
 - **只处理粘贴，不处理拖放**。浏览器拖放载荷里同样没有磁盘路径，本插件不猜；把文件夹拖进窗口仍是原版行为。
 - **远程访问时读不到你的剪贴板**。通过局域网 IP、端口转发或跳板机访问 `dsh web` 时，剪贴板属于**运行宿主的那台机器**。
   默认直接拒绝；`allowNonLoopback: true` 会读宿主机的剪贴板（只有"浏览器和宿主在同一台机器、但用局域网 IP 打开"时才该打开它）。
-- 依赖 Windows PowerShell 5.1 的 `System.Windows.Forms`；若被安全策略挡住，会返回 `clipboard-error` 并提示。
+- Windows 依赖 PowerShell 5.1 的 `System.Windows.Forms`；被安全策略挡住时返回 `clipboard-error` 并提示。
+- macOS 依赖系统自带的 `osascript`（读粘贴板不需要 TCC 授权，也不会弹「允许访问剪贴板」）；
+  只认标准文件复制格式（`public.file-url` / `NSFilenamesPboardType`），自造私有剪贴板格式的 App 读不到。
 
 ## 开发
 
@@ -114,7 +120,8 @@ __dshFolderPath.insert(document.querySelector('[contenteditable]'), '文本')   
 `dsh-client-hmr` 每 500 ms 轮询各客户端产物，重建后重算 revision 并推给页面。
 只有**新增**客户端模块才需要重启宿主（启动时的扫描决定「有哪些客户端模块」）。
 
-改**宿主半边**后：必须**重启 `dsh web`**（宿主走 Node 的 ESM 缓存，运行中的那份代码不会跟着变）。
+改**宿主半边**后：必须**重启宿主进程**（宿主走 Node 的 ESM 缓存，运行中的那份代码不会跟着变）。
+Desktop 版要把应用**完全退出**再打开——关窗口不算退出。
 
 ## 致谢
 

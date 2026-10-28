@@ -14,6 +14,8 @@
       # config:
       #   enabled: true
       #   timeoutMs: 5000
-      #   # PowerShell used for the clipboard probe (default: powershell.exe).
-      #   # The probe needs Windows Forms; set this to a pwsh that has it.
+      #   # Executable used for the clipboard probe, per platform:
+      #   #   Windows — PowerShell (default: powershell.exe); it needs Windows Forms.
+      #   #   macOS   — osascript (default: /usr/bin/osascript), run with -l JavaScript.
       #   powershell: powershell.exe
+      #   osascript: /usr/bin/osascript

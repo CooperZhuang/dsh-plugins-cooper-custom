@@ -1,15 +1,19 @@
 /**
- * Host-half behaviour tests: the route's HTTP contract and its clipboard-name
- * matching. Everything here is deterministic — the PowerShell clipboard probe is
- * never reached, because every case is decided (or refused) before it runs — so
- * the suite behaves the same on any machine, with any clipboard contents.
+ * Host-half behaviour tests: the route's HTTP contract, its clipboard-name
+ * matching, and the macOS probe's parsing. Everything here is deterministic —
+ * clipboard probes are reached only through an osascript stand-in, never the
+ * real clipboard — so the suite behaves the same on any machine, with any
+ * clipboard contents.
  *
- * Run with `npm test`.
+ * Run with "npm test".
  */
 import assert from 'node:assert/strict'
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { test } from 'node:test'
 
-import { apply, ROUTE_PATH, matchDirectories } from '../lib/index.js'
+import { apply, ROUTE_PATH, matchDirectories, parseProbePaths } from '../lib/index.js'
 
 /**
  * Mount the host half against a fake Cordis context and capture its routes.
@@ -109,8 +113,8 @@ test('a cross-origin request is refused', async () => {
 })
 
 test('a same-origin request passes the origin gate', async () => {
-  // On Windows this reaches the real probe and answers 200 either way; what
-  // matters is that a same-origin request is not refused.
+  // The probe runs on a supported host; what matters here is that a same-origin
+  // request is not refused.
   const result = await call({ headers: { origin: 'http://127.0.0.1:3080', host: '127.0.0.1:3080' } })
   assert.notEqual(result.status, 403)
 })
@@ -153,3 +157,106 @@ test('matchDirectories answers nothing when nothing matches', () => {
   const directories = [{ name: 'Reports', path: 'C:\\x\\Reports' }]
   assert.deepEqual(matchDirectories(directories, ['Elsewhere']), [])
 })
+
+/** macOS probe cases, skipped where the probe cannot run at all. */
+const MAC_ONLY = { skip: process.platform !== 'darwin' }
+
+/**
+ * Write an osascript stand-in that prints a fixed path list.
+ *
+ * The macOS probe is a child process, so the deterministic way to exercise the
+ * route end to end is to point "config.osascript" at a script that answers like
+ * the real probe does.
+ *
+ * @param root - a temporary directory to keep the script in.
+ * @param paths - the absolute paths the stand-in reports.
+ * @returns the executable path.
+ */
+function writeOsascriptStub(root, paths) {
+  const script = join(root, 'osascript-stub')
+  const lines = ['#!/bin/sh', "printf '%s' '" + JSON.stringify(paths) + "'", '']
+  writeFileSync(script, lines.join('\n'), 'utf8')
+  chmodSync(script, 0o755)
+  return script
+}
+
+/**
+ * Call the route mounted with a stand-in probe.
+ *
+ * @param stub - the probe executable to configure.
+ * @param options - the request options.
+ * @returns the parsed answer.
+ */
+async function callWithProbe(stub, options) {
+  const route = mountRoutes({ osascript: stub }).find((entry) => entry.path === ROUTE_PATH)
+  assert.ok(route !== undefined, 'the clipboard route is registered')
+  const response = makeResponse()
+  await route.handler(makeRequest(options), response)
+  return { status: response.state.status, body: JSON.parse(response.state.body) }
+}
+
+test('parseProbePaths keeps non-empty paths in clipboard order', () => {
+  assert.deepEqual(parseProbePaths('["/a","/b/c",""]'), ['/a', '/b/c'])
+  assert.deepEqual(parseProbePaths('  []  '), [])
+  assert.deepEqual(parseProbePaths(''), [])
+  assert.deepEqual(parseProbePaths(undefined), [])
+})
+
+test('parseProbePaths refuses output that is not a path list', () => {
+  assert.throws(() => parseProbePaths('{"paths":[]}'), /unexpected shape/)
+  assert.throws(() => parseProbePaths('not json'), /unreadable output/)
+})
+
+test('on macOS the route answers with the directory the browser named', MAC_ONLY, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-folder-path-'))
+  const folders = join(root, 'Reports')
+  mkdirSync(folders)
+  const file = join(root, 'note.txt')
+  writeFileSync(file, 'x')
+  const stub = writeOsascriptStub(root, [file, folders])
+
+  const result = await callWithProbe(stub, { body: JSON.stringify({ names: ['reports'] }) })
+  assert.equal(result.status, 200)
+  assert.equal(result.body.ok, true)
+  // The copied file is not a directory, and the basename match ignores case.
+  assert.deepEqual(result.body.paths, [folders])
+  assert.deepEqual(result.body.entries, [{ path: folders, name: 'Reports', isDirectory: true }])
+})
+
+test('on macOS an empty name list answers with every copied directory', MAC_ONLY, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-folder-path-'))
+  const first = join(root, 'first')
+  const second = join(root, 'second')
+  mkdirSync(first)
+  mkdirSync(second)
+  const stub = writeOsascriptStub(root, [first, second])
+
+  const result = await callWithProbe(stub, { body: '{}' })
+  assert.equal(result.body.ok, true)
+  assert.deepEqual(result.body.paths, [first, second])
+})
+
+test('on macOS a clipboard that no longer matches the paste answers no-match', MAC_ONLY, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-folder-path-'))
+  const folders = join(root, 'Reports')
+  mkdirSync(folders)
+  const stub = writeOsascriptStub(root, [folders])
+
+  const result = await callWithProbe(stub, { body: JSON.stringify({ names: ['Elsewhere'] }) })
+  assert.equal(result.body.ok, false)
+  assert.equal(result.body.reason, 'no-match')
+  assert.deepEqual(result.body.paths, [])
+  assert.equal(result.body.clipboard.directories, 1)
+})
+
+test('on macOS a failing probe is reported as clipboard-error', MAC_ONLY, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-folder-path-'))
+  const stub = join(root, 'osascript-failing')
+  writeFileSync(stub, '#!/bin/sh\necho boom >&2\nexit 1\n', 'utf8')
+  chmodSync(stub, 0o755)
+
+  const result = await callWithProbe(stub, { body: JSON.stringify({ names: ['Reports'] }) })
+  assert.equal(result.status, 200)
+  assert.equal(result.body.ok, false)
+  assert.equal(result.body.reason, 'clipboard-error')
+});

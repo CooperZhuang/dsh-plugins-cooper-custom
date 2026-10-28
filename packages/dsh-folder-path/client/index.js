@@ -12,8 +12,9 @@
  *   * a paste is inspected for entries that are *directories*
  *     (`webkitGetAsEntry().isDirectory`; the paste payload is a `File` of size 0
  *     with no bytes to upload, which is why 上传失败 appears today);
- *   * the pasted folder names go to the host half, which reads the Windows
- *     clipboard and answers with the real full paths;
+ *   * the pasted folder names go to the host half, which reads the host
+ *     machine's clipboard (Windows file-drop list, macOS NSPasteboard file
+ *     URLs) and answers with the real full paths;
  *   * those paths are inserted into the composer as plain text by re-dispatching
  *     a synthetic text/plain paste, so the insertion goes through DSH's own
  *     composer path (command menu, draft state, undo history) instead of
@@ -196,7 +197,7 @@ function forwardFiles(root, files) {
  * @returns the message to show.
  */
 function failureText(reason) {
-  if (reason === 'unsupported-platform') return '这个宿主不是 Windows，无法读取文件夹的完整路径'
+  if (reason === 'unsupported-platform') return '当前宿主系统不支持读取剪贴板里的文件夹路径（仅支持 Windows / macOS）'
   if (reason === 'remote-not-supported') return '当前页面不在运行 dsh web 的这台机器上，读不到这台机器的剪贴板'
   if (reason === 'clipboard-error') return '读取剪贴板失败，没能解析文件夹的完整路径'
   if (reason === 'no-match') return '剪贴板里的内容与粘贴的文件夹不一致，没能解析完整路径'
