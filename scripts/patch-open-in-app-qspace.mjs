@@ -14,7 +14,7 @@
  *
  * 用法：
  *   node scripts/patch-open-in-app-qspace.mjs --check    只报告补丁状态
- *   node scripts/patch-open-in-app-qspace.mjs --apply    打补丁 -> 自检 -> 不过就自动回滚
+ *   node scripts/patch-open-in-app-qspace.mjs --apply    打补丁 -> 自检 -> 重签 -> 不过就自动回滚
  *   node scripts/patch-open-in-app-qspace.mjs --revert   还原（asar 模式从 .dsh-bak 恢复）
  *   node scripts/patch-open-in-app-qspace.mjs --verify   自检：结构 + 全量 integrity + 语法 + 真跑路由
  *   可选：--app <DSH.app 路径>  --runner <Electron 可执行文件>（隔离自检用）
@@ -22,9 +22,10 @@
  * 生效要重启桌面端（宿主半边在插件初始化时就把目录定死了）。DSH 升级会整体替换 .app，
  * 补丁随之消失 —— 升级后重跑一次 --apply。
  */
-import { copyFileSync, existsSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { join } from "node:path";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { readArchive, headerJsonHash, rebuildArchive, sha256 } from "./lib/asar.mjs";
 
@@ -70,13 +71,59 @@ const resources = join(appDir, "Contents/Resources");
 const asarPath = join(resources, "app.asar");
 const useAsar = existsSync(asarPath);
 const plistPath = join(appDir, "Contents/Info.plist");
-const asarBackup = asarPath + ".dsh-bak";
-const plistBackup = plistPath + ".dsh-bak";
+// 备份必须放在 .app 之外：包内多一个文件就让 codesign 拒绝签名
+// （"code object is not signed at all, In subcomponent: ...dsh-bak"），
+// 而改过 Info.plist 的包本来就必须重新签名，见 resignApp()。
+const backupDir = join(homedir(), "Library", "Application Support", "DSH Desktop Beta", "patch-backups");
+const asarBackup = join(backupDir, "app.asar.dsh-bak");
+const plistBackup = join(backupDir, "Info.plist.dsh-bak");
 const targetPath = (rel) => (useAsar ? asarPath + "/" + rel : join(resources, "app", rel));
 
 function fail(message) {
   console.error("FAIL " + message);
   process.exit(1);
+}
+
+/**
+ * 改过 Info.plist 的包必须重新签名。
+ *
+ * 补丁会重写 Info.plist 里的 ElectronAsarIntegrity.hash，而 Info.plist 被签名
+ * 覆盖，所以打补丁后 codesign --verify 必然报 "invalid Info.plist
+ * (plist or signature have been modified)"，宿主每次启动/派生进程都刷一行
+ * SecCodeCheckValidity -67030。重签成 ad-hoc 并保留 entitlements（Electron 需要
+ * JIT / unsigned executable memory / disable-library-validation），签名即可恢复有效。
+ *
+ * 代价：ad-hoc 签名没有 Developer ID，Squirrel 自动更新可能在比对签名时拒绝安装，
+ * 升级需要手动下载安装包；装回官方包后签名恢复为官方签名。
+ *
+ * @returns 失败原因，成功时 null。
+ */
+function resignApp() {
+  try {
+    execFileSync("codesign", [
+      "--force", "--sign", "-",
+      "--preserve-metadata=entitlements,requirements,flags,runtime",
+      appDir,
+    ], { stdio: "pipe" });
+  } catch (error) {
+    return "codesign 失败：" + String(error.stderr ?? error.message).trim();
+  }
+  try {
+    execFileSync("codesign", ["--verify", "--strict", appDir], { stdio: "pipe" });
+  } catch (error) {
+    return "重签后校验仍失败：" + String(error.stderr ?? error.message).trim();
+  }
+  return null;
+}
+
+/** 当前签名状态，供报告显示；出错时返回 null。 */
+function signatureState() {
+  try {
+    execFileSync("codesign", ["--verify", "--strict", appDir], { stdio: "pipe" });
+    return "有效";
+  } catch {
+    return "无效（需要重新签名：--apply 会自动重签）";
+  }
 }
 
 /** 读一个目标文件：asar 里取条目，目录布局直接读文件。 */
@@ -111,6 +158,8 @@ function report() {
     console.log("[" + entry.name + "] " + (entry.patched ? "已打补丁" : "未打补丁") + "  " + entry.rel);
   }
   if (useAsar) console.log("备份：" + (existsSync(asarBackup) ? asarBackup : "（无）"));
+  const signed = signatureState();
+  if (signed !== null) console.log("签名：" + signed);
 }
 
 // 在锚点行后插入若干行，缩进跟随锚点后面第一个非空行。
@@ -348,6 +397,7 @@ if (mode === "--apply") {
   if (entries.some((entry) => !entry.patched)) {
     const edits = buildEdits(entries);
     if (useAsar) {
+      mkdirSync(backupDir, { recursive: true });
       if (!existsSync(asarBackup)) {
         copyFileSync(asarPath, asarBackup);
         console.log("已备份 " + asarBackup);
@@ -379,8 +429,15 @@ if (mode === "--apply") {
     console.error(restored ? "自检没过，已自动回滚到补丁前的 app.asar / Info.plist。" : "自检没过，没有备份可回滚。");
     process.exit(1);
   }
+  const signError = resignApp();
+  if (signError !== null) {
+    console.error("FAIL " + signError);
+    const restored = restoreBackup();
+    console.error(restored ? "签名失败，已回滚到补丁前的 app.asar / Info.plist。" : "签名失败，没有备份可回滚。");
+    process.exit(1);
+  }
   report();
-  console.log("自检通过。重启 DSH 桌面端后生效。");
+  console.log("自检通过，已重新签名。重启 DSH 桌面端后生效。");
   process.exit(0);
 }
 
@@ -404,7 +461,10 @@ if (mode === "--revert") {
   } else {
     console.log("没有备份可恢复");
   }
+  const signError = resignApp();
+  if (signError !== null) fail(signError);
   report();
+  console.log("已重新签名（ad-hoc）。重启 DSH 桌面端后生效。");
   process.exit(0);
 }
 
