@@ -2687,7 +2687,9 @@ export class MemoriesRuntime {
       const state = notice.state === 'acked' ? `acked/${notice.outcome ?? '?'}` : notice.state
       return `${notice.id}  ${state.padEnd(13)} ${notice.kind.padEnd(8)} ${notice.title}`
     })
-    const open = queue.notices.filter((notice) => notice.state === 'delivered' || notice.state === 'open')
+    // A digest is a report, not a request: it never needs an answer, so it must
+    // not inflate the "unanswered" count that the feedback loop is measured on.
+    const open = queue.notices.filter((notice) => (notice.state === 'delivered' || notice.state === 'open') && notice.kind !== 'digest')
     return [...lines, '', `${open.length} unanswered. Answer one with /memories notices ack <id> [acted|dismissed|snoozed]`].join('\n')
   }
 
