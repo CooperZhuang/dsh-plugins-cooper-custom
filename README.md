@@ -8,7 +8,7 @@ DeepSeek Harness 自研插件集合。每个插件仍是独立的 npm 包（各�
 |---|---|---|
 | `packages/dsh-memories` | 跨会话记忆：抽取、召回、反思层、persona、承诺台账、桌宠通知通道 | 0.2.2-alpha.2（peer 区间也覆盖 0.2.1-rc.x） |
 | `packages/dsh-rtk-slim` | 工具输出瘦身（长输出压缩进 spill，按需取回） | 0.2.2-alpha.2（peer 区间也覆盖 0.2.1-rc.x） |
-| `packages/dsh-purge` | 破甲 / 红队补丁（宿主文件补丁 + 预设 + Drill 控制台）；**未挂载**，启用要点 Apply | 0.2.1-rc.2（`dshTarget` 未改；宿主补丁库未在 0.2.2 宿主上验证） |
+| `packages/dsh-purge` | 破甲 / 红队补丁（宿主文件补丁 + 预设 + Drill 控制台）；**未挂载**，启用要点 Apply | 0.2.2-alpha.2（补丁库已按 asar 解包树逐条核对，见 `packages/dsh-purge/docs/host-patch-audit-0.2.2.md`） |
 | `packages/dsh-session-toolbox` | 会话删除 + 会话归位（右栏两个页签 + `session_admin` / `session_move` 工具） | 0.2.2-alpha.2 / 0.2.1-rc.x |
 | `packages/dsh-session-store` | 会话存储共享库（项目目录 key 编解码、jsonl.zstd 帧、workspace registry）；被 toolbox 依赖 | 内核无关（v4 日志已实测） |
 | `packages/dsh-folder-path` | 粘贴文件夹路径而不是尝试上传（功能仅 Windows） | 0.2.2-alpha.2 |
@@ -97,4 +97,4 @@ peer 区间改成「旧区间 `|| ^0.2.2-alpha.2`」（Cordis/Schemastery 同理
   2. 宿主投影改成异步的 `ctx.sessionProjections`，宿主侧 `session.projectionValues` 已不存在——本仓库只用客户端 `projectionValues` 与 `session.header.agentPreset`（`dsh-purge/lib/identity.js` 早已按 header 兜底），无需改；
   3. 组合包/客户端导出路径：`dsh.client.inject|external|platform`、`dsh.bundle.patch`、`@deepseek-ai/dsh-client-ui-settings/client` 这些本仓库用到的入口在 2.0.21 的 `app.asar` 里都还在；
   4. 客户端 keyed 槽必须传 `options.key`、list 槽必须传 `options.id`（同 key/id 同 priority 再注册会 throw）——本仓库所有注册点都已满足。
-未在 0.2.2 宿主上验证的部分：`dsh-purge` 的宿主文件补丁库（宿主在 `app.asar` 内，`dsh-purge --status` 报「插件根未找到」）。
+`dsh-purge` 的宿主文件补丁库已在 0.2.2-alpha.2 宿主（asar 解包树）上逐条核对：82 条中 7 条补了 0.2.2 锚点/路径，桌面壳 3 条因 2.0.21 架构重写标 optional，其余命中或既有失效（逐条矩阵见 `packages/dsh-purge/docs/host-patch-audit-0.2.2.md`）；插件保持未挂载（asar 解包→重启→宿主自检链路未验证）。
