@@ -69,6 +69,33 @@ bundle's own page between its description and its rows. It carries all seven vol
 `adminAllowHosts=[]`, `moveAllowHosts=[]`. Guards, confirmations and the "mid-turn" check
 are the original implementations.
 
+## Fork child membership repair
+
+Incident (2026-10-31): dsh-easyrewrite's "edit & resend" forks a new session and archives
+the original. Two children (`session-267986cf`, `session-4cf88d34`) ended up `ungrouped`
+(`workspaceTitle: null` in `session_admin`) even though the first fork's parent was a
+member of the `.dsh` workspace. The client only recorded them as list placeholders, so
+after a restart they vanished from the sidebar — "where did that conversation go?".
+The Host's `session/fork` does call `forkWorkspace(source.header)` +
+`workspace.attachSession(childId)` and replies `session/workspace-attach-failed` on
+failure, yet neither fork reported an error and both stayed ungrouped (the losing step was
+not identified inside the Host, so this does not bet on "it will not happen again").
+
+**Fix**: `mountForkMembershipRepair()` re-files the child on `session/created`
+(`lib/move.js`):
+
+- only ordinary fork children: `parentSession` present, `origin !== 'subagent'`,
+  `delegationDepth` not > 0;
+- the parent must already belong to a workspace; the child joins that same workspace,
+  never a guess;
+- the child's `header.cwd` must realpath to the workspace path;
+- idempotent, de-duplicated, attach failures are logged only.
+
+**No** startup sweep: of 343 stored sessions, 155 are subagent children and several are
+deliberately ungrouped migrations; a full attach would rewrite the user's sidebar.
+Log lines (`dsh-session-move.log`): `membership repair mounted`,
+`membership: attached fork child …`, `membership: attach failed …`.
+
 ## Troubleshooting artifacts
 
 Two log files with their original line formats are kept as they were:

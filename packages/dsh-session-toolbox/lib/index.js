@@ -58,7 +58,12 @@ import {
   isTrustedRequest as isTrustedAdminRequest,
   mountAdmin,
 } from './admin.js'
-import { MOVE_API_PREFIX, isTrustedRequest as isTrustedMoveRequest, mountMove } from './move.js'
+import {
+  MOVE_API_PREFIX,
+  isTrustedRequest as isTrustedMoveRequest,
+  mountForkMembershipRepair,
+  mountMove,
+} from './move.js'
 
 export {
   ADMIN_API_PREFIX,
@@ -68,6 +73,7 @@ export {
   isTrustedAdminRequest,
   isTrustedMoveRequest,
   mountAdmin,
+  mountForkMembershipRepair,
   mountMove,
 }
 
@@ -242,6 +248,8 @@ export function apply(ctx, rawConfig) {
 
   mountAdmin(ctx, config, adminLog)
   mountMove(ctx, config, moveLog)
+  // fork 子会话漏挂工作区（2026-10-31 实测）的创建期自愈；只补记账，不改 Host 源码。
+  mountForkMembershipRepair(ctx, config, moveLog)
 }
 
 // ---------------------------------------------------------------------------
