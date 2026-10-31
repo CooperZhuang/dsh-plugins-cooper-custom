@@ -335,6 +335,7 @@ function createMover(ctx, config, log) {
       frames: plan.frameCount,
       sourcePath: plan.sourcePath,
       targetPath: plan.targetPath,
+      leaseFile: plan.leaseFile ?? null,
       leftInSourceDir: plan.otherFiles,
       otherGenerations: plan.otherGenerations,
     }

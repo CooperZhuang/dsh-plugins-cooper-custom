@@ -90,6 +90,16 @@ key = 包名 `dsh-session-toolbox`，渲染在本组合包页面的「描述与�
 自愈日志（`dsh-session-move.log`）：`membership repair mounted`、
 `membership: attached fork child …`、`membership: attach failed …`。
 
+## 搬迁与 `session.lock`（内核 0.2.2+）
+
+0.2.2 起 `dsh-session-persistence-jsonl` 在每个会话目录里放 `session.lock`：POSIX flock，
+写入句柄整个生命周期持有，文件永不删除（靠稳定 inode 判断归属，第二个写入者会在
+`SessionWriteLease.acquire` 被拒）。搬迁的本质是把会话目录从旧 project 目录挪到新
+project 目录，所以租约文件也必须一起走：`applyPlan` 在日志改名完成后用 `rename(2)`
+把 `session.lock` 移到目标目录——inode 不变，本进程已持有的 flock 跟着到新路径，仍能
+挡住第二个写入者；源目录随之为空并被删除。目标目录已存在 `session.lock` 时
+`planMove` 直接拒绝，不制造「锁在旧目录、日志在新目录」的半套租约。
+
 ## 排障产物
 
 两份日志、两种行格式保持原样（各自的历史格式是可见产物，不做统一）：

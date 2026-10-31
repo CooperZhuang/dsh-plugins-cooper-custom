@@ -96,6 +96,19 @@ deliberately ungrouped migrations; a full attach would rewrite the user's sideba
 Log lines (`dsh-session-move.log`): `membership repair mounted`,
 `membership: attached fork child …`, `membership: attach failed …`.
 
+## Moving a session with `session.lock` (kernel 0.2.2+)
+
+Since 0.2.2, `dsh-session-persistence-jsonl` writes `session.lock` into every session
+directory: a POSIX flock held for the whole life of the write handle and never removed
+(stable inode identifies the owner; a second writer is rejected in
+`SessionWriteLease.acquire`). A move relocates the session directory from the old project
+directory to the new one, so the lease file must move with it: after the log rename,
+`applyPlan` renames `session.lock` into the target directory. The inode is preserved, so
+the flock already held by this process follows to the new path and still blocks a second
+writer; the now-empty source directory is removed. If the target directory already has a
+`session.lock`, `planMove` refuses outright instead of creating a half-lease split across
+two directories.
+
 ## Troubleshooting artifacts
 
 Two log files with their original line formats are kept as they were:
