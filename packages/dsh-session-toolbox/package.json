@@ -45,10 +45,10 @@
     }
   },
   "dependencies": {
-    "@deepseek-ai/schemastery": "^3.18.5"
+    "@deepseek-ai/schemastery": "^3.18.5 || ^3.18.6-alpha.1"
   },
   "peerDependencies": {
-    "@deepseek-ai/schemastery": "^3.18.5",
+    "@deepseek-ai/schemastery": "^3.18.5 || ^3.18.6-alpha.1",
     "dsh-session-store": "^0.1.0"
   }
 }

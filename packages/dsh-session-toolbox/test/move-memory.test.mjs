@@ -19,15 +19,16 @@ test('slugify 与 dsh-memories 规则一致', () => {
 })
 
 test('projectSlug 复现 dsh-memories 的目录名规则', () => {
-  // 向量与 dsh-memories 的派生规则逐字对齐（项目/客户名一律用占位，脱敏自真机向量）
+  // 向量与 dsh-memories 的派生规则逐字对齐：slug **只取项目名**，路径前缀与机器无关，
+  // 所以同一个项目在 Mac / PC 上落到同一个逻辑目录（项目/客户名一律用占位）
   const vectors = [
-    ['C:\\Users\Example\\.dsh', 'dsh-08b16270'],
-    ['C:\\code\\Acme_Invoice-Insight', 'acme-invoice-insight-55e25e4d'],
-    ['C:\\code\\Acme_Document-Recognition-Service', 'acme-document-recognition-service-979b7374'],
-    ['C:\\code\\PP-OCRv6', 'pp-ocrv6-3f2dd5b6'],
-    ['C:\\code\\Acme_RPA-Posting-Pipeline', 'acme-rpa-posting-pipeline-250a630d'],
-    ['C:\\code\\dsh-memories', 'dsh-memories-714ebfcf'],
-    ['C:\\Program Files (x86)\\Steam\\steamapps\\common\\Assassin\'s Creed Black Flag Resynced', 'assassin-s-creed-black-flag-resynced-ef0ed6e3'],
+    ['C:\\Users\Example\\.dsh', 'dsh'],
+    ['C:\\code\\Acme_Invoice-Insight', 'acme-invoice-insight'],
+    ['C:\\code\\Acme_Document-Recognition-Service', 'acme-document-recognition-service'],
+    ['C:\\code\\PP-OCRv6', 'pp-ocrv6'],
+    ['C:\\code\\Acme_RPA-Posting-Pipeline', 'acme-rpa-posting-pipeline'],
+    ['C:\\code\\dsh-memories', 'dsh-memories'],
+    ['C:\\Program Files (x86)\\Steam\\steamapps\\common\\Assassin\'s Creed Black Flag Resynced', 'assassin-s-creed-black-flag-resynced'],
   ]
   for (const [root, expected] of vectors) assert.equal(projectSlug(root), expected, root)
 })
