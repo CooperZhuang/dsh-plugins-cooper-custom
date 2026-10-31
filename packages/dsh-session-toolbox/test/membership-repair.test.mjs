@@ -18,7 +18,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { mountForkMembershipRepair } from '../lib/move.js'
+import { mountForkMembershipRepair, sweepForkChildrenOnBoot } from '../lib/move.js'
 
 /** 造两个真实目录：工作区路径 + 一个不相干的目录（cwd 不匹配的用例）。 */
 function dirs() {
@@ -34,7 +34,7 @@ function dirs() {
  * 假 Host：一个工作区（成员表放 `record.sessionIds`，与真注册表的「完整记账」一致），
  * 一个收集 attach 调用的实体，一个收集 `session/created` 监听器的 ctx。
  */
-function host({ workspacePath, attachThrows = false, withAttach = true } = {}) {
+function host({ workspacePath, attachThrows = false, withAttach = true, headers = [] } = {}) {
   const attached = []
   const workspace = {
     id: 'ws-1',
@@ -55,6 +55,9 @@ function host({ workspacePath, attachThrows = false, withAttach = true } = {}) {
   const lines = []
   const ctx = {
     workspaceRegistry: registry,
+    sessionPersistence: headers === undefined ? undefined : {
+      list: async () => headers.map((header) => ({ header })),
+    },
     on(event, handler) {
       if (event === 'session/created') listeners.push(handler)
       return () => {}
@@ -197,3 +200,113 @@ test('注册表不可用：只警告，不抛', () => {
   mountForkMembershipRepair(ctx, {}, (level, message) => lines.push({ level, message }))
   assert.ok(lines.some((line) => line.level === 'warn' && line.message.includes('workspaceRegistry')))
 })
+
+
+// ---------------------------------------------------------------------------
+// 启动期定向扫描（sweepForkChildrenOnBoot）
+//
+// 创建期补挂挡不住「记账写进去又被抹掉」的那一类：同机两个 Host 共用 $DSH_HOME 时，
+// 另一个进程的旧内存快照会把 storages/workspace.json 整文件覆盖回去。所以挂载时
+// 还要做一轮只认 fork 子会话的扫描。
+// ---------------------------------------------------------------------------
+
+test('启动扫描：挂载时把已经丢掉记账的 fork 子会话补回父工作区', async () => {
+  const d = dirs()
+  try {
+    const accounted = { ...forkChildHeader(d.workspace, 'session-parent'), id: 'session-child' }
+    const lost = { ...forkChildHeader(d.workspace, 'session-parent'), id: 'session-lost' }
+    const h = host({ workspacePath: d.workspace, headers: [accounted, lost] })
+    h.workspace.record.sessionIds.push('session-parent', 'session-child')
+
+    // mount 返回启动扫描的 Promise：Host 忽略返回值，测试可 await 以获得确定性。
+    const report = await mountForkMembershipRepair(h.ctx, {}, h.log)
+
+    assert.deepEqual(h.attached, ['session-lost'])
+    assert.equal(report.checked, 2)
+    assert.equal(report.attached, 1)
+    assert.ok(h.lines.some((line) => line.level === 'info' && line.message.includes('boot-sweep')))
+  } finally {
+    d.cleanup()
+  }
+})
+
+test('启动扫描：已记账、子代理、非 fork 会话都不动', async () => {
+  const d = dirs()
+  try {
+    const accounted = { ...forkChildHeader(d.workspace, 'session-parent'), id: 'session-accounted' }
+    const subagent = { ...forkChildHeader(d.workspace, 'session-parent'), id: 'session-sub', origin: 'subagent', delegationDepth: 1 }
+    const plain = { type: 'session', version: 4, id: 'session-plain', cwd: d.workspace, isSeeded: false, delegationDepth: 0 }
+    const h = host({ workspacePath: d.workspace, headers: [accounted, subagent, plain] })
+    h.workspace.record.sessionIds.push('session-parent', 'session-accounted')
+
+    const report = await sweepForkChildrenOnBoot(h.ctx, {}, h.log)
+
+    assert.deepEqual(h.attached, [])
+    // 只有 accounted 是「普通 fork 子会话」；subagent 与 plain 都被 isForkChild 挡掉。
+    assert.equal(report.checked, 1)
+    assert.equal(report.attached, 0)
+  } finally {
+    d.cleanup()
+  }
+})
+
+test('启动扫描：父会话没有归属或 cwd 不匹配都不挂', async () => {
+  const d = dirs()
+  try {
+    const orphan = { ...forkChildHeader(d.workspace, 'session-nowhere'), id: 'session-orphan' }
+    const misplaced = { ...forkChildHeader(d.elsewhere, 'session-parent'), id: 'session-misplaced' }
+    const h = host({ workspacePath: d.workspace, headers: [orphan, misplaced] })
+    h.workspace.record.sessionIds.push('session-parent')
+
+    const report = await sweepForkChildrenOnBoot(h.ctx, {}, h.log)
+
+    assert.deepEqual(h.attached, [])
+    assert.equal(report.attached, 0)
+    assert.ok(h.lines.some((line) => line.message.includes('belongs to no workspace')))
+    assert.ok(h.lines.some((line) => line.level === 'warn' && line.message.includes('does not resolve to workspace')))
+  } finally {
+    d.cleanup()
+  }
+})
+
+test('启动扫描：配置关闭时不扫描', async () => {
+  const d = dirs()
+  try {
+    const lost = { ...forkChildHeader(d.workspace, 'session-parent'), id: 'session-lost' }
+    const h = host({ workspacePath: d.workspace, headers: [lost] })
+    h.workspace.record.sessionIds.push('session-parent')
+
+    const report = await sweepForkChildrenOnBoot(h.ctx, { repairForkChildrenOnBoot: false }, h.log)
+
+    assert.deepEqual(h.attached, [])
+    assert.equal(report.skipped, 'disabled')
+  } finally {
+    d.cleanup()
+  }
+})
+
+test('启动扫描：没有 sessionPersistence 或注册表时安全跳过，不抛', async () => {
+  const header = forkChildHeader('/tmp')
+  const h = host({ workspacePath: '/tmp', headers: [header] })
+  h.ctx.sessionPersistence = undefined
+  const report = await sweepForkChildrenOnBoot(h.ctx, {}, h.log)
+  assert.equal(report.skipped, 'persistence-unavailable')
+
+  const noRegistry = { sessionPersistence: { list: async () => [] } }
+  const report2 = await sweepForkChildrenOnBoot(noRegistry, {}, h.log)
+  assert.equal(report2.skipped, 'registry-unavailable')
+})
+
+test('启动扫描：list 抛错只记日志', async () => {
+  const d = dirs()
+  try {
+    const h = host({ workspacePath: d.workspace, headers: [] })
+    h.ctx.sessionPersistence = { list: async () => { throw new Error('listing broke') } }
+    const report = await sweepForkChildrenOnBoot(h.ctx, {}, h.log)
+    assert.equal(report.skipped, 'listing-failed')
+    assert.ok(h.lines.some((line) => line.level === 'warn' && line.message.includes('listing broke')))
+  } finally {
+    d.cleanup()
+  }
+})
+

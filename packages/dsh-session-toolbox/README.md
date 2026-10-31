@@ -81,8 +81,41 @@ The Host's `session/fork` does call `forkWorkspace(source.header)` +
 failure, yet neither fork reported an error and both stayed ungrouped (the losing step was
 not identified inside the Host, so this does not bet on "it will not happen again").
 
-**Fix**: `mountForkMembershipRepair()` re-files the child on `session/created`
-(`lib/move.js`):
+### What the Host actually did (2026-10-31 review)
+
+Source read of three kernels (0.2.1-rc.3, 0.2.1-rc.5, 0.2.2-alpha.2): `session/fork` is
+the same in all three (`dsh-workspace` is byte-identical).
+
+1. The one "succeeds but records nothing" branch is `forkWorkspace(source.header)`
+   returning `undefined`: when `workspaces.find(w => w.sessionIds.includes(source.id))`
+   misses and the source is not a subagent, the function returns `undefined`, the whole
+   `attachSession` block is skipped, and the RPC still resolves. So **an ungrouped parent
+   always yields an ungrouped child with no error** — that is the second fork (its source
+   was the first child).
+2. The first fork's parent *was* a `.dsh` member and the fork resolved through the success
+   path (easyrewrite's failure branch logged 0 lines), so `attachSession` did run and did
+   write (every failure path there rejects; nothing swallows).
+3. Yet the archive written at the same moment was lost too: at 22:28 the child's unarchive
+   reported `restored:false` and the parent had to be archived again. A new attach plus
+   the archive set live in the same `storages/workspace.json`; only a *second Host process
+   rewriting the whole file from a stale in-memory snapshot* can erase both. Evidence: two
+   non-beta Host processes (pids 15206 / 15449 at 22:10:16 / 22:10:40) mounted the same
+   plugins on the same `~/.dsh` (`logs/dsh-rtk-slim.log`) while the beta Host was live;
+   the JSON storage backend replaces whole unit files with no cross-process lock
+   (`dsh-storage-json`: single writer per unit, last write wins), and `session.lock`
+   only covers session logs.
+
+So this is not fixable by patching `session/fork`: the accounting is erased *after* attach
+by a concurrent writer. The Host must fix it (cross-process locking / merged writes, or
+stop sharing `$DSH_HOME` between apps); at plugin level the only product fix is to notice
+and repair.
+
+**Fix**: `mountForkMembershipRepair()` now runs two passes with the same rules:
+
+1. **Creation**: re-file on `session/created` (covers "the Host never attached");
+2. **Boot**: `sweepForkChildrenOnBoot()` lists `sessionPersistence.list()` and re-files
+   fork children whose parent is accounted but the child is not (covers "the write was
+   overwritten"). Toggle: `repairForkChildrenOnBoot` (default `true`).
 
 - only ordinary fork children: `parentSession` present, `origin !== 'subagent'`,
   `delegationDepth` not > 0;
@@ -91,10 +124,12 @@ not identified inside the Host, so this does not bet on "it will not happen agai
 - the child's `header.cwd` must realpath to the workspace path;
 - idempotent, de-duplicated, attach failures are logged only.
 
-**No** startup sweep: of 343 stored sessions, 155 are subagent children and several are
-deliberately ungrouped migrations; a full attach would rewrite the user's sidebar.
+The boot pass is **fork children only, never a full scan**: of 343 stored sessions, 155 are
+subagent children and several are deliberately ungrouped migrations; a full attach would
+rewrite the user's sidebar.
 Log lines (`dsh-session-move.log`): `membership repair mounted`,
-`membership: attached fork child …`, `membership: attach failed …`.
+`membership: attached fork child …`, `membership: attach failed …`,
+`membership sweep: re-attached N of M fork child(ren) …`.
 
 ## Moving a session with `session.lock` (kernel 0.2.2+)
 

@@ -72,12 +72,41 @@ key = 包名 `dsh-session-toolbox`，渲染在本组合包页面的「描述与�
 两次 fork 出来的子会话（`session-267986cf`、`session-4cf88d34`）最终都是 `ungrouped`
 （`session_admin` 里 `workspaceTitle: null`），而第一次 fork 的父会话明明是 `.dsh`
 工作区的成员。客户端只把子会话记进「占位」列表，刷新/重启后侧栏里就再也看不到——
-表现就是「刚才那个会话找不到了」。Host 的 `session/fork` 里确实有
-`forkWorkspace(source.header)` + `workspace.attachSession(childId)`，失败还会回
-`session/workspace-attach-failed`，但这两次都没报错、结果却是 ungrouped（原因没有
-在 Host 内部定位到，所以不赌"下次不会发生"）。
+表现就是「刚才那个会话找不到了」。
 
-**修复方式**：`mountForkMembershipRepair()` 在 `session/created` 时补一次成员记账，
+### Host 侧到底发生了什么（2026-10-31 复盘）
+
+用的是 0.2.1-rc.3 / 0.2.1-rc.5 / 0.2.2-alpha.2 三份内核源码逐行对照（`session/fork` 逻辑
+在三个版本里一致，`dsh-workspace` 三个版本字节相同）：
+
+1. `session/fork` 唯一的"不报错但没落账"分支是 `forkWorkspace(source.header)` 返回
+   `undefined`：`workspaces.find(w => w.sessionIds.includes(source.id))` 找不到归属时，
+   非子代理源会话直接 `return undefined`，之后 `attachSession` 整段被跳过，RPC 照常返回
+   成功。所以**父会话自己是 ungrouped 时，子会话必然 ungrouped 且无任何报错**——当晚第二次
+   fork（源是第一次的子会话）就是这一类。
+2. 第一次 fork 的父会话是 `.dsh` 成员，fork 又返回成功（easyrewrite 日志走的是成功分支，
+   失败分支 `fork 失败（编辑重发中止）` 全程 0 条），说明 `attachSession` 确实执行并
+   落了盘（`attachSession` 的所有失败都会 reject，没有静默吞掉的写法）。
+3. 但同一时刻的**归档也没落住**：22:28 客户端对子会话取消失败（`restored:false`，即本来
+   没被归档），父会话随后又被重新归档了一次。新 attach 和归档集合是同一份
+   `storages/workspace.json`，能一起抹掉的只有"另一个 Host 进程用旧内存快照整文件覆盖"。
+   证据：当晚 22:10:16 / 22:10:40 有两个非测试版的 Host 进程在同一 `~/.dsh` 上挂了同一批
+   插件（`logs/dsh-rtk-slim.log` 里 pid=15206、15449，与测试版自己的 host.start 记录对不上，
+   即正式版 0.2.1-rc.5 同时在跑）；存储层是整文件原子替换、**没有跨进程锁**
+   （`dsh-storage-json`：一个 unit 只有单写者、后写覆盖先写），会话日志那套
+   `session.lock` 并不覆盖 `storages`。
+
+所以这不是 `session/fork` 能靠打补丁修好的问题：**记账在 attach 之后被并发写者抹掉**，
+只能由 Host 修（跨进程锁 / 合并写入，或让两个 App 不共用 `$DSH_HOME`）；插件层能做的是
+"发现即补回来"。
+
+**修复方式**：`mountForkMembershipRepair()` 分两道，规则一致、都只补记账：
+
+1. **创建期**：`session/created` 时补一次（挡住 Host fork 时就没挂的那一类）；
+2. **启动期**：`sweepForkChildrenOnBoot()` 扫一轮 `sessionPersistence.list()`，把"父会话
+   已入册、子会话却不在任何工作区"的 fork 子会话补回去（挡住记账写进去又被覆盖的那一类）。
+   开关是 `repairForkChildrenOnBoot`（默认 `true`）。
+
 规则收窄（`lib/move.js`）：
 
 - 只处理普通 fork 子会话：有 `parentSession`、`origin !== 'subagent'`、`delegationDepth` 不 > 0；
@@ -85,10 +114,11 @@ key = 包名 `dsh-session-toolbox`，渲染在本组合包页面的「描述与�
 - 子会话 `header.cwd` realpath 后必须等于该工作区路径，否则不挂；
 - 幂等、并发去重，attach 失败只记日志，绝不影响 Host 创建会话。
 
-**不做**启动全量扫描：真机 343 条存量会话里 155 条是子代理、还有一批刻意 ungrouped 的
-迁移会话，全量 attach 会改写既有侧栏结构。存量漂移用 `session_move` 显式修。
+启动期**只认 fork 子会话、不做全量扫描**：真机 343 条存量会话里 155 条是子代理、还有一批
+刻意 ungrouped 的迁移会话，全量 attach 会改写既有侧栏结构。存量漂移用 `session_move` 显式修。
 自愈日志（`dsh-session-move.log`）：`membership repair mounted`、
-`membership: attached fork child …`、`membership: attach failed …`。
+`membership: attached fork child …`、`membership: attach failed …`、
+`membership sweep: re-attached N of M fork child(ren) …`。
 
 ## 搬迁与 `session.lock`（内核 0.2.2+）
 
