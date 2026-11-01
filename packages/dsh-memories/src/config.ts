@@ -75,6 +75,17 @@ export const DEFAULT_INJECT_DELTA = true
  */
 export const DEFAULT_ROTATION_ENTRIES = 16
 
+/**
+ * User turns between rotation blocks inside one long conversation.
+ *
+ * Once per conversation is not enough for a session that runs for hours: the
+ * store keeps growing and the model keeps needing names it has not seen yet.
+ * Re-arming the block every this many USER turns keeps the cost bounded (one
+ * ~1.6 KB block per span) and lets coverage accumulate within a single long
+ * session. 0 keeps the old once-per-conversation behaviour.
+ */
+export const DEFAULT_ROTATION_EVERY_TURNS = 20
+
 /** Byte budget for the title-only rotation block. */
 export const DEFAULT_ROTATION_MAX_BYTES = 1600
 
@@ -391,6 +402,15 @@ export const Config = z.object({
    * over a few dozen sessions. 0 disables it.
    */
   rotationEntries: z.number().default(DEFAULT_ROTATION_ENTRIES).description('List this many additional memory titles (not bodies) in each conversation, rotating through the entries the summary did not name, oldest-unseen first. 0 disables the rotation block.').volatile(),
+  /**
+   * User turns between rotation blocks inside one long conversation.
+   *
+   * A session that runs for hours outlives its first block: the store grows and
+   * the model needs names it has not seen. Re-arming every this many turns keeps
+   * the cost bounded (one block per span) and lets coverage accumulate within a
+   * single long session. 0 keeps once-per-conversation.
+   */
+  rotationEveryTurns: z.number().default(DEFAULT_ROTATION_EVERY_TURNS).description('Inside one conversation, emit a fresh rotation block every this many user turns (0 keeps the old once-per-conversation behaviour).').volatile(),
   /** Max stored entries per scope; the least-recently-updated are evicted. */
   maxEntriesPerScope: z.number().default(DEFAULT_MAX_ENTRIES_PER_SCOPE).description('Stored memories per scope; past this cap the least recently used are deleted.').volatile(),
   /** Days an unused memory survives before it is archived. `0` disables archival. */
@@ -504,6 +524,8 @@ export interface MemoriesSettings {
   injectDelta: boolean
   /** How many extra memories one conversation lists by title only (0 disables). */
   rotationEntries: number
+  /** User turns between rotation blocks inside one long conversation (0 = once). */
+  rotationEveryTurns: number
   /** Retention: what the store keeps, and for how long. */
   maxEntriesPerScope: number
   maxUnusedDays: number
@@ -595,6 +617,7 @@ export const MEMORIES_SETTINGS_DEFAULTS: MemoriesSettings = {
   recallMinTerms: DEFAULT_RECALL_MIN_TERMS,
   injectDelta: DEFAULT_INJECT_DELTA,
   rotationEntries: DEFAULT_ROTATION_ENTRIES,
+  rotationEveryTurns: DEFAULT_ROTATION_EVERY_TURNS,
   maxEntriesPerScope: DEFAULT_MAX_ENTRIES_PER_SCOPE,
   maxUnusedDays: DEFAULT_MAX_UNUSED_DAYS,
   snapshotMaxAgeDays: DEFAULT_SNAPSHOT_MAX_AGE_DAYS,
@@ -750,6 +773,7 @@ export function normalizeSettings(input: Partial<MemoriesSettings> | undefined):
     recallMinTerms: positive(value.recallMinTerms, DEFAULT_RECALL_MIN_TERMS, 0),
     injectDelta: value.injectDelta ?? DEFAULT_INJECT_DELTA,
     rotationEntries: positive(value.rotationEntries, DEFAULT_ROTATION_ENTRIES, 0),
+    rotationEveryTurns: positive(value.rotationEveryTurns, DEFAULT_ROTATION_EVERY_TURNS, 0),
     maxEntriesPerScope: positive(value.maxEntriesPerScope, DEFAULT_MAX_ENTRIES_PER_SCOPE),
     maxUnusedDays: positive(value.maxUnusedDays, DEFAULT_MAX_UNUSED_DAYS, 0),
     snapshotMaxAgeDays: positive(value.snapshotMaxAgeDays, DEFAULT_SNAPSHOT_MAX_AGE_DAYS, 0),

@@ -187,6 +187,47 @@ test('/memories stats reports per-scope coverage', async (t) => {
   assert.match(stats, /exposure: global 0\/4 \(0\.0%\)/u)
 })
 
+/** One user-authored message, as the runtime counts it. */
+function userMessage(index: number): unknown {
+  return { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: `turn ${index}` }] }
+}
+
+/** One rotation block already present in the durable history. */
+function rotationMessage(): unknown {
+  return {
+    role: 'user',
+    source: { kind: 'plugin:memories', form: 'recall' },
+    content: [{ type: 'text', text: '<memory-index>\n- [fact] memory 0\n</memory-index>' }],
+  }
+}
+
+test('a long conversation re-arms the rotation block on its cadence', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-memories-rot-cadence-'))
+  const runtime = new MemoriesRuntime(stubContext, { memoriesDir: dir, autoExtract: false, rotationEveryTurns: 10 })
+  t.after(async () => {
+    runtime.dispose()
+    await rm(dir, { recursive: true, force: true })
+  })
+  await seed(runtime, stubAgent(stubSession(dir, 'session-cadence')).session, 60)
+
+  // Turn 5: the first block is due, and only once on this turn.
+  const first = stubAgent(stubSession(dir, 'session-cadence', [1, 2, 3, 4, 5].map(userMessage)))
+  assert.ok(await runtime.injectionFor(first) !== undefined)
+  const blockOne = await runtime.rotationFor(first)
+  assert.ok(blockOne !== undefined)
+  assert.equal(await runtime.rotationFor(first), undefined, 'the same turn does not emit twice')
+
+  // Turn 10 with one block already in the history: the cadence has not passed.
+  const atTen = stubAgent(stubSession(dir, 'session-cadence', [...[1, 2, 3, 4, 5].map(userMessage), rotationMessage(), ...[6, 7, 8, 9, 10].map(userMessage)]))
+  assert.equal(await runtime.rotationFor(atTen), undefined, 'the second block is not due until turn 20')
+
+  // Turn 20 with one block: the second is due and differs from the first.
+  const atTwenty = stubAgent(stubSession(dir, 'session-cadence', [...[1, 2, 3, 4, 5].map(userMessage), rotationMessage(), ...[6, 7, 8, 9, 10, 11, 12, 13, 14, 15].map(userMessage)]))
+  const blockTwo = await runtime.rotationFor(atTwenty)
+  assert.ok(blockTwo !== undefined, 'turn 20 earns a second block')
+  assert.notEqual(textOf(blockTwo), textOf(blockOne))
+})
+
 test('rotationEntries: 0 disables the block', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'dsh-memories-rot-off-'))
   const runtime = new MemoriesRuntime(stubContext, { memoriesDir: dir, autoExtract: false, rotationEntries: 0 })

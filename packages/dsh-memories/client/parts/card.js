@@ -102,6 +102,11 @@ const FIELDS = [
     hint: { zh: '摘要装不下的记忆，用一份只列标题的小块轮转：从未曝光的最先，其次是最久没出现过的，每次最多这么多条、约 1.6KB，全局与项目作用域轮流取。0 关闭。它让整库在几十个会话里都能被看见，而不会永远只注入同一小批。', en: 'Memories the summary had no room for are rotated in as a title-only block: never-surfaced first, then the longest-unseen, up to this many per conversation and about 1.6KB, alternating the global and project scopes. 0 disables it.' },
   },
   {
+    field: 'rotationEveryTurns', kind: 'number', min: 0, step: 1,
+    label: { zh: '轮转间隔（用户轮次）', en: 'Rotation cadence (user turns)' },
+    hint: { zh: '长会话里每隔这么多轮用户发言再补一次轮转块；0 表示整个会话只补一次。默认 20：一个几小时的会话会分批看到新标题，而不是首轮之后再也不更新。', en: 'Inside one long conversation, emit a fresh rotation block every this many user turns; 0 emits only once. The default 20 lets a multi-hour session meet new titles in batches instead of freezing after its first turn.' },
+  },
+  {
     field: 'reflectionEnabled', kind: 'boolean',
     label: { zh: '每周反思', en: 'Weekly reflection' },
     hint: { zh: '每周从记忆里综合出几条「没有哪一条记忆单独说过」的观察，比如跨项目的习惯、反复踩的坑。每条必须引用依据的记忆，否则丢弃。写成按日期归档的 markdown，不注入对话。', en: 'Once a week, synthesize observations no single memory states — cross-project habits, recurring pitfalls. Every observation must cite its evidence or it is dropped. Dated markdown files, never injected.' },

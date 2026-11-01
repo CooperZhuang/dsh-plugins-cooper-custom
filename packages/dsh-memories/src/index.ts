@@ -297,8 +297,8 @@ export class MemoriesRuntime {
   private readonly recallCounts = new WeakMap<Session, number>()
   /** Late memory blocks already injected into each conversation. */
   private readonly deltaCounts = new WeakMap<Session, number>()
-  /** Conversations whose rotation block has already been emitted by this process. */
-  private readonly rotationDone = new WeakSet<Session>()
+  /** The user-turn number at which each conversation last emitted a rotation block. */
+  private readonly rotationAt = new WeakMap<Session, number>()
   /** Entry ids each conversation has already been shown. */
   private readonly surfacedIds = new WeakMap<Session, Set<string>>()
   /** Injected ids this conversation has already credited as used. */
@@ -1080,7 +1080,7 @@ export class MemoriesRuntime {
     this.injected.delete(session)
     this.recallCounts.delete(session)
     this.deltaCounts.delete(session)
-    this.rotationDone.delete(session)
+    this.rotationAt.delete(session)
     this.surfacedIds.delete(session)
     this.helpedIds.delete(session)
     // A compacted conversation is a new one, and its first near miss is worth
@@ -1478,12 +1478,17 @@ export class MemoriesRuntime {
     if (this.settings.rotationEntries <= 0) return undefined
     if (this.settings.recallMode === 'off') return undefined
     const session = agent.session
-    if (this.rotationDone.has(session)) return undefined
     if (this.sessionOff(session)) return undefined
-    if (this.carriesRotation(session)) {
-      this.rotationDone.add(session)
-      return undefined
-    }
+    const turns = this.userTurns(session)
+    const every = this.settings.rotationEveryTurns
+    // One block for the first turn, then one more per `every` user turns. A long
+    // session outlives its first block: the store grows and the model needs names
+    // it has not seen, so the block re-arms on a bounded cadence instead of
+    // costing a second summary.
+    const allowed = every > 0 ? 1 + Math.floor(Math.max(0, turns - 1) / every) : 1
+    const emitted = this.rotationBlocks(session)
+    if (emitted >= allowed) return undefined
+    if ((this.rotationAt.get(session) ?? -1) === turns) return undefined
     const states = await this.allScopes(session)
     const record = this.state.getInjection(session.id)
     const shown = new Set<string>(record?.ids ?? [])
@@ -1536,11 +1541,11 @@ export class MemoriesRuntime {
     const text = renderMemoryIndex(picked, DEFAULT_ROTATION_MAX_BYTES)
     if (text === undefined) return undefined
     const freshCount = picked.filter((entry) => entry.lastSurfacedAt <= 0).length
-    this.rotationDone.add(session)
+    this.rotationAt.set(session, turns)
     this.recordInjection(session, picked.map((entry) => entry.id))
     await this.markSurfaced(session, picked)
-    this.log.info('dsh-memories: session %s listed %d titles in the rotation block (%d never surfaced before)',
-      session.id, picked.length, freshCount)
+    this.log.info('dsh-memories: session %s listed %d titles in the rotation block (%d never surfaced before, block %d of %d by turn %d)',
+      session.id, picked.length, freshCount, emitted + 1, allowed, turns)
     return createUserMessage({
       content: [{ type: 'text', text }],
       source: { kind: MEMORY_SOURCE_KIND, form: 'recall' },
@@ -1548,20 +1553,35 @@ export class MemoriesRuntime {
   }
 
   /**
-   * Whether the conversation already carries a rotation block.
+   * How many turns of the conversation the HUMAN wrote.
    *
-   * Same reasoning as {@link carriesRecall}: the block is a durable user
-   * message, so after a restart the history is the only honest record.
+   * Counted from the durable history, so the cadence survives a restart: a
+   * replayed conversation knows it is on turn 41 without this process having
+   * seen turns 1-40.
    */
-  private carriesRotation(session: Session): boolean {
+  private userTurns(session: Session): number {
     try {
-      return session.deriveMessages().some((message) => {
+      return session.deriveMessages().filter((message) => message.role === 'user' && message.source.kind === 'user').length
+    } catch {
+      return 0
+    }
+  }
+
+  /**
+   * How many rotation blocks the conversation already carries.
+   *
+   * The block is a durable user message, so after a restart the history is the
+   * only honest record of how many were emitted.
+   */
+  private rotationBlocks(session: Session): number {
+    try {
+      return session.deriveMessages().filter((message) => {
         if (message.source.kind !== MEMORY_SOURCE_KIND) return false
         const blocks = message.content as readonly { type: string; text?: string }[]
         return blocks.some((block) => block.type === 'text' && (block.text ?? '').includes(INDEX_OPEN))
-      })
+      }).length
     } catch {
-      return false
+      return 0
     }
   }
 
