@@ -1502,9 +1502,33 @@ export class MemoriesRuntime {
         || left.createdAt - right.createdAt
         || left.title.localeCompare(right.title))
     const ordered = [...fresh, ...stale]
+    // Both scopes must progress. A project scope with plenty of unseen entries
+    // would otherwise fill the block on its own, and the global scope — the half
+    // every session shares — would only rotate in sessions without a workspace.
+    // Measured on the real store: the first live rotation ran inside a project
+    // session, so the global coverage did not move at all. Alternating the two
+    // queues keeps a share for each; when one is exhausted the other takes the
+    // rest.
+    const queues: readonly (readonly MemoryEntry[])[] = [
+      ordered.filter((entry) => entry.scope === 'global'),
+      ordered.filter((entry) => entry.scope === 'project'),
+    ]
+    const cursors = [0, 0]
     const picked: MemoryEntry[] = []
-    for (const entry of ordered) {
-      if (picked.length >= this.settings.rotationEntries) break
+    let turn = 0
+    while (picked.length < this.settings.rotationEntries) {
+      let entry: MemoryEntry | undefined
+      for (let attempt = 0; attempt < 2 && entry === undefined; attempt += 1) {
+        const which = (turn + attempt) % 2
+        const queue = queues[which]
+        const cursor = cursors[which] ?? 0
+        if (queue !== undefined && cursor < queue.length) {
+          entry = queue[cursor]
+          cursors[which] = cursor + 1
+        }
+      }
+      turn += 1
+      if (entry === undefined) break
       if (renderMemoryIndex([...picked, entry], DEFAULT_ROTATION_MAX_BYTES) === undefined) break
       picked.push(entry)
     }

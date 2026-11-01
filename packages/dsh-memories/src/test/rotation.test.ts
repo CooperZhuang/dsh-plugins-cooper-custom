@@ -148,6 +148,31 @@ test('the surfaced clock comes from state.db, not the entry mirror', async (t) =
   assert.ok((after?.lastSurfacedAt ?? 0) > 0, 'a usage row surfaces the entry again')
 })
 
+test('the rotation block gives both scopes a share', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-memories-rot-scopes-'))
+  const runtime = new MemoriesRuntime(stubContext, { memoriesDir: dir, autoExtract: false })
+  t.after(async () => {
+    runtime.dispose()
+    await rm(dir, { recursive: true, force: true })
+  })
+  const agent = stubAgent(stubSession(dir))
+  await seed(runtime, agent.session, 30, 'global memory')
+  for (let index = 0; index < 20; index += 1) {
+    await runtime.write(agent.session, {
+      scope: 'project',
+      title: `project memory ${index}`,
+      body: `Body for project memory ${index}.`,
+      tags: [],
+    }, 'tool')
+  }
+  assert.ok(await runtime.injectionFor(agent) !== undefined)
+  const rotation = await runtime.rotationFor(agent)
+  assert.ok(rotation !== undefined)
+  const text = textOf(rotation)
+  assert.match(text, /\[project\] \[fact\] project memory/u, 'the project scope is represented')
+  assert.match(text, /^- \[fact\] global memory/mu, 'and so is the global scope')
+})
+
 test('rotationEntries: 0 disables the block', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'dsh-memories-rot-off-'))
   const runtime = new MemoriesRuntime(stubContext, { memoriesDir: dir, autoExtract: false, rotationEntries: 0 })
