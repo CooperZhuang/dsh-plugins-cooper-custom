@@ -1462,14 +1462,16 @@ export class MemoriesRuntime {
    *
    * The summary is bounded by bytes and by a per-scope cap, so on a large store
    * it can only ever name a small minority of entries: measured on the real
-   * store, 63.7% of live memories had never been injected or read. This block
-   * spends about a kilobyte on titles only — never-surfaced entries first (old
-   * ones before new), then the longest-unseen — so a dozen more memories become
-   * discoverable per conversation and the whole store rotates through over a
-   * few dozen sessions.
+   * store at baseline, 58.6% of live memories had never been injected or read.
+   * This block spends about 1.6 KB on titles only — never-surfaced entries first
+   * (old ones before new), then the longest-unseen — so a dozen more memories
+   * become discoverable per conversation and the whole store rotates through
+   * over a few dozen sessions.
    *
-   * Once per conversation, like the summary: the block is a durable message, so
-   * a restarted harness restores it with the history and must not add another.
+   * Once at the start of a conversation, then once more every
+   * `rotationEveryTurns` user turns: the block is a durable message, so a
+   * restarted harness restores it with the history and knows how many were
+   * already emitted.
    *
    * @param agent - the agent whose next step is being prepared.
    * @returns the message to append, or `undefined` when nothing is left to rotate.
@@ -1511,9 +1513,10 @@ export class MemoriesRuntime {
     // conversation can use; a project entry is only discoverable from its own
     // workspace. Measured on the real store: the first live rotation ran inside a
     // project session and the global coverage did not move at all. The block
-    // therefore spends three quarters of its slots on the global scope, keeps a
-    // quarter for the current project, and lets either side take the rest when
-    // the other is exhausted.
+    // therefore spends three quarters of its slots on the global scope and keeps
+    // a quarter for the current project. The split is a hard cap per side: a
+    // scope that runs out does NOT hand its unused quota to the other one, so a
+    // session with no project entries emits 12 titles, not 16.
     const queues: readonly (readonly MemoryEntry[])[] = [
       ordered.filter((entry) => entry.scope === 'global'),
       ordered.filter((entry) => entry.scope === 'project'),

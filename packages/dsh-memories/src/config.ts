@@ -65,12 +65,12 @@ export const DEFAULT_INJECT_DELTA = true
  * How many additional memories one conversation lists by title only.
  *
  * The summary can only name a dozen entries and reserves at most a third of its
- * slots for never-surfaced material; measured on a real store that left 63.7%
- * of live entries never injected or read. Sixteen titles cost about 1.6 KB and
- * are enough to make the whole store discoverable over a couple of dozen
- * sessions: each conversation rotates through the entries the summary did not
- * have room for, oldest-unseen first. The two scopes take turns, so a global
- * library of 600 entries moves ~8 a session and crosses 50% coverage in ten.
+ * slots for never-surfaced material; measured on a real store at baseline that
+ * left 58.6% of live entries never injected or read. Sixteen titles cost about
+ * 1.6 KB and are enough to make the whole store discoverable over a couple of
+ * dozen sessions: each conversation rotates through the entries the summary did
+ * not have room for, oldest-unseen first. The global scope takes three quarters
+ * of the block, so a global library of 600 entries moves about 12 a session.
  * 0 disables the rotation block.
  */
 export const DEFAULT_ROTATION_ENTRIES = 16
@@ -638,7 +638,7 @@ export const MEMORIES_SETTINGS_DEFAULTS: MemoriesSettings = {
   syncConflictProvider: '',
   syncConflictModel: '',
   syncClock: DEFAULT_SYNC_CLOCK,
-  syncIntervalMinutes: 0,
+  syncIntervalMinutes: DEFAULT_SYNC_INTERVAL_MINUTES,
   syncDebounceSeconds: DEFAULT_SYNC_DEBOUNCE_SECONDS,
   consolidate: true,
   consolidateCooldownHours: DEFAULT_CONSOLIDATE_COOLDOWN_HOURS,

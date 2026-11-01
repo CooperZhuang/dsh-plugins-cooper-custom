@@ -74,11 +74,10 @@ try {
 
   /** Run a policy over `sessions` conversations; entries are mutated in place. */
   const simulate = (withRotation) => {
-    // The runtime alternates global and project queues, so a session that has a
-    // project scope spends only half the block on global titles. This simulation
-    // covers the global scope alone, so it models that half — otherwise it would
-    // report a coverage the real delegator never reaches.
-    const globalShare = Math.max(1, Math.ceil(rotationEntries / 2))
+    // The runtime spends three quarters of the block on the global scope and the
+    // rest on the current project. This simulation covers the global scope
+    // alone, so it models that share (12 of 16 titles), not the whole block.
+    const globalShare = Math.max(1, Math.ceil(rotationEntries * 0.75))
     const entries = global.map((entry) => ({ ...entry }))
     const surfaced = new Set(entries.filter((entry) => entry.lastSurfacedAt > 0).map((entry) => entry.id))
     const points = new Map()

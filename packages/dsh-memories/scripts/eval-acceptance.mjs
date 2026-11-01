@@ -121,7 +121,13 @@ try {
     baseline = undefined
   }
   const mustRecord = record || baseline === undefined
-  if (mustRecord) {
+  if (baseline === undefined && !record) {
+    // Never silently agree with an absent baseline: recording one automatically
+    // turns the next run into "dead below baseline: PASS" for free, which is
+    // exactly the shape of a self-fulfilling acceptance.
+    console.error(`baseline missing: ${baselinePath}; record it once with --record-baseline and commit it`)
+    process.exitCode = 2
+  } else if (mustRecord) {
     await mkdir(dirname(baselinePath), { recursive: true })
     await writeFile(baselinePath, `${JSON.stringify(current, null, 2)}\n`)
     console.log(`recorded baseline at ${baselinePath}`)
