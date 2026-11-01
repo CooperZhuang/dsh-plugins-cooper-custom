@@ -59,6 +59,7 @@
     "eval:backfill": "node scripts/eval-backfill.mjs",
     "eval:rotation": "node scripts/eval-rotation.mjs",
     "eval:coverage-projection": "node scripts/eval-coverage-projection.mjs",
+    "eval:acceptance": "node scripts/eval-acceptance.mjs",
     "eval:recall-log": "node scripts/eval-recall-log.mjs",
     "report": "node scripts/report.mjs",
     "prepare": "npm run build"
