@@ -86,6 +86,8 @@ try {
   let hitTop = 0
   let rr = 0
   const misses = []
+  const rankHistogram = {}
+  const relevanceGaps = []
   for (const probe of usable) {
     // The entries this decision named tell us which scopes the session could
     // see: global always, plus the project those ids live in. Ranking against
@@ -100,7 +102,22 @@ try {
     if (best < top) hitTop += 1
     if (Number.isFinite(best)) rr += 1 / (best + 1)
     else misses.push(probe)
+    // Why a decision is not at rank 1: a missing graph edge and a lost
+    // tie-break are different problems, and only the second is cheap to fix.
+    if (Number.isFinite(best)) {
+      const bucket = best <= 10 ? String(best) : '>10'
+      rankHistogram[bucket] = (rankHistogram[bucket] ?? 0) + 1
+      const top = hits[0]
+      const expected = hits[best]
+      if (best > 0 && top !== undefined && expected !== undefined) {
+        relevanceGaps.push(Number(((top.relevance ?? 0) - (expected.relevance ?? 0)).toFixed(1)))
+      }
+    } else {
+      rankHistogram['absent'] = (rankHistogram['absent'] ?? 0) + 1
+    }
   }
+  const sortedGaps = relevanceGaps.slice().sort((left, right) => left - right)
+  const medianGap = sortedGaps.length === 0 ? null : sortedGaps[Math.floor(sortedGaps.length / 2)]
   const count = usable.length
   const report = {
     home,
@@ -114,6 +131,9 @@ try {
     [`recallAt${top}`]: count === 0 ? null : Number((hitTop / count).toFixed(3)),
     mrr: count === 0 ? null : Number((rr / count).toFixed(3)),
     misses: misses.length,
+    rankHistogram,
+    medianRelevanceGap: medianGap,
+    within3Relevance: relevanceGaps.filter((gap) => gap <= 3).length,
     missingSample: misses.slice(0, 3).map((probe) => ({ query: probe.query.slice(0, 60), ids: probe.ids.slice(0, 3) })),
   }
   if (args.includes('--json')) console.log(JSON.stringify(report, null, 2))
