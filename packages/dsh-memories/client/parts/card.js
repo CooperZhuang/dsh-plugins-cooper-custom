@@ -99,7 +99,7 @@ const FIELDS = [
   {
     field: 'rotationEntries', kind: 'number', min: 0, step: 1,
     label: { zh: '每会话轮转标题数', en: 'Rotation titles per conversation' },
-    hint: { zh: '摘要装不下的记忆，用一份只列标题的小块轮转：从未曝光的最先，其次是最久没出现过的，每次最多这么多条、约 1.2KB。0 关闭。它让整库在几十个会话里都能被看见，而不会永远只注入同一小批。', en: 'Memories the summary had no room for are rotated in as a title-only block: never-surfaced first, then the longest-unseen, up to this many per conversation and about 1.2KB. 0 disables it.' },
+    hint: { zh: '摘要装不下的记忆，用一份只列标题的小块轮转：从未曝光的最先，其次是最久没出现过的，每次最多这么多条、约 1.6KB，全局与项目作用域轮流取。0 关闭。它让整库在几十个会话里都能被看见，而不会永远只注入同一小批。', en: 'Memories the summary had no room for are rotated in as a title-only block: never-surfaced first, then the longest-unseen, up to this many per conversation and about 1.6KB, alternating the global and project scopes. 0 disables it.' },
   },
   {
     field: 'reflectionEnabled', kind: 'boolean',

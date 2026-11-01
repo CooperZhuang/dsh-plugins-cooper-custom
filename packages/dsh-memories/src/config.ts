@@ -66,15 +66,17 @@ export const DEFAULT_INJECT_DELTA = true
  *
  * The summary can only name a dozen entries and reserves at most a third of its
  * slots for never-surfaced material; measured on a real store that left 63.7%
- * of live entries never injected or read. Ten titles cost about a kilobyte and
- * are enough to make the whole store discoverable over a few dozen sessions:
- * each conversation rotates through the entries the summary did not have room
- * for, oldest-unseen first. 0 disables the rotation block.
+ * of live entries never injected or read. Sixteen titles cost about 1.6 KB and
+ * are enough to make the whole store discoverable over a couple of dozen
+ * sessions: each conversation rotates through the entries the summary did not
+ * have room for, oldest-unseen first. The two scopes take turns, so a global
+ * library of 600 entries moves ~8 a session and crosses 50% coverage in ten.
+ * 0 disables the rotation block.
  */
-export const DEFAULT_ROTATION_ENTRIES = 10
+export const DEFAULT_ROTATION_ENTRIES = 16
 
 /** Byte budget for the title-only rotation block. */
-export const DEFAULT_ROTATION_MAX_BYTES = 1200
+export const DEFAULT_ROTATION_MAX_BYTES = 1600
 
 /**
  * Default cap on the GLOBAL section's bullets, below {@link DEFAULT_MAX_SUMMARY_ENTRIES}.

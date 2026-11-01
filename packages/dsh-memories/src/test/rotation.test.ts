@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { MemoriesRuntime } from '../index.js'
+import { DEFAULT_ROTATION_ENTRIES } from '../config.js'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
 
@@ -88,7 +89,7 @@ test('the rotation block lists titles the summary had no room for, once', async 
   assert.doesNotMatch(rotationText, /this body must never appear/u)
 
   const listed = titlesOf(rotationText)
-  assert.ok(listed.length <= 10, `at most the configured count (got ${listed.length})`)
+  assert.ok(listed.length <= DEFAULT_ROTATION_ENTRIES, `at most the configured count (got ${listed.length})`)
   const summaryTitles = new Set(summaryText.split('\n')
     .filter((line) => line.startsWith('- '))
     .map((line) => line.replace(/^- (?:📌 )?/u, '').replace(/ \(\d{4}-\d{2}-\d{2}.*$/u, '').trim()))
@@ -104,7 +105,7 @@ test('a later conversation rotates to different entries', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'dsh-memories-rot2-'))
   const runtime = new MemoriesRuntime(stubContext, { memoriesDir: dir, autoExtract: false })
   t.after(() => runtime.dispose())
-  await seed(runtime, stubAgent(stubSession(dir)).session, 40)
+  await seed(runtime, stubAgent(stubSession(dir)).session, 60)
 
   const first = stubAgent(stubSession(dir, 'session-a'))
   assert.ok(await runtime.injectionFor(first) !== undefined)

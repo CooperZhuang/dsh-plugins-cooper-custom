@@ -37,9 +37,9 @@ const flag = (name, fallback) => {
   return Number.isFinite(value) && value > 0 ? Math.trunc(value) : fallback
 }
 const home = args.includes('--home') ? args[args.indexOf('--home') + 1] : (process.env.DSH_HOME ?? join(process.env.USERPROFILE ?? process.env.HOME ?? '.', '.dsh'))
-const rotationEntries = flag('--entries', 10)
+const rotationEntries = flag('--entries', 16)
 const sessions = flag('--sessions', 40)
-const budget = flag('--budget', 1200)
+const budget = flag('--budget', 1600)
 
 const work = await mkdtemp(join(tmpdir(), 'dsh-memories-eval-rotation-'))
 try {
@@ -74,6 +74,11 @@ try {
 
   /** Run a policy over `sessions` conversations; entries are mutated in place. */
   const simulate = (withRotation) => {
+    // The runtime alternates global and project queues, so a session that has a
+    // project scope spends only half the block on global titles. This simulation
+    // covers the global scope alone, so it models that half — otherwise it would
+    // report a coverage the real delegator never reaches.
+    const globalShare = Math.max(1, Math.ceil(rotationEntries / 2))
     const entries = global.map((entry) => ({ ...entry }))
     const surfaced = new Set(entries.filter((entry) => entry.lastSurfacedAt > 0).map((entry) => entry.id))
     const points = new Map()
@@ -98,7 +103,7 @@ try {
             || left.title.localeCompare(right.title))
         const picked = []
         for (const entry of [...fresh, ...stale]) {
-          if (picked.length >= rotationEntries) break
+          if (picked.length >= globalShare) break
           if (renderMemoryIndex([...picked, entry], budget) === undefined) break
           picked.push(entry)
         }
@@ -129,7 +134,7 @@ try {
   if (args.includes('--json')) console.log(JSON.stringify(report, null, 2))
   else {
     console.log(`store: ${total} entries, ${startCovered} already surfaced (${report.startCoverage})`)
-    console.log(`sessions | baseline | rotation(+${rotationEntries}/session)`)
+    console.log(`sessions | baseline | rotation (half of ${rotationEntries}/session to global)`)
     for (const session of [1, 5, 10, 20, 40].filter((value) => baseline.has(value))) {
       console.log(`${String(session).padStart(8)} | ${String(baseline.get(session)).padStart(8)} | ${rotation.get(session)}`)
     }
