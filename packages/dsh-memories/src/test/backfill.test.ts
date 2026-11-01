@@ -98,10 +98,13 @@ test('findSessionLogs finds nested logs and ignores other files', async (t) => {
   const logDir = join(home, 'sessions', '--C-work-alpha--', 'session-abc')
   await mkdir(logDir, { recursive: true })
   await writeFile(join(logDir, 'session.jsonl.zstd'), 'not zstd')
+  // DSH 0.2.x writes a versioned name; the finder must see both, or a whole
+  // generation of sessions silently drops out of backfill.
+  await writeFile(join(logDir, 'session.v4.jsonl.zstd'), 'not zstd either')
   await writeFile(join(logDir, 'other.txt'), 'ignore me')
   const found = await findSessionLogs(join(home, 'sessions'))
-  assert.equal(found.length, 1)
-  assert.match(found[0]?.file ?? '', /session\.jsonl\.zstd$/u)
+  assert.equal(found.length, 2)
+  for (const log of found) assert.match(log.file, /session(\.v\d+)?\.jsonl\.zstd$/u)
 })
 
 test('backfill is a dry run unless --apply is given, and skips mined sessions', async (t) => {

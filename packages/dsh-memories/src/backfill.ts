@@ -56,6 +56,9 @@ export interface BackfillWindow {
 /** zstd frame magic bytes; a session log is a concatenation of frames. */
 const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd])
 
+/** A session log, whatever version suffix DSH gave it (`session.jsonl.zstd`, `session.v4.jsonl.zstd`). */
+const SESSION_LOG = /^session.*\.jsonl\.zstd$/u
+
 /** Deepest directory nesting `findSessionLogs` walks. */
 const MAX_LOG_DEPTH = 4
 
@@ -266,7 +269,7 @@ export async function findSessionLogs(sessionsDir: string): Promise<{ file: stri
         await walk(path, depth + 1)
         continue
       }
-      if (!entry.isFile() || entry.name !== 'session.jsonl.zstd') continue
+      if (!entry.isFile() || !SESSION_LOG.test(entry.name)) continue
       try {
         const info = await stat(path)
         found.push({ file: path, modifiedAt: info.mtimeMs })

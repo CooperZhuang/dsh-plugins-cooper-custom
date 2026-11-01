@@ -492,7 +492,7 @@ async function scanSessionLogs(sessionsDir, warn) {
       continue
     }
     for (const line of text.split('\n')) {
-      if (!line.includes(SUMMARY_OPEN) && !line.includes(RECALL_OPEN)) continue
+      if (!line.includes(SUMMARY_OPEN) && !line.includes(RECALL_OPEN) && !line.includes(INDEX_OPEN)) continue
       let event
       try {
         event = JSON.parse(line)
