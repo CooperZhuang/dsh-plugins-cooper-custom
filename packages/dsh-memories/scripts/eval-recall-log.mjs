@@ -144,6 +144,64 @@ try {
     }
     for (const miss of report.missingSample) console.log(`  miss: ${miss.query} → ${JSON.stringify(miss.ids)}`)
   }
+
+  // `--variants` replays alternative orderings over the same probes. Read the
+  // caveat first: these probes are decisions the INJECTOR made (it ranks by the
+  // attention score), so a variant that reorders by that score looks better by
+  // construction. The variants are a screening tool, not a verdict: a change
+  // still needs the search-surface rule (relevance first) to agree.
+  if (args.includes('--variants')) {
+    const linksOf = (entry) => [...new Set([...entry.keys, ...entry.tags].map((value) => String(value).trim().toLowerCase()).filter(Boolean))]
+    const runVariant = (variant) => {
+      let at1 = 0
+      let at3 = 0
+      let at5 = 0
+      let rr = 0
+      let n = 0
+      for (const probe of usable) {
+        const needed = new Set(probe.ids.map((id) => scopeOfId.get(id)))
+        const corpus = scopes.filter((item) => needed.has(item.label))
+        const base = searchMemories(corpus, probe.query, { expand: true, limit: 100 })
+        let ranked = base
+        if (variant === 'score') ranked = [...base].sort((left, right) => right.score - left.score)
+        if (variant === 'expand-query' && base[0] !== undefined) {
+          const entries = corpus.flatMap((item) => item.entries)
+          const df = new Map()
+          for (const entry of entries) for (const link of linksOf(entry)) df.set(link, (df.get(link) ?? 0) + 1)
+          const terms = linksOf(base[0].entry).filter((link) => (df.get(link) ?? 0) <= entries.length * 0.5).slice(0, 3)
+          if (terms.length > 0) ranked = searchMemories(corpus, `${probe.query} ${terms.join(' ')}`, { expand: true, limit: 100 })
+        }
+        if (variant === 'link-boost' && base[0] !== undefined) {
+          const entries = corpus.flatMap((item) => item.entries)
+          const df = new Map()
+          for (const entry of entries) for (const link of linksOf(entry)) df.set(link, (df.get(link) ?? 0) + 1)
+          const information = (link) => {
+            const share = (df.get(link) ?? 0) / entries.length
+            return share > 0.5 ? 0 : 1 - share
+          }
+          const topLinks = new Set(linksOf(base[0].entry))
+          ranked = [...base].map((hit) => {
+            const own = linksOf(hit.entry)
+            let shared = 0
+            for (const link of own) if (topLinks.has(link)) shared += information(link)
+            return { hit, boost: shared }
+          }).sort((left, right) => (right.hit.relevance + 5 * right.boost) - (left.hit.relevance + 5 * left.boost)).map((row) => row.hit)
+        }
+        const ranks = probe.ids.map((id) => ranked.findIndex((hit) => hit.entry.id === id)).filter((rank) => rank >= 0)
+        const best = ranks.length === 0 ? Infinity : Math.min(...ranks)
+        n += 1
+        if (best === 0) at1 += 1
+        if (best < 3) at3 += 1
+        if (best < 5) at5 += 1
+        rr += Number.isFinite(best) ? 1 / (best + 1) : 0
+      }
+      return { at1: Number((at1 / n).toFixed(3)), at3: Number((at3 / n).toFixed(3)), at5: Number((at5 / n).toFixed(3)), mrr: Number((rr / n).toFixed(3)) }
+    }
+    console.log('\nvariant comparison (screening only; probes come from the injector):')
+    for (const variant of ['baseline', 'score', 'link-boost', 'expand-query']) {
+      console.log(`  ${variant.padEnd(11)} ${JSON.stringify(runVariant(variant))}`)
+    }
+  }
 } finally {
   await rm(work, { recursive: true, force: true })
 }
