@@ -23,6 +23,7 @@
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { hostname } from 'node:os'
+import { gitOrigin } from './git-origin.js'
 import type { MemoryDraft, MemoryEntry, MemoryScope, ScopeTarget, UpsertResult } from './types.js'
 import { toMemoryDurability, toMemoryKind } from './types.js'
 
@@ -39,6 +40,15 @@ export interface ProjectDescriptor {
   readonly slug: string
   /** Unix epoch milliseconds of the last write. */
   readonly updatedAt: number
+  /**
+   * Normalized `origin` remote of the checkout, when one could be read.
+   *
+   * Optional because it is the one field a directory can honestly lack: a
+   * workspace that is not a git checkout has no repository identity, and a
+   * descriptor written before this field existed must stay readable. "Absent"
+   * therefore means "unknown", never an empty identity.
+   */
+  readonly origin?: string
 }
 
 /**
@@ -60,6 +70,28 @@ export interface ProjectHostDescriptor {
   readonly firstSeen: number
   /** Last time this machine used the directory. */
   readonly lastSeen: number
+  /**
+   * Normalized `origin` remote of that checkout, when one could be read.
+   *
+   * This is what makes a basename collision visible across machines: two hosts
+   * recording different origins for one slug are two repositories sharing one
+   * memory directory, not one project checked out twice.
+   */
+  readonly origin?: string
+}
+
+/**
+ * One project slug whose recorded origins disagree.
+ *
+ * The slug is the project name, so a second, unrelated repository of the same
+ * name lands in the same `projects/<slug>` directory. Every host that ever used
+ * it recorded its own origin; two different origins prove the collision.
+ */
+export interface OriginConflict {
+  /** Slug directory under `projects/` shared by both checkouts. */
+  readonly slug: string
+  /** Every distinct normalized origin recorded for that slug, sorted. */
+  readonly origins: readonly string[]
 }
 
 /** Whether a filesystem error means "absent". */
@@ -661,11 +693,15 @@ export class MemoryStore {
   async writeProjectDescriptor(projectRoot: string, now = Date.now()): Promise<void> {
     const slug = projectSlug(projectRoot)
     const name = projectRoot.replace(/[\\/]+$/u, '').split(/[\\/]/u).pop() ?? 'workspace'
+    // The origin is diagnostic evidence, not a reason to fail a memory write: an
+    // unreadable or unusual checkout simply records no origin.
+    const origin = await gitOrigin(projectRoot).catch(() => undefined)
     const descriptor: ProjectDescriptor = {
       root: resolve(projectRoot),
       name,
       slug,
       updatedAt: now,
+      ...origin === undefined ? {} : { origin },
     }
     await writeAtomic(join(this.memoriesDir, 'projects', slug, 'project.json'), `${JSON.stringify(descriptor, undefined, 2)}\n`)
     await this.writeHostDescriptor(slug, projectRoot, now).catch(() => undefined)
@@ -692,7 +728,15 @@ export class MemoryStore {
     } catch {
       // first write on this machine
     }
-    const descriptor = { host: hostname(), platform: process.platform, root: resolve(projectRoot), firstSeen, lastSeen: now }
+    const origin = await gitOrigin(projectRoot).catch(() => undefined)
+    const descriptor = {
+      host: hostname(),
+      platform: process.platform,
+      root: resolve(projectRoot),
+      firstSeen,
+      lastSeen: now,
+      ...origin === undefined ? {} : { origin },
+    }
     await mkdir(dir, { recursive: true })
     await writeAtomic(file, `${JSON.stringify(descriptor, undefined, 2)}\n`)
   }
@@ -737,6 +781,48 @@ export class MemoryStore {
       if (isMissing(error)) return []
       throw error
     }
+  }
+
+  /**
+   * Every distinct repository origin recorded for one project slug.
+   *
+   * The canonical descriptor and each machine's host file are merged because no
+   * single one of them is authoritative across machines: `project.json` is
+   * rewritten by whichever checkout wrote last, while `hosts/<hostname>.json`
+   * keeps one machine's view and is never overwritten by another machine.
+   * A directory that was never a git checkout records nothing and yields `[]`.
+   *
+   * @param slug - project slug directory.
+   * @returns the distinct non-empty origins, sorted for a stable report.
+   */
+  async projectOrigins(slug: string): Promise<readonly string[]> {
+    const origins = new Set<string>()
+    const descriptor = await this.readProjectDescriptor(slug)
+    if (typeof descriptor?.origin === 'string' && descriptor.origin.length > 0) origins.add(descriptor.origin)
+    for (const host of await this.listHostDescriptors(slug)) {
+      if (typeof host.origin === 'string' && host.origin.length > 0) origins.add(host.origin)
+    }
+    return [...origins].sort()
+  }
+
+  /**
+   * Report every project slug that two different repositories share.
+   *
+   * {@link projectSlug} keys a project by its name, so `<a>/alpha` and
+   * `<b>/alpha` share `projects/alpha` and their memories are silently merged.
+   * Two recorded origins are the proof of that collision; one origin (or none,
+   * for a non-checkout) is a project used from several roots, which is the
+   * normal case and is not reported.
+   *
+   * @returns one row per conflicting slug, sorted by slug.
+   */
+  async originConflicts(): Promise<readonly OriginConflict[]> {
+    const conflicts: OriginConflict[] = []
+    for (const slug of await this.listProjects()) {
+      const origins = await this.projectOrigins(slug)
+      if (origins.length >= 2) conflicts.push({ slug, origins })
+    }
+    return conflicts
   }
 
   /** Drop the cached index of one scope. */

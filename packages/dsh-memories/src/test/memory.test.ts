@@ -71,7 +71,9 @@ test('adopting a legacy path-hashed directory merges its entries instead of drop
 
 test('a project directory records every machine that used it', async () => {
   const { store, dir } = await tempStore()
-  const root = '/Users/example/Documents/Code/alpha'
+  // A POSIX path is not resolvable to itself on Windows, and the descriptor
+  // stores the RESOLVED root: use a path this platform can round-trip.
+  const root = process.platform === 'win32' ? 'C:\\Users\\cooper\\Documents\\Code\\alpha' : '/Users/example/Documents/Code/alpha'
   await store.writeProjectDescriptor(root, 1000)
   const hostsDir = join(dir, 'projects', 'alpha', 'hosts')
   const files = (await readdir(hostsDir)).filter((name) => name.endsWith('.json'))

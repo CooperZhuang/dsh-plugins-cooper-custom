@@ -23,7 +23,7 @@
  */
 import { ACCOUNT_QUOTA_EXCEEDED_CODE, createUserMessage, isQuotaExceededError, QUOTA_EXCEEDED_CODE } from '@deepseek-ai/dsh-llm'
 import { homedir } from 'node:os'
-import { resolve, sep } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import type { LlmRuntime, UserMessage } from '@deepseek-ai/dsh-llm'
 import type { Agent, SessionStartSource } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
@@ -50,7 +50,7 @@ import { listReflections, previousInsights, reflectionDue, runReflection, writeR
 import type { GateCandidate } from './gate.js'
 import { parseTimeRange } from './time.js'
 import { isSubstantiveTurn } from './query.js'
-import { MEMORY_OPEN, rankForSummary, renderEntry, renderHit, renderMemorySummaryResult, renderRecall, renderScopeListing, selectForSummary } from './render.js'
+import { MEMORY_OPEN, RECALL_OPEN, rankForSummary, renderEntry, renderHit, renderMemorySummaryResult, renderRecall, renderScopeListing, selectForSummary } from './render.js'
 import type { SummaryScope } from './render.js'
 import { findProjectRoot, isWithin } from './workspace.js'
 import { citationRoots, citationWarning, ignoredUnder, missingCitations } from './citations.js'
@@ -58,6 +58,8 @@ import { planRetention, retentionKey } from './retention.js'
 import { MemoryLog, createFileSink, createLogExporter, pluginLogger } from './log.js'
 import { collectWindow, resolveLlmRoute, runExtraction } from './extract.js'
 import type { ExtractionRoute } from './extract.js'
+import { decodeSessionLog, findSessionLogs, parseSessionLog, planWindows, zstdAvailable } from './backfill.js'
+import type { BackfillLog, BackfillWindow } from './backfill.js'
 import { backgroundDelayMs, cappedBackoffMs, extractionDelayMs, formatDelay, parsePeakHours, peakDelayMs } from './schedule.js'
 import { CONSOLIDATE_PRESET_ID, adjudicateDisputes, applyPlan, applyVerdicts, classifyPlan, clearPendingPlan, conflictDisputes, denyToolsFor, mergePendingPlan, proposalIsFresh, readPendingPlan, runConsolidation, runConsolidationDirect, selectForConsolidation, writePendingPlan } from './consolidate.js'
 import type { ConsolidateRequest, ConsolidationDispute, DisputeVerdict } from './consolidate.js'
@@ -125,6 +127,18 @@ const NO_PROJECT_LABEL = 'project:none'
  * second one.
  */
 const KNOWN_TITLE_LIMIT = 80
+
+/** How many late-injection blocks one conversation may receive. */
+const DELTA_MAX_PER_CONVERSATION = 2
+
+/** Byte budget for one late-injection block. */
+const DELTA_MAX_BYTES = 800
+
+/** Sessions one `/memories backfill` run mines unless `--limit` says otherwise. */
+const BACKFILL_DEFAULT_SESSIONS = 3
+
+/** Windows one backfilled session may spend, so one huge log cannot run for an hour. */
+const BACKFILL_MAX_WINDOWS_PER_SESSION = 20
 
 /** Case-insensitive path equality on Windows, exact elsewhere. */
 function samePath(left: string, right: string): boolean {
@@ -281,6 +295,8 @@ export class MemoriesRuntime {
   private readonly injected = new WeakSet<Session>()
   /** Recall deltas already injected into each conversation. */
   private readonly recallCounts = new WeakMap<Session, number>()
+  /** Late memory blocks already injected into each conversation. */
+  private readonly deltaCounts = new WeakMap<Session, number>()
   /** Entry ids each conversation has already been shown. */
   private readonly surfacedIds = new WeakMap<Session, Set<string>>()
   /** Injected ids this conversation has already credited as used. */
@@ -961,6 +977,9 @@ export class MemoriesRuntime {
     if (summary === undefined) return undefined
     this.injected.add(session)
     await this.markSurfaced(session, summary.surfaced)
+    // Durable, so a restart does not make the delta path re-announce what this
+    // conversation already carries.
+    this.recordInjection(session, summary.surfaced.map((entry) => entry.id))
     // Report what the block actually SHOWS, not how many entries were offered:
     // the two differ by design (the byte budget drops the tail), and a log that
     // counts the selection makes a working budget look like a broken one.
@@ -1033,6 +1052,7 @@ export class MemoriesRuntime {
   resetInjection(session: Session): void {
     this.injected.delete(session)
     this.recallCounts.delete(session)
+    this.deltaCounts.delete(session)
     this.surfacedIds.delete(session)
     this.helpedIds.delete(session)
     // A compacted conversation is a new one, and its first near miss is worth
@@ -1226,6 +1246,7 @@ export class MemoriesRuntime {
         if (text !== undefined) {
           for (const entry of retired) seen.add(entry.id)
           this.recallCounts.set(session, used + retired.length)
+          this.recordInjection(session, retired.map((entry) => entry.id))
           this.log.info('dsh-memories: session %s recalled %s from the archive (nothing live matched)',
             session.id, retired.map((entry) => entry.id).join(', '))
           return createUserMessage({
@@ -1323,10 +1344,87 @@ export class MemoriesRuntime {
       JSON.stringify((picked[0]!.best ?? '').slice(0, 80)))
     this.recallCounts.set(session, used + picked.length)
     await this.markSurfaced(session, picked.map((item) => item.entry))
+    this.recordInjection(session, picked.map((item) => item.entry.id))
     return createUserMessage({
       content: [{ type: 'text', text }],
       // The same form as the summary block; `carriesRecall` tells them apart by
       // the frame, so a delta never suppresses the once-per-conversation block.
+      source: { kind: MEMORY_SOURCE_KIND, form: 'recall' },
+    })
+  }
+
+  /**
+   * Extend the conversation's "already shown" record.
+   *
+   * The stamp is what a later delta compares entry `updated` times against, so
+   * it advances with every injection, not only with the summary.
+   *
+   * @param session - conversation that was shown entries.
+   * @param ids - entry ids the model can now see.
+   * @param at - injection time; defaults to now.
+   */
+  private recordInjection(session: Session, ids: readonly string[], at = Date.now()): void {
+    if (ids.length === 0) return
+    const previous = this.state.getInjection(session.id)
+    const union = new Set<string>(previous?.ids ?? [])
+    for (const id of ids) union.add(id)
+    this.state.putInjection(session.id, { at, ids: [...union] })
+  }
+
+  /**
+   * A bounded block naming memories written after this conversation's summary.
+   *
+   * The summary is a snapshot: a memory extracted or consolidated ten turns
+   * later is invisible until the model thinks to search for it. This path names
+   * only entries whose `updated` stamp is newer than the last injection, and
+   * only those the conversation has not already been shown, so it is a short
+   * paragraph rather than a second summary. Two per conversation, 800 bytes
+   * each: the block is a nudge, not a channel.
+   *
+   * @param agent - the agent whose next step is being prepared.
+   * @returns the message to append, or `undefined` when nothing new is worth it.
+   */
+  async deltaFor(agent: Agent): Promise<UserMessage | undefined> {
+    if (!this.settings.injectDelta) return undefined
+    const session = agent.session
+    if (this.sessionOff(session)) return undefined
+    const used = this.deltaCounts.get(session) ?? 0
+    if (used >= DELTA_MAX_PER_CONVERSATION) return undefined
+    const record = this.state.getInjection(session.id)
+    if (record === undefined) return undefined
+    const shown = new Set<string>(record.ids)
+    for (const id of this.seenIds(session)) shown.add(id)
+    // One second of slack: the record is written a moment after the entries it
+    // names were read, and an `at` truncated to the same millisecond as a write
+    // must not turn "written just now" into "written before the summary".
+    const cutoff = record.at - 1_000
+    const fresh: MemoryEntry[] = []
+    for (const state of await this.allScopes(session)) {
+      for (const entry of state.entries) {
+        if (entry.updatedAt <= cutoff || shown.has(entry.id)) continue
+        fresh.push(entry)
+      }
+    }
+    if (fresh.length === 0) return undefined
+    fresh.sort((left, right) => right.updatedAt - left.updatedAt
+      || left.title.localeCompare(right.title))
+    const picked: MemoryEntry[] = []
+    for (const entry of fresh) {
+      if (picked.length >= 3) break
+      if (renderRecall([...picked, entry], DELTA_MAX_BYTES) === undefined) break
+      picked.push(entry)
+    }
+    if (picked.length === 0) return undefined
+    const rendered = renderRecall(picked, DELTA_MAX_BYTES)
+    if (rendered === undefined) return undefined
+    const text = rendered.replace(RECALL_OPEN,
+      `${RECALL_OPEN}\n这 ${picked.length} 条记忆是在本次会话开始之后新增或更新的，只作背景参考：`)
+    this.deltaCounts.set(session, used + 1)
+    this.recordInjection(session, picked.map((entry) => entry.id))
+    await this.markSurfaced(session, picked)
+    this.log.info('dsh-memories: session %s injected %d memories written after its summary', session.id, picked.length)
+    return createUserMessage({
+      content: [{ type: 'text', text }],
       source: { kind: MEMORY_SOURCE_KIND, form: 'recall' },
     })
   }
@@ -2200,6 +2298,176 @@ export class MemoriesRuntime {
     const outcome = await this.runExtraction(agent, undefined, true)
     if (outcome.stored > 0) this.enqueueConsolidation(Date.now(), false, await this.projectRoot(agent.session))
     return outcome.stored
+  }
+
+  /**
+   * Mine conversations that were persisted before this process ever saw them.
+   *
+   * The live extractor only reads sessions registered in this process, so a
+   * conversation that ended before install — or before this process started —
+   * is never mined. The logs under `<dshHome>/sessions` still hold the
+   * transcript, so this pass decodes them, cuts the same bounded windows the
+   * live path uses, and runs the same extraction prompt and store write.
+   *
+   * Dry run by default: each window is a paid model call, and the caller is the
+   * only one who can decide to spend it.
+   *
+   * @param session - the session that asked; used to skip itself.
+   * @param options - `apply` spends calls, `days` bounds log age, `limit`
+   *   bounds how many sessions one run handles.
+   * @returns a human-readable report of what was planned or mined.
+   */
+  async backfill(session: Session, options: { apply: boolean; days: number; limit: number }): Promise<string> {
+    if (!zstdAvailable()) {
+      return 'Backfill needs zstd support from Node.js 22.15 or newer; this host cannot decode session logs.'
+    }
+    const sessionsDir = join(this.deployment.dshHome, 'sessions')
+    const logs = await findSessionLogs(sessionsDir)
+    if (logs.length === 0) return `No persisted session logs under ${sessionsDir}.`
+    const days = Number.isFinite(options.days) && options.days > 0 ? Math.trunc(options.days) : 30
+    const cutoff = Date.now() - days * 86_400_000
+    let skippedMined = 0
+    let skippedEmpty = 0
+    const planned: { log: BackfillLog; windows: BackfillWindow[] }[] = []
+    for (const entry of logs) {
+      if (entry.modifiedAt < cutoff) continue
+      let log: BackfillLog | undefined
+      try {
+        const buffer = await readFile(entry.file)
+        log = parseSessionLog(decodeSessionLog(buffer), entry.file, entry.modifiedAt)
+      } catch (error) {
+        skippedEmpty += 1
+        this.log.warn('dsh-memories: could not read backfill log %s: %o', entry.file, error)
+        continue
+      }
+      if (log === undefined) {
+        skippedEmpty += 1
+        continue
+      }
+      if (log.sessionId === session.id) continue
+      const watermark = this.state.getSession(log.sessionId)?.lastSeq ?? 0
+      if (log.maxSeq > 0 && watermark >= log.maxSeq) {
+        skippedMined += 1
+        continue
+      }
+      const remaining = watermark > 0 ? log.messages.filter((message) => message.seq > watermark) : log.messages
+      if (remaining.length === 0) {
+        skippedMined += 1
+        continue
+      }
+      planned.push({
+        log: { ...log, messages: remaining },
+        windows: planWindows(remaining, this.settings.extractWindowMessages, this.settings.extractMaxInputChars),
+      })
+    }
+    const windows = planned.reduce((total, item) => total + item.windows.length, 0)
+    const chars = planned.reduce((total, item) => total
+      + item.windows.reduce((sum, window) => sum + window.text.length, 0), 0)
+    const head = `Backfill plan: ${logs.length} session log(s) under ${sessionsDir}; ${planned.length} unmined within ${days} day(s), ${windows} extraction window(s), ${chars} transcript character(s). Skipped ${skippedMined} already mined and ${skippedEmpty} without usable prose.`
+    const limit = Number.isFinite(options.limit) && options.limit > 0 ? Math.trunc(options.limit) : BACKFILL_DEFAULT_SESSIONS
+    if (!options.apply) {
+      return `${head}\nDry run: nothing was mined. Run /memories backfill --apply to spend the model calls (at most ${limit} session(s) per run).`
+    }
+    const llm = this.llm
+    if (llm === undefined) {
+      return `${head}\nNo llm route is available, so nothing was mined. Configure extractProvider/extractModel or run where a model route exists.`
+    }
+    const chosen = planned.slice(0, limit)
+    let stored = 0
+    let ran = 0
+    let failed = 0
+    const started = Date.now()
+    for (const item of chosen) {
+      const { log } = item
+      const provider = this.settings.extractProvider.length > 0 ? this.settings.extractProvider : log.route?.provider
+      const model = this.settings.extractModel.length > 0 ? this.settings.extractModel : log.route?.model
+      if (provider === undefined || model === undefined) {
+        failed += 1
+        this.log.warn('dsh-memories: backfill skipped %s, its log records no model route', log.sessionId)
+        continue
+      }
+      const found = log.cwd === undefined
+        ? undefined
+        : await findProjectRoot(log.cwd, this.deployment.projectRootMarkers).catch(() => undefined)
+      const projectRoot = found !== undefined && !isCatchAllDirectory(found, this.deployment.dshHome) ? found : undefined
+      const projectLabel = projectRoot === undefined ? NO_PROJECT_LABEL : this.store.target('project', projectRoot).label
+      const titles = await this.knownTitles(projectRoot)
+      // A log is not a live Session: the extractor needs the id for provenance
+      // only, and the route is passed explicitly so no session header is read.
+      const stub = { id: log.sessionId, requestHeader: () => undefined } as unknown as Session
+      let lastSeq = this.state.getSession(log.sessionId)?.lastSeq ?? 0
+      for (const window of item.windows.slice(0, BACKFILL_MAX_WINDOWS_PER_SESSION)) {
+        try {
+          const outcome = await runExtraction(llm, {
+            session: stub,
+            window,
+            projectLabel,
+            ...titles.length === 0 ? {} : { knownTitles: titles },
+            provider,
+            model,
+            maxOutputTokens: this.settings.extractMaxOutputTokens,
+            maxMemories: this.settings.extractMaxMemories,
+            timeoutMs: this.settings.extractTimeoutMs,
+            signal: this.lifecycle.signal,
+          })
+          ran += 1
+          if (outcome.kind === 'memories') {
+            const ids: string[] = []
+            for (const draft of outcome.drafts) ids.push((await this.persistBackfill(projectRoot, draft)).entry.id)
+            stored += ids.length
+            await this.store.writeSessionNote({
+              session: log.sessionId,
+              at: Date.now(),
+              project: projectLabel,
+              summary: outcome.summary,
+              memories: ids,
+            }).catch(() => undefined)
+            lastSeq = Math.max(lastSeq, window.lastSeq)
+            this.state.putSession(log.sessionId, {
+              lastSeq,
+              at: Date.now(),
+              ...projectRoot === undefined ? {} : { root: projectRoot },
+              contributed: true,
+              activityAt: Date.now(),
+            })
+            this.log.info('dsh-memories: backfill stored %d memories from %s (window %d-%d)',
+              ids.length, log.sessionId, window.firstSeq, window.lastSeq)
+            continue
+          }
+          if (outcome.kind === 'none' && outcome.reason === 'empty-reply') {
+            lastSeq = Math.max(lastSeq, window.lastSeq)
+            this.state.putSession(log.sessionId, {
+              lastSeq,
+              at: Date.now(),
+              ...projectRoot === undefined ? {} : { root: projectRoot },
+              activityAt: Date.now(),
+            })
+            continue
+          }
+          // Capped or incomplete: leave the window unmined so a later run can
+          // retry it rather than recording content that was never extracted.
+          failed += 1
+          this.log.warn('dsh-memories: backfill window %d-%d of %s produced nothing (%s)',
+            window.firstSeq, window.lastSeq, log.sessionId, outcome.kind === 'none' ? outcome.reason : 'unknown')
+          break
+        } catch (error) {
+          failed += 1
+          this.log.warn('dsh-memories: backfill failed for %s: %o', log.sessionId, error)
+          break
+        }
+      }
+    }
+    this.markStoreChanged()
+    return `${head}\nMined ${ran} window(s) across ${chosen.length} session(s) in ${formatDelay(Date.now() - started)}: stored ${stored} memories, ${failed} failure(s).`
+  }
+
+  /** Store one backfilled draft, with the same scope rule the live path uses. */
+  private async persistBackfill(root: string | undefined, draft: MemoryDraft) {
+    if (draft.scope === 'project' && root === undefined) {
+      this.log.decision('dsh-memories: backfilled project draft %s has no workspace, storing it as global', draft.title)
+      return await this.store.upsert({ ...draft, scope: 'global' }, undefined, 'auto')
+    }
+    return await this.store.upsert(draft, draft.scope === 'project' ? root : undefined, 'auto')
   }
 
   /**
@@ -3263,6 +3531,8 @@ export class MemoriesRuntime {
       `auto-extract: ${this.settings.autoExtract ? `on (every ${formatDelay(this.settings.extractIntervalMinutes * 60_000)}${this.settings.minIdleHours > 0 ? ` + ${formatDelay(extractionDelayMs(this.settings))} quiet to settle` : ''}, ≤${this.settings.maxAgeDays}d old)` : 'off'}`,
       `peak-hours: ${this.peakLine()}`,
       `recall: ${this.settings.recallMode} (relevance ≥${this.settings.recallMinScore} plus ${this.settings.recallMinTerms} terms or a shared run, ≤${this.settings.recallMaxPerConversation} memories and ≤${this.settings.recallMaxBytes}B per conversation)`,
+      `late memories: ${this.settings.injectDelta ? 'on (≤2 blocks, ≤800B each, new or updated entries only)' : 'off'}`,
+      `projects: ${await this.projectLine()}`,
       `summary: ≤${this.settings.maxSummaryEntries} per scope with ${this.settings.summaryFreshSlots} reserved for never-listed memories`,
       `skills: ${drafts.length === 0 ? 'no staged drafts' : `${drafts.length} staged draft${drafts.length === 1 ? '' : 's'} waiting (promote with /memories promote <name>)`}`,
       `consolidation: ${await this.consolidationLine()}`,
@@ -3275,6 +3545,23 @@ export class MemoriesRuntime {
       `state store: ${this.state.durable ? 'sqlite' : `memory-only (${this.state.degradedReason ?? 'driver unavailable'})`}`,
     ]
     return lines.join('\n')
+  }
+
+  /**
+   * One line describing project scopes and any basename collision.
+   *
+   * A slug is the project name, so two unrelated repositories of the same name
+   * share one directory; their recorded git origins are the proof. The line is
+   * diagnostic, not a repair: which of the two a memory belongs to cannot be
+   * recovered after the merge, so it has to be seen rather than guessed.
+   */
+  private async projectLine(): Promise<string> {
+    const slugs = await this.store.listProjects()
+    const conflicts = await this.store.originConflicts()
+    if (conflicts.length === 0) return `${slugs.length} scope(s), no origin conflict`
+    return `${slugs.length} scope(s), origin conflict: ${conflicts
+      .map((conflict) => `${conflict.slug} (${conflict.origins.join(' | ')})`)
+      .join('; ')}`
   }
 
   /**
@@ -3418,6 +3705,7 @@ function helpText(): string {
     '  restore <id>            bring an archived memory back',
     '  mode [on|off]           switch memory off or on for this session',
     '  mine                    extract memories from this session now',
+    '  backfill [--apply] [--days N] [--limit N]   mine persisted sessions this process never saw',
     '  consolidate             run a merge/reconcile pass now (safe changes apply at once)',
     '  plan                    list the consolidation decisions waiting for you',
     '  apply                   accept every waiting decision',
@@ -3619,7 +3907,7 @@ export function apply(ctx: Context, config: MemoriesConfig = {}): void {
   const registerCommand = (): (() => void) => ctx.commands.register({
     name: 'memories',
     description: 'Inspect and manage cross-session memories',
-    input: { hint: 'list | search <query> [--kind <k>] | show <id> | add <scope> <text> [--kind <k>] | forget <id> | archive | restore <id> | mode [on|off] | mine | consolidate | sweep | skills | stats' },
+    input: { hint: 'list | search <query> [--kind <k>] | show <id> | add <scope> <text> [--kind <k>] | forget <id> | archive | restore <id> | mode [on|off] | mine | backfill [--apply] [--days N] [--limit N] | consolidate | sweep | skills | stats' },
     // The handler never throws: an exception here crosses into the harness's
     // command layer, which reports it verbatim and — measured 2026-09-23 — is
     // where a truncated extraction surfaced to the user as a failed command.
@@ -3707,6 +3995,10 @@ export function apply(ctx: Context, config: MemoriesConfig = {}): void {
       // already carry the summary and still meet a memory that only matters now.
       const delta = await runtime.recallFor(agent)
       if (delta !== undefined) addition.push(delta)
+      // A third, independent decision: the conversation already carries the
+      // summary and may still have had memories written after it.
+      const late = await runtime.deltaFor(agent)
+      if (late !== undefined) addition.push(late)
       const fresh = addition.filter((message) => !decision.messages.some((existing) => existing.id === message.id))
       if (fresh.length === 0) return decision
       // APPEND ONLY. DeepSeek's context cache is keyed on an unchanged prefix, so
@@ -3882,6 +4174,22 @@ async function handleCommand(runtime: MemoriesRuntime, invocation: CommandInvoca
     case 'mine': {
       const count = await runtime.mineNow(invocation.agent)
       return { kind: 'success', text: count === 0 ? 'Nothing new worth remembering.' : `Stored ${count} memories.` }
+    }
+    case 'backfill': {
+      const args = rest.trim().split(/\s+/u).filter((value) => value.length > 0)
+      const flag = (name: string, fallback: number): number => {
+        const index = args.indexOf(name)
+        const value = index < 0 ? undefined : Number(args[index + 1])
+        return value !== undefined && Number.isFinite(value) && value > 0 ? Math.trunc(value) : fallback
+      }
+      return {
+        kind: 'success',
+        text: await runtime.backfill(session, {
+          apply: args.includes('--apply'),
+          days: flag('--days', 30),
+          limit: flag('--limit', BACKFILL_DEFAULT_SESSIONS),
+        }),
+      }
     }
     default:
       return { kind: 'error', text: helpText() }

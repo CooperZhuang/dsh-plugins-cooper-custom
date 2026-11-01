@@ -92,6 +92,11 @@ const FIELDS = [
     hint: { zh: '一条记忆要被按需补注，除了达到相关度下限，还必须在标题、别名、标签或「何时有用」里命中这么多个不同的提问词。中文提问尤其需要：只共用「插件」「日志」这类常见词不算证据，共享两个词才算。设为 1 就只按相关度打分判断（会明显更容易误补）。', en: 'Distinct query terms that must land in the title, keys, tags, or appliesTo before a memory may be recalled. This is what stops a Chinese turn from recalling everything that shares a common word; set it to 1 to gate on relevance alone.' },
   },
   {
+    field: 'injectDelta', kind: 'boolean',
+    label: { zh: '会后补注新记忆', en: 'Announce late memories' },
+    hint: { zh: '摘要注入之后才写入的记忆（例如后台抽取、合并的结果）在下一步用一个很小的块补一次：每个会话最多两次、每次 800 字节，只列新增或更新的条目。', en: 'Memories written after the summary was shown (background extraction, consolidation) get one small block on the next step: at most twice per conversation, 800 bytes each, new or updated entries only.' },
+  },
+  {
     field: 'reflectionEnabled', kind: 'boolean',
     label: { zh: '每周反思', en: 'Weekly reflection' },
     hint: { zh: '每周从记忆里综合出几条「没有哪一条记忆单独说过」的观察，比如跨项目的习惯、反复踩的坑。每条必须引用依据的记忆，否则丢弃。写成按日期归档的 markdown，不注入对话。', en: 'Once a week, synthesize observations no single memory states — cross-project habits, recurring pitfalls. Every observation must cite its evidence or it is dropped. Dated markdown files, never injected.' },

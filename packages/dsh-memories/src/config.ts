@@ -50,6 +50,18 @@ export const DEFAULT_MAX_SUMMARY_BYTES = 4096
 export const DEFAULT_MAX_SUMMARY_ENTRIES = 12
 
 /**
+ * Whether a conversation is told about memories written after its summary.
+ *
+ * The summary is a snapshot from the first step of the conversation, so a
+ * memory extracted or consolidated ten turns later would otherwise stay
+ * invisible until the model thought to search for it. The delta block is
+ * bounded (two per conversation, 800 bytes each) and only names entries whose
+ * `updated` stamp is newer than the last injection, so it costs one short
+ * paragraph rather than a second summary.
+ */
+export const DEFAULT_INJECT_DELTA = true
+
+/**
  * Default cap on the GLOBAL section's bullets, below {@link DEFAULT_MAX_SUMMARY_ENTRIES}.
  *
  * The two scopes share one byte budget and the global section renders first, so
@@ -346,6 +358,13 @@ export const Config = z.object({
   recallMinQueryChars: z.number().default(DEFAULT_RECALL_MIN_QUERY_CHARS).description('Shortest user turn, in characters, that may trigger a recall delta. Short acknowledgements are skipped instead of scanning the store.').volatile(),
   /** Distinct strong-field terms a recall needs before it is credited. */
   recallMinTerms: z.number().default(DEFAULT_RECALL_MIN_TERMS).description('Distinct query terms that must land in the title, keys, tags, or appliesTo before a memory may be recalled on demand. This is what keeps a Chinese turn from recalling every memory that shares a common word like 插件 or 日志. 1 makes the relevance floor the only gate, which is noticeably noisier for Chinese; 0 disables the check.').volatile(),
+  /**
+   * Whether memories written after the summary was injected get a small delta.
+   *
+   * Off leaves the once-per-conversation summary as the only automatic block;
+   * the `memory` tool and the on-demand recall path still work.
+   */
+  injectDelta: z.boolean().default(DEFAULT_INJECT_DELTA).description('Inject a small block when memories are written after the summary was already shown (at most twice per conversation). Off keeps the summary as the only automatic block.').volatile(),
   /** Max stored entries per scope; the least-recently-updated are evicted. */
   maxEntriesPerScope: z.number().default(DEFAULT_MAX_ENTRIES_PER_SCOPE).description('Stored memories per scope; past this cap the least recently used are deleted.').volatile(),
   /** Days an unused memory survives before it is archived. `0` disables archival. */
@@ -455,6 +474,8 @@ export interface MemoriesSettings {
   recallMaxBytes: number
   recallMinQueryChars: number
   recallMinTerms: number
+  /** Whether memories written after the summary are announced as a delta. */
+  injectDelta: boolean
   /** Retention: what the store keeps, and for how long. */
   maxEntriesPerScope: number
   maxUnusedDays: number
@@ -544,6 +565,7 @@ export const MEMORIES_SETTINGS_DEFAULTS: MemoriesSettings = {
   recallMaxBytes: DEFAULT_RECALL_MAX_BYTES,
   recallMinQueryChars: DEFAULT_RECALL_MIN_QUERY_CHARS,
   recallMinTerms: DEFAULT_RECALL_MIN_TERMS,
+  injectDelta: DEFAULT_INJECT_DELTA,
   maxEntriesPerScope: DEFAULT_MAX_ENTRIES_PER_SCOPE,
   maxUnusedDays: DEFAULT_MAX_UNUSED_DAYS,
   snapshotMaxAgeDays: DEFAULT_SNAPSHOT_MAX_AGE_DAYS,
@@ -697,6 +719,7 @@ export function normalizeSettings(input: Partial<MemoriesSettings> | undefined):
     recallMaxBytes: positive(value.recallMaxBytes, DEFAULT_RECALL_MAX_BYTES, 0),
     recallMinQueryChars: positive(value.recallMinQueryChars, DEFAULT_RECALL_MIN_QUERY_CHARS, 0),
     recallMinTerms: positive(value.recallMinTerms, DEFAULT_RECALL_MIN_TERMS, 0),
+    injectDelta: value.injectDelta ?? DEFAULT_INJECT_DELTA,
     maxEntriesPerScope: positive(value.maxEntriesPerScope, DEFAULT_MAX_ENTRIES_PER_SCOPE),
     maxUnusedDays: positive(value.maxUnusedDays, DEFAULT_MAX_UNUSED_DAYS, 0),
     snapshotMaxAgeDays: positive(value.snapshotMaxAgeDays, DEFAULT_SNAPSHOT_MAX_AGE_DAYS, 0),

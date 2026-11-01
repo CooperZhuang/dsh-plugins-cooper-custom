@@ -23,7 +23,7 @@
 `fact`（纯背景）。注入摘要按 kind 分组，**可执行的那几类排在前面**；没有 `kind:` 行的旧文件
 按 `fact` 解析，所以格式演进不需要迁移脚本。
 
-## 四个协同机制
+## 协同机制
 
 1. **显式写入（工具）** — 模型调用 `memory` 工具，每次写入都必须显式指定 `global` 或
    `project`。标题即身份：同一标题再写一次是**更新**而不是新增。可以顺带指明 `kind` 和
@@ -112,6 +112,12 @@
    对所有已知工作区跑一次保留判定——**这么久没有被读到、没有被注入摘要、也不是新写的**条目
    会被归档。判据只有 `maxUnusedDays`（默认 90 天）一条，结果可解释、可恢复；人手
    `/memories add` 写的条目永不自动归档。想立刻整理用 `/memories sweep`。
+
+6. **会后补注（2026-11）** — 摘要是一次会话开始时的快照，之后才写入的记忆（后台抽取、合并、手工写入）
+   原本只能靠 `memory_search` 找到。打开 `injectDelta`（默认开）后，每一步会检查上次注入之后有没有
+   新增或更新的条目：有就补一个 ≤800B、最多 3 条的块，每个会话最多两次，且只列这个会话没看过的条目。
+   基线（已展示的 id 与时间戳）存在 `state.db`，重启不会让它重复补一次；只含 `{{…}}` 字面量的
+   外观字段不参与。
 
 抽取还有三道闸门（照抄 Codex 的做法）：`minIdleHours`（会话至少空闲这么久）、
 `maxAgeDays`（最后活动太久的会话永不抽取）、`maxSessionsPerPass`（一次最多处理几个会话），
@@ -464,6 +470,7 @@ frontmatter 的目录包），下次技能目录刷新后进入目录。草稿�
 /memories restore <id>        把归档的记忆取回原作用域
 /memories mode [on|off]       本次会话关闭/开启记忆（不写库、不抽取、不注入）
 /memories mine                立刻从当前会话抽取一次（不等空闲）
+/memories backfill [--apply] [--days N] [--limit N]   回填本进程没见过的历史会话（默认只估算；--apply 才花调用）
 /memories consolidate         立刻跑一次合并（可逆的改动直接落盘，有争议的才排队等你）
 /memories plan                列出等你裁决的合并决定
 /memories apply               全部接受（失败会回滚）
@@ -623,6 +630,32 @@ memories:
 上次 sweep 时间）、会话日志配 `scripts/inspect-session.mjs`（注入块是持久消息，可在历史里核实
 字节数与是否重复注入）、`scripts/activation-smoke.mjs`（真实 cordis 里加载并打印注册结果）、
 `npm run eval`（抽取的离线打分）。
+
+## 历史回填
+
+抽取只读取**本进程里注册过的会话**，所以插件装上之前就结束的对话永远进不来。`/memories backfill`
+补这一半：它读 `$DSH_HOME/sessions/**/session.jsonl.zstd`（多帧 zstd 逐帧解压），只保留
+`source.kind === 'user'` 的用户消息与助手正文，丢掉工具结果和插件注入的上下文，然后按与实时抽取
+完全相同的窗口、prompt、解析和落盘路径跑一遍。
+
+```
+/memories backfill                 # 只估算：多少会话未回填、多少个窗口、多少字符，不调模型
+/memories backfill --apply         # 真正抽取（每窗口一次模型调用）
+/memories backfill --apply --days 90 --limit 10   # 只看 90 天内，一次最多 10 个会话
+```
+
+- **默认 dry-run**：窗口数是真实的调用预算，只有 `--apply` 才花钱。
+- **幂等**：每个会话按 `(session, seq)` 水位线记账，已经回填过的会话在计划里计成 already mined；
+  半途中断后重跑只处理剩下的窗口。
+- 作用域来自日志 `session` 事件里的 `cwd`：仍按 `projectRootMarkers` 找项目根，没有 `cwd` 的会话
+  其 project 草稿降级为 global（与实时抽取同一条规则）。
+- 路由优先用配置的 `extractProvider`/`extractModel`，否则用日志里最后一次 `request/header` 的 route；
+  两者都没有就跳过该会话。
+- 需要 Node.js ≥ 22.15（`node:zlib` 的 zstd 支持）；更老的宿主会直接报错而不是静默跳过。
+- 一个会话最多 20 个窗口、一次最多 `--limit` 个会话（默认 3）：长历史分几次跑，进度在
+  `state.db` 的 `sessions` 表里可见。
+
+2026-11-02 在本机真实库上 dry-run：76 个会话日志、74 个未回填、80 个抽取窗口、459 941 字符。
 
 ## 离线抽取评测
 
@@ -871,6 +904,11 @@ DeepSeek 的上下文缓存按**前缀**命中的 token 计费：只有请求开
   很难发生（30 分钟内一般凑不满 60 条用户/助手消息），但如果你在半小时里狂发消息，或把周期调得
   很长，就会碰到——把这两个值一起调大即可。
 - **避峰会让记忆晚一点落盘**，换来的是这些调用打对折（`peakHours` 为空则不延迟）。
+- **历史回填依赖 Node ≥ 22.15 的 zstd**，且日志里的 `cwd` 决定作用域：没有记录 `cwd` 的会话其
+  project 草稿会落到 global。一次最多跑 `--limit` 个会话、每会话 20 个窗口，长历史需要分几次跑。
+- **项目作用域现在记录 checkout 的 git origin**：`project.json` 与 `hosts/<hostname>.json` 会带上
+  归一化后的 `origin`（ssh/https 同形），`/memories stats` 的 `projects:` 行会报「同名不同仓库」的
+  冲突。冲突**只报告、不自动拆分**——合并后的条目属于谁无法事后判定，拆分必须由人决定。
 - 检索是**词法匹配**（标题/别名/标签/何时有用/正文加权 + 使用频次 + 新近度 + 时间窗口），不是向量检索。
 - **时间通道只认 `createdAt` 与 `asOf`**：库里的时间戳是「我们什么时候知道这件事」和「这个数字什么时候量的」，
   不是「这件事什么时候发生的」。对话式记忆里两者足够接近（306/613 条指向具体会话），但一条常青的规则
