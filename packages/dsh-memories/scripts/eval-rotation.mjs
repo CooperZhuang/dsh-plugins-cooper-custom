@@ -25,6 +25,7 @@
 import { cp, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { MemoryStore } from '../lib/storage.js'
 import { renderMemoryIndex, selectForSummary } from '../lib/render.js'
 
@@ -46,7 +47,28 @@ try {
   // directory, and the evaluation must never touch the live store.
   await cp(join(home, 'memories'), join(work, 'memories'), { recursive: true })
   const store = new MemoryStore(join(work, 'memories'))
-  const global = [...await store.list('global', undefined, { fresh: true })]
+  const loaded = [...await store.list('global', undefined, { fresh: true })]
+  // Selection reads the surfaced clock from state.db, not the entry file's
+  // mirror: the mirror is refreshed hourly and legacy entries never got a row.
+  // Model that here, or the simulation starts from a coverage the runtime does
+  // not actually believe.
+  let db
+  const surfacedRows = new Map()
+  try {
+    db = new DatabaseSync(join(work, 'memories', 'state.db'), { readOnly: true })
+    for (const row of db.prepare('SELECT scope, id, surfaced_at FROM usage WHERE surfaced_at > 0').all()) {
+      surfacedRows.set(`${row.scope}\u0000${row.id}`, Number(row.surfaced_at))
+    }
+  } catch {
+    // A missing state.db means the mirror is all there is; fall through with an
+    // empty map, which matches the runtime's non-durable branch.
+  } finally {
+    try { db?.close() } catch { /* read-only handle */ }
+  }
+  const surfacedByState = surfacedRows.size > 0
+  const global = loaded.map((entry) => surfacedByState
+    ? { ...entry, lastSurfacedAt: surfacedRows.get(`${entry.scope}\u0000${entry.id}`) ?? 0 }
+    : entry)
   const total = global.length
   const startCovered = global.filter((entry) => entry.lastSurfacedAt > 0).length
 

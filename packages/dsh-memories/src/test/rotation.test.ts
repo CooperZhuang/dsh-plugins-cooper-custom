@@ -124,6 +124,30 @@ test('a later conversation rotates to different entries', async (t) => {
   t.after(() => rm(dir, { recursive: true, force: true }))
 })
 
+test('the surfaced clock comes from state.db, not the entry mirror', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-memories-rot-clock-'))
+  const runtime = new MemoriesRuntime(stubContext, { memoriesDir: dir, autoExtract: false })
+  t.after(async () => {
+    runtime.dispose()
+    await rm(dir, { recursive: true, force: true })
+  })
+  const session = stubSession(dir, 'session-clock')
+  await runtime.write(session, { scope: 'global', title: 'mirror only', body: 'The mirror claims it was shown.', tags: [] }, 'tool')
+  // A stale mirror: the file says surfaced, the usage table has no row for it.
+  // This is the legacy shape measured on the real store (files claimed 85.8%
+  // surfaced while state.db had far fewer rows), so selection must not trust it.
+  const [stored] = await runtime.store.list('global', undefined, { fresh: true })
+  assert.ok(stored !== undefined)
+  await runtime.store.writeCounters(stored, undefined, { uses: 0, lastUsedAt: 0, surfacedAt: Date.now() })
+  const before = (await runtime.allScopes(stubSession(dir, 'session-clock')))[0]?.entries.find((entry) => entry.id === stored.id)
+  assert.equal(before?.lastSurfacedAt, 0, 'the state database is authoritative')
+
+  // A real surfacing writes a usage row, and from then on the entry counts as seen.
+  runtime.state.bumpSurfaced('global', stored.id)
+  const after = (await runtime.allScopes(stubSession(dir, 'session-clock')))[0]?.entries.find((entry) => entry.id === stored.id)
+  assert.ok((after?.lastSurfacedAt ?? 0) > 0, 'a usage row surfaces the entry again')
+})
+
 test('rotationEntries: 0 disables the block', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'dsh-memories-rot-off-'))
   const runtime = new MemoriesRuntime(stubContext, { memoriesDir: dir, autoExtract: false, rotationEntries: 0 })

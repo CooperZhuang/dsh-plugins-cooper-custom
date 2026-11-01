@@ -508,17 +508,30 @@ export class StateStore {
     return row === undefined ? { uses: 0, lastUsedAt: 0 } : { uses: Number(row.uses), lastUsedAt: Number(row.last_used_at) }
   }
 
-  /** Every usage row, for the summary ranking pass. */
-  listUsage(): { scope: string; id: string; uses: number; lastUsedAt: number }[] {
+  /**
+   * Every usage row, for the summary ranking pass.
+   *
+   * `surfacedAt` is the authoritative "was this ever listed in an injected
+   * block" clock. The entry file mirrors it for human readers, but the mirror
+   * can be stale (it is refreshed at most hourly, and entries written before
+   * this table existed never got a row): selection decisions read THIS.
+   */
+  listUsage(): { scope: string; id: string; uses: number; lastUsedAt: number; surfacedAt: number }[] {
     if (this.db === undefined) {
       return [...this.usage.entries()].map(([key, value]) => {
         const [scope, id] = key.split('\u0000')
-        return { scope: scope ?? '', id: id ?? '', uses: value.uses, lastUsedAt: value.lastUsedAt }
+        return { scope: scope ?? '', id: id ?? '', uses: value.uses, lastUsedAt: value.lastUsedAt, surfacedAt: value.surfacedAt }
       })
     }
-    const rows = this.db.prepare('SELECT scope, id, uses, last_used_at FROM usage').all() as
-      { scope: string; id: string; uses: number; last_used_at: number }[]
-    return rows.map((row) => ({ scope: row.scope, id: row.id, uses: Number(row.uses), lastUsedAt: Number(row.last_used_at) }))
+    const rows = this.db.prepare('SELECT scope, id, uses, last_used_at, surfaced_at FROM usage').all() as
+      { scope: string; id: string; uses: number; last_used_at: number; surfaced_at: number }[]
+    return rows.map((row) => ({
+      scope: row.scope,
+      id: row.id,
+      uses: Number(row.uses),
+      lastUsedAt: Number(row.last_used_at),
+      surfacedAt: Number(row.surfaced_at),
+    }))
   }
 
   /**

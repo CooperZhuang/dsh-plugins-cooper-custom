@@ -482,9 +482,34 @@ export class MemoriesRuntime {
     }
   }
 
-  /** Load both scopes, broadest first. */
+  /**
+   * Load both scopes, broadest first, with the surfaced clock taken from the
+   * state database.
+   *
+   * The entry file mirrors `lastSurfaced` for human readers, but the mirror is
+   * refreshed at most hourly and entries written before the usage table existed
+   * have no row at all: measured on the real store, files claimed 85.8% surfaced
+   * while `state.db` had a row for far fewer. Selection (summary fresh slots,
+   * rotation, delta) must read the authoritative clock, or "never shown" becomes
+   * "shown long ago" and the store's dead entries never rotate in.
+   *
+   * In a deployment without SQLite the overlay is skipped: the mirror is then
+   * the only clock there is.
+   */
   async allScopes(session: Session): Promise<readonly ScopeState[]> {
-    return [await this.scopeState('global', session), await this.scopeState('project', session)]
+    const states = [await this.scopeState('global', session), await this.scopeState('project', session)]
+    if (!this.state.durable) return states
+    const surfaced = new Map<string, number>()
+    for (const row of this.state.listUsage()) {
+      if (row.surfacedAt > 0) surfaced.set(`${row.scope}\u0000${row.id}`, row.surfacedAt)
+    }
+    return states.map((state) => ({
+      ...state,
+      entries: state.entries.map((entry) => {
+        const at = surfaced.get(`${state.scope}\u0000${entry.id}`) ?? 0
+        return at === entry.lastSurfacedAt ? entry : { ...entry, lastSurfacedAt: at }
+      }),
+    }))
   }
 
   /** Convert loaded scopes into the search/browse input shape. */
