@@ -62,6 +62,21 @@ export const DEFAULT_MAX_SUMMARY_ENTRIES = 12
 export const DEFAULT_INJECT_DELTA = true
 
 /**
+ * How many additional memories one conversation lists by title only.
+ *
+ * The summary can only name a dozen entries and reserves at most a third of its
+ * slots for never-surfaced material; measured on a real store that left 63.7%
+ * of live entries never injected or read. Ten titles cost about a kilobyte and
+ * are enough to make the whole store discoverable over a few dozen sessions:
+ * each conversation rotates through the entries the summary did not have room
+ * for, oldest-unseen first. 0 disables the rotation block.
+ */
+export const DEFAULT_ROTATION_ENTRIES = 10
+
+/** Byte budget for the title-only rotation block. */
+export const DEFAULT_ROTATION_MAX_BYTES = 1200
+
+/**
  * Default cap on the GLOBAL section's bullets, below {@link DEFAULT_MAX_SUMMARY_ENTRIES}.
  *
  * The two scopes share one byte budget and the global section renders first, so
@@ -365,6 +380,15 @@ export const Config = z.object({
    * the `memory` tool and the on-demand recall path still work.
    */
   injectDelta: z.boolean().default(DEFAULT_INJECT_DELTA).description('Inject a small block when memories are written after the summary was already shown (at most twice per conversation). Off keeps the summary as the only automatic block.').volatile(),
+  /**
+   * How many extra memories one conversation lists by title only.
+   *
+   * The summary names at most a dozen entries, so most of a large store is never
+   * seen. The rotation block spends about a kilobyte on titles the summary had
+   * no room for, oldest-unseen first, so the whole store becomes discoverable
+   * over a few dozen sessions. 0 disables it.
+   */
+  rotationEntries: z.number().default(DEFAULT_ROTATION_ENTRIES).description('List this many additional memory titles (not bodies) in each conversation, rotating through the entries the summary did not name, oldest-unseen first. 0 disables the rotation block.').volatile(),
   /** Max stored entries per scope; the least-recently-updated are evicted. */
   maxEntriesPerScope: z.number().default(DEFAULT_MAX_ENTRIES_PER_SCOPE).description('Stored memories per scope; past this cap the least recently used are deleted.').volatile(),
   /** Days an unused memory survives before it is archived. `0` disables archival. */
@@ -476,6 +500,8 @@ export interface MemoriesSettings {
   recallMinTerms: number
   /** Whether memories written after the summary are announced as a delta. */
   injectDelta: boolean
+  /** How many extra memories one conversation lists by title only (0 disables). */
+  rotationEntries: number
   /** Retention: what the store keeps, and for how long. */
   maxEntriesPerScope: number
   maxUnusedDays: number
@@ -566,6 +592,7 @@ export const MEMORIES_SETTINGS_DEFAULTS: MemoriesSettings = {
   recallMinQueryChars: DEFAULT_RECALL_MIN_QUERY_CHARS,
   recallMinTerms: DEFAULT_RECALL_MIN_TERMS,
   injectDelta: DEFAULT_INJECT_DELTA,
+  rotationEntries: DEFAULT_ROTATION_ENTRIES,
   maxEntriesPerScope: DEFAULT_MAX_ENTRIES_PER_SCOPE,
   maxUnusedDays: DEFAULT_MAX_UNUSED_DAYS,
   snapshotMaxAgeDays: DEFAULT_SNAPSHOT_MAX_AGE_DAYS,
@@ -720,6 +747,7 @@ export function normalizeSettings(input: Partial<MemoriesSettings> | undefined):
     recallMinQueryChars: positive(value.recallMinQueryChars, DEFAULT_RECALL_MIN_QUERY_CHARS, 0),
     recallMinTerms: positive(value.recallMinTerms, DEFAULT_RECALL_MIN_TERMS, 0),
     injectDelta: value.injectDelta ?? DEFAULT_INJECT_DELTA,
+    rotationEntries: positive(value.rotationEntries, DEFAULT_ROTATION_ENTRIES, 0),
     maxEntriesPerScope: positive(value.maxEntriesPerScope, DEFAULT_MAX_ENTRIES_PER_SCOPE),
     maxUnusedDays: positive(value.maxUnusedDays, DEFAULT_MAX_UNUSED_DAYS, 0),
     snapshotMaxAgeDays: positive(value.snapshotMaxAgeDays, DEFAULT_SNAPSHOT_MAX_AGE_DAYS, 0),

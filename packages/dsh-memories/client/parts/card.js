@@ -97,6 +97,11 @@ const FIELDS = [
     hint: { zh: '摘要注入之后才写入的记忆（例如后台抽取、合并的结果）在下一步用一个很小的块补一次：每个会话最多两次、每次 800 字节，只列新增或更新的条目。', en: 'Memories written after the summary was shown (background extraction, consolidation) get one small block on the next step: at most twice per conversation, 800 bytes each, new or updated entries only.' },
   },
   {
+    field: 'rotationEntries', kind: 'number', min: 0, step: 1,
+    label: { zh: '每会话轮转标题数', en: 'Rotation titles per conversation' },
+    hint: { zh: '摘要装不下的记忆，用一份只列标题的小块轮转：从未曝光的最先，其次是最久没出现过的，每次最多这么多条、约 1.2KB。0 关闭。它让整库在几十个会话里都能被看见，而不会永远只注入同一小批。', en: 'Memories the summary had no room for are rotated in as a title-only block: never-surfaced first, then the longest-unseen, up to this many per conversation and about 1.2KB. 0 disables it.' },
+  },
+  {
     field: 'reflectionEnabled', kind: 'boolean',
     label: { zh: '每周反思', en: 'Weekly reflection' },
     hint: { zh: '每周从记忆里综合出几条「没有哪一条记忆单独说过」的观察，比如跨项目的习惯、反复踩的坑。每条必须引用依据的记忆，否则丢弃。写成按日期归档的 markdown，不注入对话。', en: 'Once a week, synthesize observations no single memory states — cross-project habits, recurring pitfalls. Every observation must cite its evidence or it is dropped. Dated markdown files, never injected.' },

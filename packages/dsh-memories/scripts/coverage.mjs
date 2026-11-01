@@ -65,6 +65,10 @@ const SUMMARY_CLOSE = '</memory-context>'
 const RECALL_OPEN = '<memory-recall>'
 /** Closing frame of the on-demand recall block. */
 const RECALL_CLOSE = '</memory-recall>'
+/** Opening frame of the title-only rotation block (mirrors src/render.ts). */
+const INDEX_OPEN = '<memory-index>'
+/** Closing frame of the title-only rotation block. */
+const INDEX_CLOSE = '</memory-index>'
 /** Pin marker the summary renderer prefixes to a pinned entry's bullet. */
 const PIN = '📌 '
 /**
@@ -427,6 +431,29 @@ function recallTitles(block) {
 }
 
 /**
+ * Titles listed by the title-only rotation block.
+ *
+ * Its bullets are `- [kind] Title` or `- [project] [kind] Title` — no date, no
+ * body. This block is exposure too: an entry whose title entered a conversation
+ * is discoverable, which is exactly what `exposureCoverage` promises.
+ */
+function indexTitles(block) {
+  const titles = []
+  let lines = 0
+  for (const raw of block.split('\n')) {
+    if (!raw.startsWith('- ')) continue
+    lines += 1
+    let line = raw.slice(2).trim()
+    if (line.startsWith('[project] ')) line = line.slice('[project] '.length)
+    const match = /^\[[a-z]+\] (.+)$/u.exec(line)
+    if (match === null) continue
+    const title = (match[1] ?? '').trim()
+    if (title.length > 0) titles.push(title)
+  }
+  return { titles, lines }
+}
+
+/**
  * Read every session log and collect what was ever injected and recalled.
  *
  * Primary source: real injections (plugin messages). When no log yields one —
@@ -448,6 +475,7 @@ async function scanSessionLogs(sessionsDir, warn) {
     summaryUntagged: 0,
     recallLines: 0,
     recallParsed: 0,
+    indexBlocks: 0,
     fallback: false,
   }
   for (const path of logs) {
@@ -473,7 +501,7 @@ async function scanSessionLogs(sessionsDir, warn) {
       }
       if (!isMemoryInjection(event)) continue
       const body = contentText(event)
-      if (!body.includes(SUMMARY_OPEN) && !body.includes(RECALL_OPEN)) continue
+      if (!body.includes(SUMMARY_OPEN) && !body.includes(RECALL_OPEN) && !body.includes(INDEX_OPEN)) continue
       for (const block of matchBlocks(body, SUMMARY_OPEN, SUMMARY_CLOSE)) {
         stats.injectedBlocks += 1
         const parsed = summaryTitles(block)
@@ -494,6 +522,16 @@ async function scanSessionLogs(sessionsDir, warn) {
         stats.recallLines += parsed.lines
         stats.recallParsed += parsed.titles.length
         for (const title of parsed.titles) recalled.add(titleKey(title))
+      }
+      for (const block of matchBlocks(body, INDEX_OPEN, INDEX_CLOSE)) {
+        stats.indexBlocks += 1
+        const parsed = indexTitles(block)
+        for (const title of parsed.titles) {
+          const key = titleKey(title)
+          const record = injected.get(key)
+          if (record === undefined) injected.set(key, { title, count: 1 })
+          else record.count += 1
+        }
       }
     }
   }
@@ -529,6 +567,16 @@ async function scanSessionLogs(sessionsDir, warn) {
         stats.recallLines += parsed.lines
         stats.recallParsed += parsed.titles.length
         for (const title of parsed.titles) recalled.add(titleKey(title))
+      }
+      for (const block of matchBlocks(text, INDEX_OPEN, INDEX_CLOSE)) {
+        stats.indexBlocks += 1
+        const parsed = indexTitles(block)
+        for (const title of parsed.titles) {
+          const key = titleKey(title)
+          const record = injected.get(key)
+          if (record === undefined) injected.set(key, { title, count: 1 })
+          else record.count += 1
+        }
       }
     }
   }

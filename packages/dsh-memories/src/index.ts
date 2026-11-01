@@ -33,7 +33,7 @@ import type { Context } from '@deepseek-ai/cordis'
 // listens for, and the loader is the host rather than a runtime dependency, so
 // only its declarations belong in this program.
 import type {} from '@deepseek-ai/cordis-plugin-loader'
-import { Config as ConfigSchema, consolidationRouteOf, readTunables, resolveConfig } from './config.js'
+import { Config as ConfigSchema, consolidationRouteOf, DEFAULT_ROTATION_MAX_BYTES, readTunables, resolveConfig } from './config.js'
 import type { MemoriesConfig, MemoriesSettings, ResolvedConfig } from './config.js'
 import { MemoryStore, slugify } from './storage.js'
 import { StateStore, importLegacyState, statePath } from './state.js'
@@ -50,7 +50,7 @@ import { listReflections, previousInsights, reflectionDue, runReflection, writeR
 import type { GateCandidate } from './gate.js'
 import { parseTimeRange } from './time.js'
 import { isSubstantiveTurn } from './query.js'
-import { MEMORY_OPEN, RECALL_OPEN, rankForSummary, renderEntry, renderHit, renderMemorySummaryResult, renderRecall, renderScopeListing, selectForSummary } from './render.js'
+import { INDEX_OPEN, MEMORY_OPEN, RECALL_OPEN, rankForSummary, renderEntry, renderHit, renderMemoryIndex, renderMemorySummaryResult, renderRecall, renderScopeListing, selectForSummary } from './render.js'
 import type { SummaryScope } from './render.js'
 import { findProjectRoot, isWithin } from './workspace.js'
 import { citationRoots, citationWarning, ignoredUnder, missingCitations } from './citations.js'
@@ -297,6 +297,8 @@ export class MemoriesRuntime {
   private readonly recallCounts = new WeakMap<Session, number>()
   /** Late memory blocks already injected into each conversation. */
   private readonly deltaCounts = new WeakMap<Session, number>()
+  /** Conversations whose rotation block has already been emitted by this process. */
+  private readonly rotationDone = new WeakSet<Session>()
   /** Entry ids each conversation has already been shown. */
   private readonly surfacedIds = new WeakMap<Session, Set<string>>()
   /** Injected ids this conversation has already credited as used. */
@@ -1053,6 +1055,7 @@ export class MemoriesRuntime {
     this.injected.delete(session)
     this.recallCounts.delete(session)
     this.deltaCounts.delete(session)
+    this.rotationDone.delete(session)
     this.surfacedIds.delete(session)
     this.helpedIds.delete(session)
     // A compacted conversation is a new one, and its first near miss is worth
@@ -1427,6 +1430,90 @@ export class MemoriesRuntime {
       content: [{ type: 'text', text }],
       source: { kind: MEMORY_SOURCE_KIND, form: 'recall' },
     })
+  }
+
+  /**
+   * The title-only rotation block for this conversation, or `undefined`.
+   *
+   * The summary is bounded by bytes and by a per-scope cap, so on a large store
+   * it can only ever name a small minority of entries: measured on the real
+   * store, 63.7% of live memories had never been injected or read. This block
+   * spends about a kilobyte on titles only — never-surfaced entries first (old
+   * ones before new), then the longest-unseen — so a dozen more memories become
+   * discoverable per conversation and the whole store rotates through over a
+   * few dozen sessions.
+   *
+   * Once per conversation, like the summary: the block is a durable message, so
+   * a restarted harness restores it with the history and must not add another.
+   *
+   * @param agent - the agent whose next step is being prepared.
+   * @returns the message to append, or `undefined` when nothing is left to rotate.
+   */
+  async rotationFor(agent: Agent): Promise<UserMessage | undefined> {
+    if (this.settings.rotationEntries <= 0) return undefined
+    if (this.settings.recallMode === 'off') return undefined
+    const session = agent.session
+    if (this.rotationDone.has(session)) return undefined
+    if (this.sessionOff(session)) return undefined
+    if (this.carriesRotation(session)) {
+      this.rotationDone.add(session)
+      return undefined
+    }
+    const states = await this.allScopes(session)
+    const record = this.state.getInjection(session.id)
+    const shown = new Set<string>(record?.ids ?? [])
+    for (const id of this.seenIds(session)) shown.add(id)
+    const pool: MemoryEntry[] = []
+    for (const state of states) {
+      for (const entry of state.entries) if (!shown.has(entry.id)) pool.push(entry)
+    }
+    if (pool.length === 0) return undefined
+    const fresh = pool.filter((entry) => entry.lastSurfacedAt <= 0)
+      .sort((left, right) => Number(left.source === 'auto') - Number(right.source === 'auto')
+        || left.createdAt - right.createdAt
+        || left.title.localeCompare(right.title))
+    const stale = pool.filter((entry) => entry.lastSurfacedAt > 0)
+      .sort((left, right) => left.lastSurfacedAt - right.lastSurfacedAt
+        || left.createdAt - right.createdAt
+        || left.title.localeCompare(right.title))
+    const ordered = [...fresh, ...stale]
+    const picked: MemoryEntry[] = []
+    for (const entry of ordered) {
+      if (picked.length >= this.settings.rotationEntries) break
+      if (renderMemoryIndex([...picked, entry], DEFAULT_ROTATION_MAX_BYTES) === undefined) break
+      picked.push(entry)
+    }
+    if (picked.length === 0) return undefined
+    const text = renderMemoryIndex(picked, DEFAULT_ROTATION_MAX_BYTES)
+    if (text === undefined) return undefined
+    const freshCount = picked.filter((entry) => entry.lastSurfacedAt <= 0).length
+    this.rotationDone.add(session)
+    this.recordInjection(session, picked.map((entry) => entry.id))
+    await this.markSurfaced(session, picked)
+    this.log.info('dsh-memories: session %s listed %d titles in the rotation block (%d never surfaced before)',
+      session.id, picked.length, freshCount)
+    return createUserMessage({
+      content: [{ type: 'text', text }],
+      source: { kind: MEMORY_SOURCE_KIND, form: 'recall' },
+    })
+  }
+
+  /**
+   * Whether the conversation already carries a rotation block.
+   *
+   * Same reasoning as {@link carriesRecall}: the block is a durable user
+   * message, so after a restart the history is the only honest record.
+   */
+  private carriesRotation(session: Session): boolean {
+    try {
+      return session.deriveMessages().some((message) => {
+        if (message.source.kind !== MEMORY_SOURCE_KIND) return false
+        const blocks = message.content as readonly { type: string; text?: string }[]
+        return blocks.some((block) => block.type === 'text' && (block.text ?? '').includes(INDEX_OPEN))
+      })
+    } catch {
+      return false
+    }
   }
 
   /**
@@ -3532,6 +3619,7 @@ export class MemoriesRuntime {
       `peak-hours: ${this.peakLine()}`,
       `recall: ${this.settings.recallMode} (relevance ≥${this.settings.recallMinScore} plus ${this.settings.recallMinTerms} terms or a shared run, ≤${this.settings.recallMaxPerConversation} memories and ≤${this.settings.recallMaxBytes}B per conversation)`,
       `late memories: ${this.settings.injectDelta ? 'on (≤2 blocks, ≤800B each, new or updated entries only)' : 'off'}`,
+      `rotation: ${this.settings.rotationEntries > 0 ? `${this.settings.rotationEntries} titles/session` : 'off'}`,
       `projects: ${await this.projectLine()}`,
       `summary: ≤${this.settings.maxSummaryEntries} per scope with ${this.settings.summaryFreshSlots} reserved for never-listed memories`,
       `skills: ${drafts.length === 0 ? 'no staged drafts' : `${drafts.length} staged draft${drafts.length === 1 ? '' : 's'} waiting (promote with /memories promote <name>)`}`,
@@ -3986,6 +4074,11 @@ export function apply(ctx: Context, config: MemoriesConfig = {}): void {
       const addition: UserMessage[] = []
       const summary = await runtime.injectionFor(agent)
       if (summary !== undefined) addition.push(summary)
+      // Titles of what the summary had no room for: one small block per
+      // conversation, so the store becomes discoverable instead of only the
+      // same dozen entries ever being shown.
+      const rotation = await runtime.rotationFor(agent)
+      if (rotation !== undefined) addition.push(rotation)
       // Credit the memories the block already handed over and this turn is now
       // actually about. Without it the only "demand" signal the ranking has is a
       // search hit, which measures lookup-style knowledge and misses the memory
