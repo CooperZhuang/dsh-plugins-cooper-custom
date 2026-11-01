@@ -58,6 +58,7 @@
     "eval:retrieval": "node scripts/eval-retrieval.mjs",
     "eval:backfill": "node scripts/eval-backfill.mjs",
     "eval:rotation": "node scripts/eval-rotation.mjs",
+    "eval:recall-log": "node scripts/eval-recall-log.mjs",
     "report": "node scripts/report.mjs",
     "prepare": "npm run build"
   },
