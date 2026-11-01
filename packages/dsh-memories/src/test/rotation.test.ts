@@ -174,6 +174,19 @@ test('the rotation block gives both scopes a share', async (t) => {
   assert.match(text, /^- \[fact\] global memory/mu, 'and so is the global scope')
 })
 
+test('/memories stats reports per-scope coverage', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-memories-rot-stats-'))
+  const runtime = new MemoriesRuntime(stubContext, { memoriesDir: dir, autoExtract: false })
+  t.after(async () => {
+    runtime.dispose()
+    await rm(dir, { recursive: true, force: true })
+  })
+  const session = stubSession(dir, 'session-stats')
+  await seed(runtime, session, 4, 'stat memory')
+  const stats = await runtime.stats(session)
+  assert.match(stats, /exposure: global 0\/4 \(0\.0%\)/u)
+})
+
 test('rotationEntries: 0 disables the block', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'dsh-memories-rot-off-'))
   const runtime = new MemoriesRuntime(stubContext, { memoriesDir: dir, autoExtract: false, rotationEntries: 0 })

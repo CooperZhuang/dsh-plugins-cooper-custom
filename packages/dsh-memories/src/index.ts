@@ -3495,6 +3495,59 @@ export class MemoriesRuntime {
   }
 
   /**
+   * Surface coverage per scope, for `/memories stats`.
+   *
+   * "Seen" means the entry was ever injected into a session or returned by the
+   * tool. The count is what the exposure-rotation work is judged by, and it is
+   * reported per scope because they move independently: a project entry only
+   * rotates in sessions opened in that workspace, while the global half can be
+   * shown anywhere.
+   *
+   * @returns seen/total per scope, plus the age of the oldest never-seen entry.
+   */
+  private async coverageByScope(): Promise<{
+    global: { seen: number; total: number }
+    project: { seen: number; total: number }
+    oldestDays: number
+  }> {
+    const rows = new Map(this.state.retentionRows().map((row) => [retentionKey(row.scope, row.id), row]))
+    const now = Date.now()
+    let oldest = now
+    const countScope = (entries: readonly MemoryEntry[]): { seen: number; total: number } => {
+      let seen = 0
+      for (const entry of entries) {
+        const row = rows.get(retentionKey(entry.scope, entry.id))
+        // Both views are read: a hand-written entry carries its counters in the
+        // file, and a concurrent session's newer counter lives in the database.
+        const surfaced = (row?.surfacedAt ?? 0) > 0 || entry.lastSurfacedAt > 0
+        const used = (row?.lastUsedAt ?? 0) > 0 || entry.lastUsedAt > 0
+        if (surfaced || used) {
+          seen += 1
+          continue
+        }
+        oldest = Math.min(oldest, entry.createdAt)
+      }
+      return { seen, total: entries.length }
+    }
+    const global = countScope(await this.store.list('global', undefined, { fresh: true }))
+    let projectSeen = 0
+    let projectTotal = 0
+    for (const slug of await this.store.listProjects()) {
+      const descriptor = await this.store.readProjectDescriptor(slug)
+      if (descriptor === undefined) continue
+      const counted = countScope(await this.store.list('project', descriptor.root, { fresh: true }))
+      projectSeen += counted.seen
+      projectTotal += counted.total
+    }
+    const unseen = (global.total - global.seen) + (projectTotal - projectSeen)
+    return {
+      global,
+      project: { seen: projectSeen, total: projectTotal },
+      oldestDays: unseen === 0 ? 0 : Math.floor((now - oldest) / 86_400_000),
+    }
+  }
+
+  /**
    * Apply retention to one scope.
    *
    * @param scope - scope to sweep.
@@ -3551,10 +3604,16 @@ export class MemoriesRuntime {
   }
 
   /** One line describing how much of the store has ever reached a session. */
-  private async exposureLine(): Promise<string> {    const unseen = await this.neverSeen().catch(() => ({ count: 0, total: 0, oldestDays: 0 }))
-    if (unseen.total === 0) return 'no memories stored'
-    if (unseen.count === 0) return `every one of ${unseen.total} memories has been injected or read`
-    return `${unseen.count} of ${unseen.total} never injected or read (oldest ${unseen.oldestDays}d)`
+  private async exposureLine(): Promise<string> {
+    const coverage = await this.coverageByScope().catch(() => undefined)
+    if (coverage === undefined) return 'coverage unavailable'
+    const share = (seen: number, total: number): string => (total === 0 ? 'n/a' : `${((100 * seen) / total).toFixed(1)}%`)
+    const total = coverage.global.total + coverage.project.total
+    if (total === 0) return 'no memories stored'
+    const unseen = (coverage.global.total - coverage.global.seen) + (coverage.project.total - coverage.project.seen)
+    return `global ${coverage.global.seen}/${coverage.global.total} (${share(coverage.global.seen, coverage.global.total)})`
+      + ` · project ${coverage.project.seen}/${coverage.project.total} (${share(coverage.project.seen, coverage.project.total)})`
+      + (unseen === 0 ? '' : ` · ${unseen} never seen, oldest ${coverage.oldestDays}d`)
   }
 
   /**
