@@ -84,7 +84,7 @@ export const DEFAULT_ROTATION_ENTRIES = 16
  * ~1.6 KB block per span) and lets coverage accumulate within a single long
  * session. 0 keeps the old once-per-conversation behaviour.
  */
-export const DEFAULT_ROTATION_EVERY_TURNS = 20
+export const DEFAULT_ROTATION_EVERY_TURNS = 8
 
 /** Byte budget for the title-only rotation block. */
 export const DEFAULT_ROTATION_MAX_BYTES = 1600

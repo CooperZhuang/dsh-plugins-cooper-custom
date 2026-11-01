@@ -104,7 +104,7 @@ const FIELDS = [
   {
     field: 'rotationEveryTurns', kind: 'number', min: 0, step: 1,
     label: { zh: '轮转间隔（用户轮次）', en: 'Rotation cadence (user turns)' },
-    hint: { zh: '长会话里每隔这么多轮用户发言再补一次轮转块；0 表示整个会话只补一次。默认 20：一个几小时的会话会分批看到新标题，而不是首轮之后再也不更新。', en: 'Inside one long conversation, emit a fresh rotation block every this many user turns; 0 emits only once. The default 20 lets a multi-hour session meet new titles in batches instead of freezing after its first turn.' },
+    hint: { zh: '长会话里每隔这么多轮用户发言再补一次轮转块；0 表示整个会话只补一次。默认 8：一个几小时的会话会分批看到新标题，而不是首轮之后再也不更新。', en: 'Inside one long conversation, emit a fresh rotation block every this many user turns; 0 emits only once. The default 8 lets a multi-hour session meet new titles in batches instead of freezing after its first turn.' },
   },
   {
     field: 'reflectionEnabled', kind: 'boolean',

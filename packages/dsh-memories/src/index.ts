@@ -1507,17 +1507,22 @@ export class MemoriesRuntime {
         || left.createdAt - right.createdAt
         || left.title.localeCompare(right.title))
     const ordered = [...fresh, ...stale]
-    // Both scopes must progress. A project scope with plenty of unseen entries
-    // would otherwise fill the block on its own, and the global scope — the half
-    // every session shares — would only rotate in sessions without a workspace.
-    // Measured on the real store: the first live rotation ran inside a project
-    // session, so the global coverage did not move at all. Alternating the two
-    // queues keeps a share for each; when one is exhausted the other takes the
-    // rest.
+    // Both scopes must progress, but not equally. Global memory is the half every
+    // conversation can use; a project entry is only discoverable from its own
+    // workspace. Measured on the real store: the first live rotation ran inside a
+    // project session and the global coverage did not move at all. The block
+    // therefore spends three quarters of its slots on the global scope, keeps a
+    // quarter for the current project, and lets either side take the rest when
+    // the other is exhausted.
     const queues: readonly (readonly MemoryEntry[])[] = [
       ordered.filter((entry) => entry.scope === 'global'),
       ordered.filter((entry) => entry.scope === 'project'),
     ]
+    const targets = [
+      Math.ceil(this.settings.rotationEntries * 0.75),
+      Math.floor(this.settings.rotationEntries * 0.25),
+    ]
+    const taken = [0, 0]
     const cursors = [0, 0]
     const picked: MemoryEntry[] = []
     let turn = 0
@@ -1527,15 +1532,19 @@ export class MemoriesRuntime {
         const which = (turn + attempt) % 2
         const queue = queues[which]
         const cursor = cursors[which] ?? 0
-        if (queue !== undefined && cursor < queue.length) {
-          entry = queue[cursor]
-          cursors[which] = cursor + 1
-        }
+        const remaining = (targets[which] ?? 0) - (taken[which] ?? 0)
+        // A capped scope yields to the other one; an exhausted scope simply has
+        // nothing left to give.
+        if (queue === undefined || cursor >= queue.length || remaining <= 0) continue
+        entry = queue[cursor]
+        cursors[which] = cursor + 1
       }
       turn += 1
       if (entry === undefined) break
       if (renderMemoryIndex([...picked, entry], DEFAULT_ROTATION_MAX_BYTES) === undefined) break
       picked.push(entry)
+      const scopeIndex = entry.scope === 'global' ? 0 : 1
+      taken[scopeIndex] = (taken[scopeIndex] ?? 0) + 1
     }
     if (picked.length === 0) return undefined
     const text = renderMemoryIndex(picked, DEFAULT_ROTATION_MAX_BYTES)
