@@ -54,13 +54,30 @@ function matches(draft, expected) {
   return draft.scope === expected.scope && overlap(tokens(draft.title), tokens(expected.title)) >= 0.5
 }
 
-/** Every fixture in a directory, sorted by name. */
-async function loadFixtures(dir) {
+/** Every extraction fixture in a directory, sorted by name.
+ *
+ * `eval/` also holds the retrieval probes (`retrieval.example.json`), which
+ * have no `reply`: a directory-wide `*.json` glob used to hand one to
+ * `parseExtraction` and crash the whole run. A fixture is an object with a
+ * string `reply`; anything else is reported and skipped.
+ */
+async function loadFixtures(dir, skipped) {
   const entries = await readdir(dir, { withFileTypes: true })
   const names = entries.filter((entry) => entry.isFile() && entry.name.endsWith('.json')).map((entry) => entry.name).sort()
   const fixtures = []
   for (const name of names) {
-    fixtures.push({ name, ...JSON.parse(await readFile(join(dir, name), 'utf8')) })
+    let fixture
+    try {
+      fixture = JSON.parse(await readFile(join(dir, name), 'utf8'))
+    } catch {
+      skipped.push(`${name} (not JSON)`)
+      continue
+    }
+    if (typeof fixture?.reply !== 'string') {
+      skipped.push(name)
+      continue
+    }
+    fixtures.push({ name, ...fixture })
   }
   return fixtures
 }
@@ -94,14 +111,17 @@ const args = process.argv.slice(2)
 const floorArg = args.find((arg) => arg.startsWith('--min-recall='))
 const floor = floorArg === undefined ? 1 : Number(floorArg.slice('--min-recall='.length))
 const dir = args.find((arg) => !arg.startsWith('--')) ?? DEFAULT_DIR
+/** Non-extraction JSON found beside the fixtures (reported, not scored). */
+const skipped = []
 
-const fixtures = await loadFixtures(dir)
+const fixtures = await loadFixtures(dir, skipped)
 if (fixtures.length === 0) {
   console.error(`dsh-memories: no eval fixtures in ${dir}`)
   process.exit(2)
 }
 
 console.log(`extraction eval: ${fixtures.length} fixture(s) from ${dir}, recall floor ${floor}`)
+if (skipped.length > 0) console.log(`skipped non-extraction JSON: ${skipped.join(', ')}`)
 let failed = 0
 for (const fixture of fixtures) {
   const row = score(fixture)

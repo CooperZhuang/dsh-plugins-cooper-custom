@@ -286,28 +286,31 @@ async function readUsageKeys(storeDir, warn) {
  * walk, so that stays as the fallback.
  */
 function decodeLog(buffer) {
-  try {
-    return zstdDecompressSync(buffer).toString('utf8')
-  } catch {
-    // Fall through to the per-frame walk.
-  }
+  // Walk the frames FIRST. `zstdDecompressSync(buffer)` on a multi-frame buffer
+  // succeeds while decoding only the first frame, and a session log's first
+  // frame is the session header — so a single-shot decode made every coverage
+  // number read 0 while looking healthy. The frame walk is the only shape that
+  // sees the messages.
   const offsets = []
   let index = buffer.indexOf(ZSTD_MAGIC)
   while (index >= 0) {
     offsets.push(index)
     index = buffer.indexOf(ZSTD_MAGIC, index + 4)
   }
-  const parts = []
-  for (let frame = 0; frame < offsets.length; frame += 1) {
-    const start = offsets[frame]
-    const end = frame + 1 < offsets.length ? offsets[frame + 1] : buffer.length
-    try {
-      parts.push(zstdDecompressSync(buffer.subarray(start, end)).toString('utf8'))
-    } catch {
-      // Not a standalone frame boundary; skip.
+  if (offsets.length > 0) {
+    const parts = []
+    for (let frame = 0; frame < offsets.length; frame += 1) {
+      const start = offsets[frame]
+      const end = offsets[frame + 1] ?? buffer.length
+      try {
+        parts.push(zstdDecompressSync(buffer.subarray(start, end)).toString('utf8'))
+      } catch {
+        // Not a standalone frame boundary; skip.
+      }
     }
+    if (parts.length > 0) return parts.join('')
   }
-  return parts.join('')
+  return zstdDecompressSync(buffer).toString('utf8')
 }
 
 /** Every session log under `<home>/sessions`, recursively. */
