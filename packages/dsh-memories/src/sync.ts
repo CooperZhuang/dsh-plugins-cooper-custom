@@ -33,6 +33,8 @@ import { existsSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
+import { LOOPS_FILE } from './loops.js'
+import type { LoopItem, LoopStore } from './loops.js'
 import { parseEntry } from './storage.js'
 import type { MemoryEntry } from './types.js'
 
@@ -78,6 +80,10 @@ export interface SyncOutcome {
   readonly resolvedByResolver: number
   /** Conflicts the newer-updated rule decided. */
   readonly resolvedByTime: number
+  /** Conflicts a structural merge decided without a model, e.g. the loop ledger. */
+  readonly mergedByStructure: number
+  /** Path the rebase gave up on, when it gave up on one. */
+  readonly stoppedBy: string | undefined
 }
 
 /** Options for {@link MemorySync}. */
@@ -148,6 +154,94 @@ export function newerEntry(ours: string, theirs: string): { text: string; oursWo
   return entryStamp(theirs) > entryStamp(ours)
     ? { text: theirs, oursWon: false }
     : { text: ours, oursWon: true }
+}
+
+/** How final one loop state is; a user's closure must not be undone by a stale copy. */
+const LOOP_STATE_RANK: Readonly<Record<string, number>> = { open: 0, expired: 1, dropped: 2, done: 3 }
+
+/** One text as a loop ledger, or undefined when it is not one. */
+function parseLedgerText(text: string): LoopStore | undefined {
+  try {
+    const parsed: unknown = JSON.parse(text)
+    if (parsed !== null && typeof parsed === 'object' && Array.isArray((parsed as { loops?: unknown }).loops)) {
+      return parsed as LoopStore
+    }
+  } catch {
+    // not JSON; the caller decides whether that is fatal
+  }
+  return undefined
+}
+
+/** One text with only one branch of every conflict marker block kept. */
+function oneMarkerBranch(text: string, branch: 'ours' | 'theirs'): string {
+  const kept: string[] = []
+  let state: 'normal' | 'ours' | 'theirs' = 'normal'
+  for (const line of text.split('\n')) {
+    if (/^<<<<<<</u.test(line)) { state = 'ours'; continue }
+    if (/^=======/u.test(line)) { if (state === 'ours') state = 'theirs'; continue }
+    if (/^>>>>>>>/u.test(line)) { state = 'normal'; continue }
+    if (state === 'normal' || state === branch) kept.push(line)
+  }
+  return kept.join('\n')
+}
+
+/**
+ * Every ledger one conflict side contributes.
+ *
+ * Normally that is one. A text with git conflict markers committed into it — a
+ * build that aborted a rebase *after* writing the conflicted file did exactly
+ * that to this store's `loops.json` — contributes one ledger per branch, so the
+ * loops from both halves of the botched merge survive. Splitting on the markers
+ * rather than stripping them is what keeps the result valid JSON: each branch
+ * is the original file with whole field groups removed.
+ */
+function ledgersIn(text: string): LoopStore[] {
+  const direct = parseLedgerText(text)
+  if (direct !== undefined) return [direct]
+  if (!/^(<<<<<<<|=======|>>>>>>>)/mu.test(text)) return []
+  const ledgers: LoopStore[] = []
+  for (const branch of ['ours', 'theirs'] as const) {
+    const parsed = parseLedgerText(oneMarkerBranch(text, branch))
+    if (parsed !== undefined) ledgers.push(parsed)
+  }
+  return ledgers
+}
+
+/** The copy of one loop that survives a merge: the most final state, then the most recent reminder. */
+function pickLoop(ours: LoopItem, theirs: LoopItem): LoopItem {
+  const rank = (loop: LoopItem): number => LOOP_STATE_RANK[loop.state] ?? 0
+  if (rank(theirs) !== rank(ours)) return rank(theirs) > rank(ours) ? theirs : ours
+  const reminded = (loop: LoopItem): number => loop.remindedAt ?? 0
+  if (reminded(theirs) !== reminded(ours)) return reminded(theirs) > reminded(ours) ? theirs : ours
+  return ours
+}
+
+/**
+ * Merge two versions of the open-loop ledger.
+ *
+ * The ledger is one JSON file both machines append to, so it conflicts as soon
+ * as either side opens a loop — and unlike an entry it is not one memory with
+ * two edits but many independent rows. The merge is therefore a union by id: a
+ * loop only one side knows is kept, and a loop both sides changed takes its most
+ * final copy. A side whose file was committed with conflict markers contributes
+ * the loops from both branches (see {@link ledgersIn}).
+ *
+ * @param ours - one side of the conflict, as `git show :2:` returned it.
+ * @param theirs - the other side, as `git show :3:` returned it.
+ * @returns the merged ledger text, or undefined when neither side is a ledger.
+ */
+export function mergeLoopLedgers(ours: string, theirs: string): string | undefined {
+  const ledgers = [...ledgersIn(ours), ...ledgersIn(theirs)]
+  if (ledgers.length === 0) return undefined
+  const merged = new Map<string, LoopItem>()
+  for (const ledger of ledgers) {
+    for (const loop of ledger.loops) {
+      const existing = merged.get(loop.id)
+      merged.set(loop.id, existing === undefined ? loop : pickLoop(existing, loop))
+    }
+  }
+  const loops = [...merged.values()].sort((a, b) => a.openedAt - b.openedAt)
+  return JSON.stringify({ version: 1, loops }, null, 2) + '\n'
 }
 
 /** Parse one "HH:MM" clock entry into minutes past midnight, or undefined. */
@@ -344,23 +438,35 @@ export class MemorySync {
     let conflicts = 0
     let resolvedByResolver = 0
     let resolvedByTime = 0
+    let mergedByStructure = 0
+    let stoppedBy: string | undefined
     if (this.options.remote.length > 0) {
       const pull = await this.pull()
       pulled = pull.pulled
       conflicts = pull.conflicts
       resolvedByResolver = pull.resolvedByResolver
       resolvedByTime = pull.resolvedByTime
+      mergedByStructure = pull.mergedByStructure
+      stoppedBy = pull.stoppedBy
       pushed = await this.push()
     }
-    if (committed > 0 || pulled > 0 || conflicts > 0 || pushed) {
-      this.options.log.info('dsh-memories: 记忆库同步(%s)：提交 %d、拉取 %d、推送 %s、冲突 %d（AI %d / 时间 %d）',
-        reason, committed, pulled, pushed ? '是' : '否', conflicts, resolvedByResolver, resolvedByTime)
+    if (committed > 0 || pulled > 0 || conflicts > 0 || pushed || stoppedBy !== undefined) {
+      this.options.log.info('dsh-memories: 记忆库同步(%s)：提交 %d、拉取 %d、推送 %s、冲突 %d（AI %d / 时间 %d / 结构 %d）%s',
+        reason, committed, pulled, pushed ? '是' : '否', conflicts, resolvedByResolver, resolvedByTime, mergedByStructure,
+        stoppedBy === undefined ? '' : '，止于 ' + stoppedBy)
     }
-    return { committed, pulled, pushed, conflicts, resolvedByResolver, resolvedByTime }
+    return { committed, pulled, pushed, conflicts, resolvedByResolver, resolvedByTime, mergedByStructure, stoppedBy }
   }
 
   /** Stage and commit everything the store changed. */
   private async commit(): Promise<number> {
+    // A rebase that was killed leaves conflict markers in the worktree; `add -A`
+    // would then commit them into the store — that is how loops.json once
+    // reached the remote with `<<<<<<<` lines inside. Roll back first.
+    if (this.rebaseInProgress()) {
+      await tryGit(this.dir, ['rebase', '--abort'], this.options.gitTimeoutMs)
+      this.options.log.warn('dsh-memories: 记忆库停在上一次未完成的 rebase 里，已回滚后才提交')
+    }
     await git(this.dir, ['add', '-A'], this.options.gitTimeoutMs).catch(() => undefined)
     const staged = await tryGit(this.dir, ['diff', '--cached', '--name-only'], this.options.gitTimeoutMs)
     const files = (staged ?? '').split('\n').filter((line) => line.length > 0)
@@ -371,49 +477,77 @@ export class MemorySync {
     return files.length
   }
 
+  /** Whether a rebase was interrupted and still owns the index and worktree. */
+  private rebaseInProgress(): boolean {
+    return existsSync(join(this.dir, '.git', 'rebase-merge')) || existsSync(join(this.dir, '.git', 'rebase-apply'))
+  }
+
   /** Fetch, then rebase onto the remote branch, resolving entry conflicts. */
-  private async pull(): Promise<{ pulled: number; conflicts: number; resolvedByResolver: number; resolvedByTime: number }> {
+  private async pull(): Promise<{
+    pulled: number
+    conflicts: number
+    resolvedByResolver: number
+    resolvedByTime: number
+    mergedByStructure: number
+    stoppedBy?: string
+  }> {
+    const nothing = { pulled: 0, conflicts: 0, resolvedByResolver: 0, resolvedByTime: 0, mergedByStructure: 0 }
     const fetched = await tryGit(this.dir, ['fetch', '--quiet', 'origin'], this.options.networkTimeoutMs)
-    if (fetched === undefined) return { pulled: 0, conflicts: 0, resolvedByResolver: 0, resolvedByTime: 0 }
+    if (fetched === undefined) return nothing
     const behind = await tryGit(this.dir, ['rev-list', '--count', 'HEAD..origin/main'], this.options.gitTimeoutMs)
-    if (behind === undefined || Number.parseInt(behind.trim(), 10) === 0) {
-      return { pulled: 0, conflicts: 0, resolvedByResolver: 0, resolvedByTime: 0 }
-    }
+    if (behind === undefined || Number.parseInt(behind.trim(), 10) === 0) return nothing
     const count = Number.parseInt(behind.trim(), 10)
     const rebase = await tryGit(this.dir, ['rebase', '--quiet', 'origin/main'], this.options.networkTimeoutMs)
-    if (rebase !== undefined) return { pulled: count, conflicts: 0, resolvedByResolver: 0, resolvedByTime: 0 }
+    if (rebase !== undefined) return { ...nothing, pulled: count }
     const resolution = await this.resolveRebase()
-    return { pulled: count, conflicts: resolution.conflicts, resolvedByResolver: resolution.resolvedByResolver, resolvedByTime: resolution.resolvedByTime }
+    return { pulled: count, ...resolution }
   }
 
   /**
    * Resolve whatever the rebase stopped on, then finish it.
    *
-   * Only entry files are resolved automatically. Anything else aborts the rebase:
-   * a store left mid-rebase is far worse than a sync that skipped a cycle.
+   * Entry files are resolved automatically (the resolver, then the newer
+   * `updated` stamp). The loop ledger is a JSON file of independent rows rather
+   * than one memory with two edits, so it gets a structural union merge. Anything
+   * else aborts the rebase: a store left mid-rebase is far worse than a sync that
+   * skipped a cycle.
    */
-  private async resolveRebase(): Promise<{ conflicts: number; resolvedByResolver: number; resolvedByTime: number }> {
+  private async resolveRebase(): Promise<{
+    conflicts: number
+    resolvedByResolver: number
+    resolvedByTime: number
+    mergedByStructure: number
+    stoppedBy?: string
+  }> {
     let conflicts = 0
     let resolvedByResolver = 0
     let resolvedByTime = 0
-    for (let round = 0; round < 20; round += 1) {
+    let mergedByStructure = 0
+    for (let round = 0; round < 200; round += 1) {
       const unmerged = await tryGit(this.dir, ['diff', '--name-only', '--diff-filter=U'], this.options.gitTimeoutMs)
       const paths = (unmerged ?? '').split('\n').filter((line) => line.length > 0)
       if (paths.length === 0) {
         const cont = await tryGit(this.dir, ['rebase', '--continue'], this.options.networkTimeoutMs)
-        if (cont !== undefined) return { conflicts, resolvedByResolver, resolvedByTime }
+        if (cont !== undefined) return { conflicts, resolvedByResolver, resolvedByTime, mergedByStructure }
         continue
       }
       for (const path of paths) {
-        if (!isEntryPath(path)) {
-          await tryGit(this.dir, ['rebase', '--abort'], this.options.gitTimeoutMs)
-          this.options.log.warn('dsh-memories: 记忆库 rebase 遇到不可自动处理的冲突（%s），已回滚本次同步', path)
-          return { conflicts, resolvedByResolver, resolvedByTime }
-        }
-        conflicts += 1
         const ours = await tryGit(this.dir, ['show', ':' + '2:' + path], this.options.gitTimeoutMs)
         const theirs = await tryGit(this.dir, ['show', ':' + '3:' + path], this.options.gitTimeoutMs)
         if (ours === undefined || theirs === undefined) continue
+        conflicts += 1
+        if (!isEntryPath(path)) {
+          const merged = path === LOOPS_FILE ? mergeLoopLedgers(ours, theirs) : undefined
+          if (merged === undefined) {
+            await tryGit(this.dir, ['rebase', '--abort'], this.options.gitTimeoutMs)
+            this.options.log.warn('dsh-memories: 记忆库 rebase 遇到不可自动处理的冲突（%s），已回滚本次同步', path)
+            return { conflicts, resolvedByResolver, resolvedByTime, mergedByStructure, stoppedBy: path }
+          }
+          await writeFile(join(this.dir, path), merged)
+          mergedByStructure += 1
+          await git(this.dir, ['add', path], this.options.gitTimeoutMs)
+          continue
+        }
         let text: string | undefined
         if (this.options.resolveConflict !== undefined) {
           try {
@@ -434,7 +568,8 @@ export class MemorySync {
       }
     }
     await tryGit(this.dir, ['rebase', '--abort'], this.options.gitTimeoutMs)
-    return { conflicts, resolvedByResolver, resolvedByTime }
+    this.options.log.warn('dsh-memories: 记忆库 rebase 在 %d 轮后仍未结束，已回滚本次同步', 200)
+    return { conflicts, resolvedByResolver, resolvedByTime, mergedByStructure }
   }
 
   /** Push the current branch, pulling once and retrying when the remote moved. */

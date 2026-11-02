@@ -13,7 +13,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { MemorySync, STORE_GITIGNORE, entryStamp, isEntryPath, newerEntry, nextClockDelay } from '../sync.js'
+import { MemorySync, STORE_GITIGNORE, entryStamp, isEntryPath, mergeLoopLedgers, newerEntry, nextClockDelay } from '../sync.js'
 import { applyConflictPlan } from '../sync-runtime.js'
 import type { EntryConflict } from '../sync.js'
 
@@ -157,6 +157,63 @@ test('an unparsable resolver answer is discarded rather than written', async () 
 
   assert.equal(outcome.resolvedByTime, 1, 'the timestamp rule took over')
   assert.match(await readFile(join(right.dir, 'entries', 'shared.md'), 'utf8'), /left newer/u)
+})
+
+/** One loop-ledger body: the same shape `loops.ts` writes. */
+function loopText(...loops: Array<{ id: string; text: string; openedAt: number; state?: string; remindedAt?: number }>): string {
+  const rows = loops.map((loop) => ({
+    id: loop.id,
+    text: loop.text,
+    openedAt: loop.openedAt,
+    state: loop.state ?? 'open',
+    ...(loop.remindedAt === undefined ? {} : { remindedAt: loop.remindedAt }),
+  }))
+  return JSON.stringify({ version: 1, loops: rows }, null, 2) + '\n'
+}
+
+test('the loop ledger merges as a union, and a closure survives a stale copy', () => {
+  const ours = loopText(
+    { id: 'loop-a', text: 'call Yoko', openedAt: 1 },
+    { id: 'loop-b', text: 'send invoice', openedAt: 2, state: 'done' },
+  )
+  const theirs = loopText(
+    { id: 'loop-a', text: 'call Yoko', openedAt: 1, remindedAt: 9 },
+    { id: 'loop-c', text: 'book the room', openedAt: 3 },
+  )
+  const merged = mergeLoopLedgers(ours, theirs)
+  assert.ok(merged !== undefined)
+  const parsed = JSON.parse(merged) as { loops: Array<{ id: string; state: string; remindedAt?: number }> }
+  assert.deepEqual(parsed.loops.map((loop) => loop.id), ['loop-a', 'loop-b', 'loop-c'], 'both sides keep their loops')
+  assert.equal(parsed.loops[0]?.remindedAt, 9, 'the copy that was reminded wins')
+  assert.equal(parsed.loops[1]?.state, 'done', 'a closed loop is not reopened by a stale open row')
+  assert.equal(mergeLoopLedgers('not json', 'also not'), undefined, 'a non-ledger is still refused')
+})
+
+test('a committed conflict marker in loops.json is repaired instead of blocking the sync', () => {
+  const clean = loopText({ id: 'loop-a', text: 'call Yoko', openedAt: 1 })
+  const conflicted = clean.replace('      "state": "open"',
+    '<<<<<<< HEAD\n      "state": "open"\n=======\n      "state": "done"\n>>>>>>> abc1234 (memory(Cooper-Home-PC): 1 个文件)')
+  const merged = mergeLoopLedgers(conflicted, loopText({ id: 'loop-b', text: 'second', openedAt: 2 })) ?? ''
+  assert.match(merged, /"id": "loop-a"/u)
+  assert.match(merged, /"id": "loop-b"/u)
+  assert.doesNotMatch(merged, /^\s*(<<<<<<<|=======|>>>>>>>)/mu, 'no marker line survives')
+  assert.doesNotThrow(() => JSON.parse(merged), 'the repaired ledger is valid JSON')
+})
+
+test('two machines opening different loops keep both and leave the store in sync', async () => {
+  const { remote, left, right } = await twoWayFixture()
+  await writeFile(join(left.dir, 'loops.json'), loopText({ id: 'loop-a', text: 'call Yoko', openedAt: 1 }))
+  await left.sync.run('test')
+  await writeFile(join(right.dir, 'loops.json'), loopText({ id: 'loop-b', text: 'send invoice', openedAt: 2 }))
+
+  const outcome = await right.sync.run('test')
+
+  assert.equal(outcome.pushed, true, 'the ledger no longer blocks the push')
+  assert.equal(outcome.mergedByStructure, 1)
+  const merged = JSON.parse(await readFile(join(right.dir, 'loops.json'), 'utf8')) as { loops: Array<{ id: string }> }
+  assert.deepEqual(merged.loops.map((loop) => loop.id), ['loop-a', 'loop-b'])
+  assert.match(execFileSync('git', ['-C', remote, 'show', 'main:loops.json'], { encoding: 'utf8' }), /loop-b/u)
+  assert.equal(git(right.dir, 'status', '--porcelain').trim(), '', 'the store is not left mid-rebase')
 })
 
 test('the clock schedule picks the next local time, and wraps to tomorrow', () => {
