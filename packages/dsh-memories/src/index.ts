@@ -244,6 +244,15 @@ interface ScopeState {
   readonly entries: readonly MemoryEntry[]
 }
 
+/**
+ * One entry that cleared the recall gate, with the credit that let it through.
+ *
+ * The list it lands in is ordered by `relevance` and only then by `score`; both
+ * numbers come from the same `matchCredit` call, so keeping them together is what
+ * makes that ordering expressible without re-scoring the entry.
+ */
+type Credited = MatchCredit & { entry: MemoryEntry }
+
 
 /**
  * The memory runtime: one instance per plugin mount, shared by the tool, the
@@ -1249,7 +1258,7 @@ export class MemoriesRuntime {
     // Which words are too common in these scopes to prove anything. Computed
     // once for the turn and cached until the store changes.
     const hub = this.hubFor(states)
-    const eligible: (MatchCredit & { entry: MemoryEntry })[] = []
+    const eligible: Credited[] = []
     let near: { id: string; relevance: number; terms: number } | undefined
     for (const state of states) {
       // The index narrows the scan to entries that share a token with the turn.
@@ -1323,11 +1332,32 @@ export class MemoriesRuntime {
       }
       return undefined
     }
-    // Ranked by the decayed score, so recency and the entry's own track record
-    // break ties between equally relevant memories. The one-hop neighbours go in
-    // before the sort and carry a score below every credited entry, so they can
-    // only fill slots the lexical path left empty — the case this exists for is
-    // a turn that names one fragment of something the store filed in several.
+    // Ranked by relevance first, and only then by the decayed score.
+    //
+    // It used to be the other way round, on the theory that recency and the
+    // entry's track record should break ties between equally relevant memories.
+    // A full sort by the decayed score is not a tie-break, though: importance
+    // multiplies by up to 5 and decay spans 4×, so the attention term does not
+    // nudge near-ties, it decides the order. Measured on 150 hand-written turns
+    // against this store (bench/ablate.mjs), sorting the credited candidates by
+    // the decayed score put the turn's own memory first 42% of the time and
+    // inside the four injected slots 75%; sorting by relevance first gives 80%
+    // and 91%. Every decay blend in between was worse than plain relevance, so
+    // the attention model is a tie-break here and nothing more. It still earns
+    // that much: entries the lexical path rates equally are ordered by what this
+    // conversation and recent sessions actually read.
+    //
+    // The seeds for the one-hop expansion are taken after this sort for the same
+    // reason: they used to be whichever three candidates the store listed first.
+    const byStrength = (left: Credited, right: Credited): number => right.relevance - left.relevance
+      || right.score - left.score
+      || right.entry.updatedAt - left.entry.updatedAt
+      || left.entry.title.localeCompare(right.entry.title)
+    eligible.sort(byStrength)
+    // The one-hop neighbours go in after the seeds and carry no lexical
+    // relevance, so they can only fill slots the lexical path left empty — the
+    // case this exists for is a turn that names one fragment of something the
+    // store filed in several.
     const related = relatedHits(
       this.groups(states),
       eligible.slice(0, EXPAND_SEEDS).map((item) => ({ entry: item.entry, score: item.score })),
@@ -1347,10 +1377,11 @@ export class MemoriesRuntime {
     }
     /** Which of the candidates arrived over a hop, and from which seed, for the log line below. */
     const relatedVia = new Map(related.map((hit) => [hit.entry.id, hit.via ?? '']))
-    eligible.sort((left, right) => right.score - left.score
-      || right.entry.updatedAt - left.entry.updatedAt
-      || left.entry.title.localeCompare(right.entry.title))
-    const picked: (MatchCredit & { entry: MemoryEntry })[] = []
+    // The neighbours carry relevance 0, so this second sort is what keeps them
+    // behind every memory the turn actually matched without relying on the order
+    // `relatedHits` happened to return.
+    eligible.sort(byStrength)
+    const picked: Credited[] = []
     for (const candidate of eligible) {
       if (picked.length >= remaining) break
       // `renderRecall` is the budget's authority: if one more entry would not fit,

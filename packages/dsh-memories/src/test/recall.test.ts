@@ -10,7 +10,7 @@
  * @module dsh-memories/test/recall.test
  */
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -436,4 +436,55 @@ test('an archived memory renders with an explicit marker, after any live ones', 
   assert.match(onlyRetired ?? '', /以前是这么说的/u)
 
   assert.equal(renderRecall([], 4_000, []), undefined, 'nothing to say renders nothing')
+})
+
+test('the stronger lexical match is listed first, even when a weaker one is fresher and better read', async (t) => {
+  // Ordering a recall block by relevance × importance × decay is not a tie-break:
+  // importance spans 1–5 and decay 0.25–1, so a stale, never-read memory that the
+  // turn actually names loses its slot to a fresher, well-read memory that merely
+  // shares the topic. Measured on 150 hand-written turns against a real 732-entry
+  // store (bench/ablate.mjs), the attention-first sort put the turn's own memory
+  // first 42% of the time and in the four injected slots 75%; relevance first
+  // gives 80% / 91%. This pins the ordering so a later "let recency win" patch has
+  // to face the measurement again.
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-memories-order-'))
+  const runtime = new MemoriesRuntime(stubContext, { memoriesDir: dir, autoExtract: false })
+  t.after(() => {
+    runtime.dispose()
+    return rm(dir, { recursive: true, force: true })
+  })
+  const days = (count: number): string => new Date(Date.now() - count * 86_400_000).toISOString()
+  const entries = join(dir, 'entries')
+  await mkdir(entries, { recursive: true })
+  const write = (id: string, title: string, body: string, ageDays: number, uses: number) =>
+    writeFile(join(entries, `${id}.md`), [
+      '---',
+      `id: ${id}`,
+      'scope: global',
+      'kind: fact',
+      `title: ${title}`,
+      'tags: 同步',
+      `created: ${days(ageDays)}`,
+      `updated: ${days(ageDays)}`,
+      'source: auto',
+      `uses: ${uses}`,
+      '---',
+      '',
+      body,
+    ].join('\n'))
+  // The entry the turn is about: old and never read.
+  await write('sync-conflict-at', '记忆库同步冲突按 at 取新', '两边都改过同一个条目时，按 updated 时间戳取新的那份，旧的作为归档留下。', 200, 0)
+  // Shares the topic, nothing more: fresh and read five times, so it wins on both
+  // attention factors and loses on the one that means "this is the memory".
+  await write('sync-general', '记忆库同步', '同步是后台任务，按间隔运行，不阻塞对话。', 0, 5)
+
+  const session = stubSession(process.cwd(), '记忆库同步冲突怎么合并，两边都改过了')
+  const text = blockText(await runtime.recallFor(stubAgent(session)))
+  // Body-unique markers, not titles: one title is a prefix of the other, and an
+  // indexOf on the shorter one would find the longer entry and pass either way.
+  const exact = text.indexOf('两边都改过')
+  const weaker = text.indexOf('不阻塞对话')
+  assert.ok(exact >= 0, `the turn's own memory must be recalled, got: ${text}`)
+  assert.ok(weaker >= 0, `the weaker match is still worth a slot, got: ${text}`)
+  assert.ok(exact < weaker, `the memory the turn is about comes first, got: ${text}`)
 })
