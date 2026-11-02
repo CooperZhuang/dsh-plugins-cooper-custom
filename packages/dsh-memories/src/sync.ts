@@ -156,6 +156,38 @@ export function newerEntry(ours: string, theirs: string): { text: string; oursWo
     : { text: ours, oursWon: true }
 }
 
+/** Whether one repository path is a session note: prose, but stamped with `at:`. */
+export function isSessionNotePath(path: string): boolean {
+  return /(^|\/)sessions\/[^/]+\.md$/u.test(path)
+}
+
+/** The `at` stamp of one session note, or 0 when it cannot be parsed. */
+export function sessionNoteStamp(text: string): number {
+  const match = /^at:[ \t]*(\S+)[ \t]*$/mu.exec(text)
+  const stamp = match?.[1]
+  if (stamp === undefined) return 0
+  const parsed = Date.parse(stamp)
+  return Number.isNaN(parsed) ? 0 : parsed
+}
+
+/**
+ * Resolve one conflicting session note by keeping the later `at:` stamp.
+ *
+ * A session note is the extractor's prose summary of one session. The same
+ * session can be summarised twice — once on each machine, or again after the
+ * conversation grew — and then the two notes conflict on every later sync. The
+ * `at:` frontmatter says which summary is the later reading, so the newer one
+ * wins the way an entry's `updated` stamp does; the older text stays in git.
+ *
+ * @returns the winning text, or undefined when neither side carries a stamp.
+ */
+export function newerSessionNote(ours: string, theirs: string): string | undefined {
+  const left = sessionNoteStamp(ours)
+  const right = sessionNoteStamp(theirs)
+  if (left === 0 && right === 0) return undefined
+  return right >= left ? theirs : ours
+}
+
 /** How final one loop state is; a user's closure must not be undone by a stale copy. */
 const LOOP_STATE_RANK: Readonly<Record<string, number>> = { open: 0, expired: 1, dropped: 2, done: 3 }
 
@@ -538,15 +570,22 @@ export class MemorySync {
         conflicts += 1
         if (!isEntryPath(path)) {
           const merged = path === LOOPS_FILE ? mergeLoopLedgers(ours, theirs) : undefined
-          if (merged === undefined) {
-            await tryGit(this.dir, ['rebase', '--abort'], this.options.gitTimeoutMs)
-            this.options.log.warn('dsh-memories: 记忆库 rebase 遇到不可自动处理的冲突（%s），已回滚本次同步', path)
-            return { conflicts, resolvedByResolver, resolvedByTime, mergedByStructure, stoppedBy: path }
+          if (merged !== undefined) {
+            await writeFile(join(this.dir, path), merged)
+            mergedByStructure += 1
+            await git(this.dir, ['add', path], this.options.gitTimeoutMs)
+            continue
           }
-          await writeFile(join(this.dir, path), merged)
-          mergedByStructure += 1
-          await git(this.dir, ['add', path], this.options.gitTimeoutMs)
-          continue
+          const note = isSessionNotePath(path) ? newerSessionNote(ours, theirs) : undefined
+          if (note !== undefined) {
+            await writeFile(join(this.dir, path), note)
+            resolvedByTime += 1
+            await git(this.dir, ['add', path], this.options.gitTimeoutMs)
+            continue
+          }
+          await tryGit(this.dir, ['rebase', '--abort'], this.options.gitTimeoutMs)
+          this.options.log.warn('dsh-memories: 记忆库 rebase 遇到不可自动处理的冲突（%s），已回滚本次同步', path)
+          return { conflicts, resolvedByResolver, resolvedByTime, mergedByStructure, stoppedBy: path }
         }
         let text: string | undefined
         if (this.options.resolveConflict !== undefined) {

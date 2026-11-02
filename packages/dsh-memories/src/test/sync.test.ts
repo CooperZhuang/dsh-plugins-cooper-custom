@@ -13,7 +13,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { MemorySync, STORE_GITIGNORE, entryStamp, isEntryPath, mergeLoopLedgers, newerEntry, nextClockDelay } from '../sync.js'
+import { MemorySync, STORE_GITIGNORE, entryStamp, isEntryPath, isSessionNotePath, mergeLoopLedgers, newerEntry, newerSessionNote, nextClockDelay } from '../sync.js'
 import { applyConflictPlan } from '../sync-runtime.js'
 import type { EntryConflict } from '../sync.js'
 
@@ -213,6 +213,40 @@ test('two machines opening different loops keep both and leave the store in sync
   const merged = JSON.parse(await readFile(join(right.dir, 'loops.json'), 'utf8')) as { loops: Array<{ id: string }> }
   assert.deepEqual(merged.loops.map((loop) => loop.id), ['loop-a', 'loop-b'])
   assert.match(execFileSync('git', ['-C', remote, 'show', 'main:loops.json'], { encoding: 'utf8' }), /loop-b/u)
+  assert.equal(git(right.dir, 'status', '--porcelain').trim(), '', 'the store is not left mid-rebase')
+})
+
+/** One session-note body: the shape the extractor writes. */
+function sessionNoteText(at: string, summary: string): string {
+  return ['---', 'session: "session-test"', 'at: ' + at, 'memories: none', '---', '', summary, ''].join('\n')
+}
+
+test('a conflicting session note keeps the later reading', () => {
+  const older = sessionNoteText('2026-11-01T03:13:53.263Z', 'first reading')
+  const newer = sessionNoteText('2026-11-01T18:42:56.351Z', 'second reading')
+  assert.equal(newerSessionNote(older, newer), newer)
+  assert.equal(newerSessionNote(newer, older), newer, 'the order of the two sides does not matter')
+  assert.equal(newerSessionNote('no stamps here', 'no stamps here'), undefined, 'an unstamped note is still refused')
+  assert.equal(isSessionNotePath('sessions/session-a.md'), true)
+  assert.equal(isSessionNotePath('projects/alpha/sessions/session-a.md'), true)
+  assert.equal(isSessionNotePath('entries/one.md'), false)
+})
+
+test('two machines resummarising one session keep the later note and finish the sync', async () => {
+  const { remote, left, right } = await twoWayFixture()
+  await mkdir(join(left.dir, 'sessions'), { recursive: true })
+  await writeFile(join(left.dir, 'sessions', 'session-same.md'), sessionNoteText('2026-11-01T03:13:53.263Z', 'first reading'))
+  await left.sync.run('test')
+  await mkdir(join(right.dir, 'sessions'), { recursive: true })
+  await writeFile(join(right.dir, 'sessions', 'session-same.md'), sessionNoteText('2026-11-01T18:42:56.351Z', 'second reading'))
+
+  const outcome = await right.sync.run('test')
+
+  assert.equal(outcome.pushed, true, 'a session note no longer blocks the push')
+  assert.equal(outcome.resolvedByTime, 1)
+  const note = await readFile(join(right.dir, 'sessions', 'session-same.md'), 'utf8')
+  assert.match(note, /second reading/u, 'the later summary won')
+  assert.match(execFileSync('git', ['-C', remote, 'show', 'main:sessions/session-same.md'], { encoding: 'utf8' }), /second reading/u)
   assert.equal(git(right.dir, 'status', '--porcelain').trim(), '', 'the store is not left mid-rebase')
 })
 
