@@ -43,6 +43,19 @@ const CSS = [
   '.dshm-badge{font-size:11px;line-height:16px;padding:0 6px;border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);white-space:nowrap}',
   '.dshm-badge-global{background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-primary)}',
   '.dshm-body{white-space:pre-wrap;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:19px;margin:0}',
+  // A disputed body is one reading with the change marked in place: no before/
+  // after captions, the struck error run is what the pass removes and the
+  // success run is what it adds. Both tints are mixed from theme state tokens,
+  // so the marks keep their contrast in the dark theme too.
+  '.dshm-diff{white-space:pre-wrap;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:19px;margin:0}',
+  '.dshm-del{color:var(--dsw-alias-state-error-primary);background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 14%,transparent);border-radius:3px;padding:0 1px;text-decoration:line-through}',
+  '.dshm-ins{color:var(--dsw-alias-state-success-primary);background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 14%,transparent);border-radius:3px;padding:0 1px;text-decoration:none}',
+  '.dshm-retire{color:var(--dsw-alias-label-tertiary);text-decoration:line-through}',
+  // The scope move is a fact about the row, so it sits in the head next to the
+  // action badge; the grounds stay as individual badges instead of one paragraph.
+  '.dshm-scope{display:inline-flex;align-items:center;gap:4px;font-size:11px;line-height:16px;padding:0 6px;border-radius:8px;background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-primary);white-space:nowrap}',
+  '.dshm-scope-arrow{color:var(--dsw-alias-label-tertiary)}',
+  '.dshm-reasons{display:flex;flex-wrap:wrap;gap:4px}',
   '.dshm-meta{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;display:flex;flex-wrap:wrap;gap:8px}',
   '.dshm-actions{display:flex;gap:6px;flex-wrap:wrap}',
   '.dshm-btn{height:26px;padding:0 10px;font:inherit;font-size:12px;border-radius:13px;border:.5px solid var(--dsw-alias-border-l3);background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer}',

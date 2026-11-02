@@ -20,6 +20,7 @@ import {
   classifyPlan,
   denyToolsFor,
   applyPlan,
+  hasApplicableFragment,
   parsePlan,
   proposalIsFresh,
   readPendingPlan,
@@ -368,6 +369,24 @@ test('classification applies what is reversible and asks about what is not', () 
   const created = classifyPlan(plan([{ id: null, scope: 'global', kind: 'fact', title: 'New', body: 'x', tags: [] }]), { entries: [] })
   assert.equal(created.disputes.length, 0)
   assert.equal(created.safe.upserts.length, 1)
+})
+
+test('a row without its plan fragment has nothing to apply', () => {
+  const row = { id: 'a', scope: 'global' as const, action: 'rewrite' as const, title: 'A', reason: 'r', before: 'a', after: 'a2' }
+  const empty = { upserts: [], retire: [], skills: [], notes: '' }
+  const withUpsert = {
+    upserts: [{ id: 'a', scope: 'global' as const, kind: 'fact' as const, title: 'A', body: 'a2', tags: [] }],
+    retire: [],
+    skills: [],
+    notes: '',
+  }
+  // A rewrite is applied by its upsert; without one, accepting it can only be a no-op.
+  assert.equal(hasApplicableFragment(empty, row), false)
+  assert.equal(hasApplicableFragment(withUpsert, row), true)
+  // A retirement reads the other half of the same plan, so the two cannot stand in for each other.
+  const retireRow = { ...row, action: 'retire' as const, after: '' }
+  assert.equal(hasApplicableFragment(withUpsert, retireRow), false)
+  assert.equal(hasApplicableFragment({ ...empty, retire: ['a'] }, retireRow), true)
 })
 
 test('applyPlan merges and retires through the target', async () => {

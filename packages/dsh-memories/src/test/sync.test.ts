@@ -9,12 +9,13 @@
  */
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { MemorySync, STORE_GITIGNORE, entryStamp, isEntryPath, isSessionNotePath, mergeLoopLedgers, newerEntry, newerSessionNote, nextClockDelay } from '../sync.js'
-import { applyConflictPlan } from '../sync-runtime.js'
+import { applyConflictPlan, isArchivedEntryPath, projectRootOf } from '../sync-runtime.js'
+import { slugify } from '../storage.js'
 import type { EntryConflict } from '../sync.js'
 
 /** A logger that swallows everything; tests assert on git state, not log text. */
@@ -283,4 +284,68 @@ test('a reply that is not a plan leaves the timestamp rule in charge', () => {
   const applied = applyConflictPlan('not json at all', ours, ours)
   assert.ok(!('merged' in applied))
   assert.deepEqual((applied as { disputes: unknown[] }).disputes, [])
+})
+
+test('a merge keeps the scope of the file it merges even when the reply proposes another', () => {
+  const ours = entryText('shared', 'left fact', '2026-02-01T00:00:00.000Z')
+  const theirs = entryText('shared', 'right fact', '2026-03-01T00:00:00.000Z')
+  // The two revisions are one file: the merge is written back to that path, so
+  // the reply's "project" scope is not a decision the merge can take. Honouring
+  // it would be a scope move, which is the one edit classifyPlan must ask about.
+  const reply = JSON.stringify({ memories: [{ id: 'shared', scope: 'project', kind: 'fact', title: 'shared', body: 'left fact and right fact', tags: [] }], summary: 'merged both revisions' })
+  const applied = applyConflictPlan(reply, ours, theirs)
+  if (!('merged' in applied)) assert.fail('a scope guess must not turn a merge into a question')
+  assert.match(applied.text, /scope: global/u, 'the merge stays where the file lives')
+  assert.doesNotMatch(applied.text, /scope: project/u)
+  assert.match(applied.text, /left fact and right fact/u)
+})
+
+test('a disputed merge still carries the fragment that would apply it', () => {
+  const ours = entryText('shared', 'keeps src/app/main.ts as the anchor', '2026-02-01T00:00:00.000Z')
+  const reply = JSON.stringify({ memories: [{ id: 'shared', scope: 'project', kind: 'fact', title: 'shared', body: 'no anchors at all', tags: [] }], summary: '' })
+  const applied = applyConflictPlan(reply, ours, ours)
+  if ('merged' in applied) assert.fail('dropping the cited path must not be written')
+  assert.ok(applied.disputes.length > 0, 'the loss still shows up as a question')
+  const fragment = applied.upserts ?? []
+  assert.equal(fragment.length, 1, 'the row carries the rewrite that would apply it')
+  assert.equal(fragment[0]?.scope, 'global', 'the stored fragment keeps the pinned scope')
+  assert.equal(fragment[0]?.body, 'no anchors at all')
+})
+
+test('a project conflict path resolves the local checkout, preferring this host descriptor', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-memories-root-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const entry = 'projects/alpha/entries/shared.md'
+  // A global entry lives outside `projects/`, so there is no checkout to resolve.
+  assert.equal(await projectRootOf(dir, 'entries/shared.md'), undefined)
+
+  const projectDir = join(dir, 'projects', 'alpha')
+  const hostFile = join(projectDir, 'hosts', `${slugify(hostname())}.json`)
+  await mkdir(join(projectDir, 'hosts'), { recursive: true })
+  // `project.json` is rewritten by whichever machine synced last; this machine's
+  // host file is its own checkout and must win over it.
+  await writeFile(join(projectDir, 'project.json'), JSON.stringify({ root: '/elsewhere/alpha', slug: 'alpha' }))
+  await writeFile(hostFile, JSON.stringify({ host: hostname(), root: '/this/machine/alpha' }))
+  assert.equal(await projectRootOf(dir, entry), '/this/machine/alpha', 'the host descriptor wins')
+
+  // With no host file the canonical descriptor is the only honest fallback.
+  await rm(hostFile)
+  assert.equal(await projectRootOf(dir, entry), '/elsewhere/alpha')
+
+  // Nothing recorded, or an unreadable record: no root rather than a guessed one.
+  await rm(join(projectDir, 'project.json'))
+  assert.equal(await projectRootOf(dir, entry), undefined)
+  await writeFile(join(projectDir, 'project.json'), 'not json at all')
+  assert.equal(await projectRootOf(dir, entry), undefined)
+})
+
+test('an archived conflict path is recognised, so it never becomes a waiting row', () => {
+  // Applying a row writes into `entries/`; staging an archived file's conflict
+  // would let "accept" bring a retired memory back, so the path is filtered out.
+  assert.equal(isArchivedEntryPath('archive/shared.md'), true)
+  assert.equal(isArchivedEntryPath('projects/alpha/archive/shared.md'), true)
+  assert.equal(isArchivedEntryPath('entries/shared.md'), false)
+  assert.equal(isArchivedEntryPath('projects/alpha/entries/shared.md'), false)
+  // A live entry whose id merely contains the word is not an archive file.
+  assert.equal(isArchivedEntryPath('entries/archive-cleanup.md'), false)
 })

@@ -9,11 +9,14 @@
  *
  * @module dsh-memories/sync-runtime
  */
+import { readFile } from 'node:fs/promises'
 import { hostname } from 'node:os'
+import { join } from 'node:path'
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { CONSOLIDATE_SYSTEM, classifyPlan, mergePendingPlan, parsePlan } from './consolidate.js'
-import { formatEntry, parseEntry } from './storage.js'
+import type { ConsolidationDispute, ConsolidationPlan } from './consolidate.js'
+import { formatEntry, parseEntry, slugify } from './storage.js'
 import { MemorySync, parseClockTime } from './sync.js'
 import type { EntryConflict, SyncLog } from './sync.js'
 import { MEMORY_SOURCE_KIND } from './types.js'
@@ -61,25 +64,40 @@ export function renderConflictPrompt(id: string, ours: string, theirs: string): 
 }
 
 /**
+ * What a conflict merge produced: the merged file, or the questions it raised.
+ *
+ * The disputed branch carries the plan fragment that would apply those rows: a
+ * row staged without it cannot be accepted at all, and an older version of this
+ * module staged every sync dispute with an empty plan, so the panel reported an
+ * apply that changed nothing.
+ */
+export type ConflictMerge =
+  | { readonly text: string; readonly merged: true }
+  | { readonly text?: undefined; readonly disputes: readonly ConsolidationDispute[]; readonly upserts?: ConsolidationPlan['upserts'] }
+
+/**
  * Turn a model reply into the merged entry file, or into the disputes it raised.
  *
  * Pure so the arbitration is testable without an LLM: the caller hands in the
  * reply and both revisions, and this decides with the same rules the
  * consolidation pass obeys (`parsePlan` for shape, `classifyPlan` for loss).
  */
-export function applyConflictPlan(
-  reply: string,
-  oursText: string,
-  theirsText: string,
-): { text: string; merged: true } | { text?: undefined; disputes: readonly import('./consolidate.js').ConsolidationDispute[] } {
+export function applyConflictPlan(reply: string, oursText: string, theirsText: string): ConflictMerge {
   const ours = parseEntry(oursText, 'global', 'unknown') ?? parseEntry(oursText, 'project', 'unknown')
   const theirs = parseEntry(theirsText, 'global', 'unknown') ?? parseEntry(theirsText, 'project', 'unknown')
   const id = ours?.id ?? theirs?.id
   if (id === undefined || ours === undefined) return { disputes: [] }
   const plan = parsePlan(reply, new Set([id]), 1)
   if (plan === undefined || plan.upserts.length !== 1) return { disputes: [] }
-  const classified = classifyPlan(plan, { entries: [ours] })
-  if (classified.disputes.length > 0) return { disputes: classified.disputes }
+  // A conflict is two revisions of ONE file, and the merge is written back to
+  // that same path: scope is part of the path, so the merge cannot move the
+  // entry between scopes. Pinning the scope before classification keeps a model
+  // that echoed the other revision's scope from turning a merge into a scope
+  // move — the one edit the rules must never take unattended.
+  const pinned: ConsolidationPlan = { ...plan, upserts: plan.upserts.map((item) => ({ ...item, scope: ours.scope })) }
+  const classified = classifyPlan(pinned, { entries: [ours] })
+  // The fragment travels with the rows so accepting one is a plain write.
+  if (classified.disputes.length > 0) return { disputes: classified.disputes, upserts: pinned.upserts }
   const item = classified.safe.upserts[0]
   if (item === undefined || item.id !== id) return { disputes: [] }
   const merged: MemoryEntry = {
@@ -96,6 +114,61 @@ export function applyConflictPlan(
     ...(item.asOf !== undefined ? { asOf: item.asOf } : {}),
   }
   return { text: formatEntry(merged), merged: true }
+}
+
+/** A store path that belongs to one project's entry directory. */
+const PROJECT_ENTRY_PATH = /^projects\/([^/]+)\/entries\//u
+
+/**
+ * Whether a store path is a retired entry's file rather than a live one.
+ *
+ * Retirements are archived, not deleted, and a store sync merges an archived
+ * file exactly like a live one — but applying a plan always writes into
+ * `entries/`. A question staged for an archived file would therefore let
+ * "accept" resurrect a memory somebody retired, so those conflicts stay on the
+ * timestamp rule instead of becoming a decision.
+ *
+ * @param path - store-relative path of the conflicting file.
+ * @returns true for `archive/<id>.md` and `projects/<slug>/archive/<id>.md`.
+ */
+export function isArchivedEntryPath(path: string): boolean {
+  return /(^|\/)archive\//u.test(path)
+}
+
+/** Read the `root` of one project descriptor, or `undefined` when absent or unusable. */
+async function readDescriptorRoot(file: string): Promise<string | undefined> {
+  try {
+    const parsed = JSON.parse(await readFile(file, 'utf8')) as { root?: unknown }
+    return typeof parsed.root === 'string' && parsed.root.length > 0 ? parsed.root : undefined
+  } catch {
+    // Missing or unreadable is "unknown", never a reason to invent a path: a
+    // wrong root would write one project's merge into another project's store.
+    return undefined
+  }
+}
+
+/**
+ * Resolve this machine's checkout of the project a conflicting entry lives in.
+ *
+ * A project entry is written back through the workspace root the store keys
+ * that project by, and a sync conflict only carries store-relative paths. The
+ * host descriptor is the primary source because `project.json` is rewritten by
+ * whichever machine synced last, while `hosts/<host>.json` keeps THIS machine's
+ * checkout and is never overwritten by another machine. The host file is named
+ * after the same slug `writeHostDescriptor` uses, not the raw hostname.
+ *
+ * @param memoriesDir - the memory store root.
+ * @param path - the conflicting entry path relative to the store.
+ * @returns the checkout root to write through, or `undefined` for a global entry
+ *   or when no descriptor names one.
+ */
+export async function projectRootOf(memoriesDir: string, path: string): Promise<string | undefined> {
+  const slug = PROJECT_ENTRY_PATH.exec(path)?.[1]
+  if (slug === undefined) return undefined
+  const projectDir = join(memoriesDir, 'projects', slug)
+  const own = await readDescriptorRoot(join(projectDir, 'hosts', `${slugify(hostname())}.json`))
+  if (own !== undefined) return own
+  return readDescriptorRoot(join(projectDir, 'project.json'))
 }
 
 export class StoreSyncService {
@@ -185,10 +258,26 @@ export class StoreSyncService {
       const applied = applyConflictPlan(text, conflict.ours, conflict.theirs)
       if ('merged' in applied) return applied.text
       if (applied.disputes.length > 0) {
+        // Applying a row writes the entry into the live tree, so a conflicted
+        // archive file must never become a row: accepting it would bring a
+        // retired memory back. The newer revision wins, as everywhere else.
+        if (isArchivedEntryPath(conflict.path)) {
+          this.host.log.decision('dsh-memories: 归档条目 %s 的合并会丢信息，按更新时间取新版而不进待裁决', conflict.path)
+          return undefined
+        }
+        // A project entry is written back through its workspace root, and the
+        // staged row has to carry it: staging '' made accepting it throw
+        // "a project scope requires a workspace root" and roll back, so the
+        // question could never be answered. A global entry needs no root, and
+        // an unknown one stays '' rather than being guessed.
+        const projectRoot = await projectRootOf(this.host.memoriesDir, conflict.path) ?? ''
         await mergePendingPlan(this.host.memoriesDir, {
-          plan: { upserts: [], retire: [], skills: [], notes: '同步冲突待裁决' },
+          // The merged body travels with the rows: staging only the question
+          // left "accept" with nothing to write, and the panel called that a
+          // rewrite.
+          plan: { upserts: applied.upserts ?? [], retire: [], skills: [], notes: '同步冲突待裁决' },
           disputes: applied.disputes,
-          projectRoot: '',
+          projectRoot,
           at: Date.now(),
           label: '记忆同步冲突（' + id + '）',
         }).catch((error: unknown) => {

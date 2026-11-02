@@ -61,7 +61,7 @@ import type { ExtractionRoute } from './extract.js'
 import { decodeSessionLog, findSessionLogs, parseSessionLog, planWindows, zstdAvailable } from './backfill.js'
 import type { BackfillLog, BackfillWindow } from './backfill.js'
 import { backgroundDelayMs, cappedBackoffMs, extractionDelayMs, formatDelay, parsePeakHours, peakDelayMs } from './schedule.js'
-import { CONSOLIDATE_PRESET_ID, adjudicateDisputes, applyPlan, applyVerdicts, classifyPlan, clearPendingPlan, conflictDisputes, denyToolsFor, mergePendingPlan, proposalIsFresh, readPendingPlan, runConsolidation, runConsolidationDirect, selectForConsolidation, writePendingPlan } from './consolidate.js'
+import { CONSOLIDATE_PRESET_ID, adjudicateDisputes, applyPlan, applyVerdicts, classifyPlan, clearPendingPlan, conflictDisputes, denyToolsFor, hasApplicableFragment, mergePendingPlan, proposalIsFresh, readPendingPlan, runConsolidation, runConsolidationDirect, selectForConsolidation, writePendingPlan } from './consolidate.js'
 import type { ConsolidateRequest, ConsolidationDispute, DisputeVerdict } from './consolidate.js'
 import { discardDraft, listDrafts, promote, writeDraft } from './skills.js'
 import type { ConsolidationPlan, ConsolidationTarget, SubagentSeam } from './consolidate.js'
@@ -811,6 +811,14 @@ export class MemoriesRuntime {
     if (row === undefined) return undefined
     const root = pending.projectRoot.length > 0 ? pending.projectRoot : undefined
     if (decision === 'accept') {
+      // A row staged without its plan fragment (older sync conflicts wrote an
+      // empty plan) would make applyPlan succeed on nothing, and the code below
+      // would then drop the row and report a rewrite — a lie that also destroys
+      // the only record the question existed. Refuse and keep the row instead.
+      if (!hasApplicableFragment(pending.plan, row)) {
+        this.log.warn('dsh-memories: the decision for %s has no stored plan fragment, so nothing was applied', id)
+        return 'This decision carries no stored change (the proposal fragment is missing), so there is nothing to apply. Keep it as it is instead.'
+      }
       const upsert = pending.plan.upserts.find((item) => item.id === id)
       const retire = pending.plan.retire.includes(id)
       const entries = await this.scopeEntries(root)
@@ -926,7 +934,11 @@ export class MemoriesRuntime {
     const lines: string[] = []
     const pending = await readPendingPlan(this.store.memoriesDir).catch(() => undefined)
     if (pending !== undefined) {
-      lines.push(`Pending consolidation proposal for ${pending.label}: ${pending.plan.upserts.length} to write, ${pending.plan.retire.length} to retire — review with /memories plan, then /memories apply or /memories reject.`)
+      // The counts alone described the plan, not the questions: a sync conflict
+      // staged 17 rows with an empty plan, so the banner read "0 to write, 0 to
+      // retire" and nobody could see that 17 decisions were waiting.
+      const needDecision = pending.disputes.length > 0 ? `, ${pending.disputes.length} need you` : ''
+      lines.push(`Pending consolidation proposal for ${pending.label}: ${pending.plan.upserts.length} to write, ${pending.plan.retire.length} to retire${needDecision} — review with /memories plan, then /memories apply or /memories reject.`)
     }
     // `dshHome` filters out drafts whose promoted copy is byte-identical: the
     // banner used to report already-promoted skills as pending forever.

@@ -933,6 +933,26 @@ export function classifyPlan(
   }
 }
 
+/**
+ * Whether one waiting row still carries the plan fragment that applies it.
+ *
+ * The rows and the plan are stored side by side, so a row can outlive its
+ * fragment: a sync conflict used to stage `upserts: []` beside real questions,
+ * and applying that empty plan "succeeded" without writing anything, after
+ * which the row — the only visible trace — was dropped. A row that has no
+ * matching upsert (rewrite) or retire entry has nothing to apply, and saying so
+ * is the only honest answer.
+ *
+ * @param plan - the plan stored with the pending rows.
+ * @param row - the decision a person is answering.
+ * @returns true when applying this row is more than a no-op.
+ */
+export function hasApplicableFragment(plan: ConsolidationPlan, row: ConsolidationDispute): boolean {
+  return row.action === 'retire'
+    ? plan.retire.includes(row.id)
+    : plan.upserts.some((item) => item.id === row.id)
+}
+
 /** Apply one plan against a store-like target. */
 export interface ConsolidationTarget {
   /** Write one entry, keeping `keepId` when given. */
