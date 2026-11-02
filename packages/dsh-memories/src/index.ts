@@ -61,7 +61,7 @@ import type { ExtractionRoute } from './extract.js'
 import { decodeSessionLog, findSessionLogs, parseSessionLog, planWindows, zstdAvailable } from './backfill.js'
 import type { BackfillLog, BackfillWindow } from './backfill.js'
 import { backgroundDelayMs, cappedBackoffMs, extractionDelayMs, formatDelay, parsePeakHours, peakDelayMs } from './schedule.js'
-import { CONSOLIDATE_PRESET_ID, adjudicateDisputes, applyPlan, applyVerdicts, classifyPlan, clearPendingPlan, conflictDisputes, denyToolsFor, hasApplicableFragment, mergePendingPlan, proposalIsFresh, readPendingPlan, runConsolidation, runConsolidationDirect, selectForConsolidation, writePendingPlan } from './consolidate.js'
+import { CONSOLIDATE_PRESET_ID, adjudicateDisputes, applyPlan, applyVerdicts, classifyPlan, clearPendingPlan, conflictDisputes, denyToolsFor, hasApplicableFragment, mergePendingPlan, pinExistingScopes, proposalIsFresh, readPendingPlan, runConsolidation, runConsolidationDirect, selectForConsolidation, writePendingPlan } from './consolidate.js'
 import type { ConsolidateRequest, ConsolidationDispute, DisputeVerdict } from './consolidate.js'
 import { discardDraft, listDrafts, promote, writeDraft } from './skills.js'
 import type { ConsolidationPlan, ConsolidationTarget, SubagentSeam } from './consolidate.js'
@@ -2750,18 +2750,28 @@ export class MemoriesRuntime {
         this.consolidateSkip = `only ${entries.length} memories are eligible for a pass`
         return undefined
       }
-      const plan = await this.runConsolidationPass(parent, entries, root)
-      if (plan === undefined) {
+      const proposed = await this.runConsolidationPass(parent, entries, root)
+      if (proposed === undefined) {
         this.state.deleteJob(CONSOLIDATE_JOB)
         this.consolidateSkip = 'the pass produced no plan; the warn line above names the reason'
         return undefined
       }
+      // A scope is where a memory is injected from, so it is not something a pass
+      // may change: existing memories keep the scope they live in, and only new
+      // ones choose one. Anything the pass wanted to move is logged, never asked —
+      // and the pinned plan is what gets staged, so accepting a row cannot write a
+      // second copy under the proposed scope.
+      const { plan, pinned } = pinExistingScopes(proposed, entries)
+      for (const move of pinned) {
+        this.log.decision('dsh-memories: ignored a proposed scope move for %s (%s → %s): an existing memory keeps its scope',
+          move.id, move.proposed, move.kept)
+      }
       // The pass runs unattended; what it may do unattended is the question
       // `classifyPlan` answers. Sharpening wording, folding duplicates and
       // retiring memories nothing ever read are reversible and visible. Killing
-      // the memory a session used, rewriting what a person typed, moving a fact
-      // between scopes, or dropping the paths that made a body checkable are not
-      // — those wait for a person, and they are the only thing that waits.
+      // the memory a session used, rewriting what a person typed, or dropping the
+      // paths that made a body checkable are not — those wait for a person, and
+      // they are the only thing that waits.
       const { safe: classified, disputes: classifiedDisputes } = classifyPlan(plan, { entries })
       // Contradictions are reported, not resolved: the merge child may say which
       // statement it believes, but only the user knows which one they still mean.
@@ -3193,7 +3203,7 @@ export class MemoriesRuntime {
    * is unsure, and it is exactly the outcome of a re-read.
    *
    * Hard stops are filtered out here and never reach the child: permanence,
-   * a person's own words, and a scope move are promises, not judgements.
+   * a person's own words are promises, not judgements.
    *
    * @param parent - the agent whose seam runs the child.
    * @param plan - the pass's full plan, for the bodies a rewrite would apply.
@@ -3215,7 +3225,7 @@ export class MemoriesRuntime {
     if (!this.settings.autoDecide) return flagged
     const adjudicable = flagged.filter((dispute) => dispute.hard !== true)
     if (adjudicable.length === 0) {
-      this.log.decision('dsh-memories: %d decision(s) are promises (permanent / written by a person / scope move), so they wait for a person', flagged.length)
+      this.log.decision('dsh-memories: %d decision(s) are promises (permanent / written by a person), so they wait for a person', flagged.length)
       return flagged
     }
     if (this.backgroundPaused()) {

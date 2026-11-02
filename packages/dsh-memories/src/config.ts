@@ -466,7 +466,7 @@ export const Config = z.object({
    * where automation can be added safely, because the alternative to a decision is
    * not "safer", it is "nothing ever happens".
    */
-  autoDecide: z.boolean().default(true).description('Let an AI adjudicate the consolidation changes that would otherwise wait for you: it is asked only whether the change loses information, and answers accept or reject with a confidence. Permanent and user-written memories, and any scope move, still wait for you. Off sends everything to the 待裁决 panel.').volatile(),
+  autoDecide: z.boolean().default(true).description('Let an AI adjudicate the consolidation changes that would otherwise wait for you: it is asked only whether the change loses information, and answers accept or reject with a confidence. Permanent and user-written memories still wait for you. Off sends everything to the 待裁决 panel.').volatile(),
   /** Confidence floor under which an AI verdict is treated as "no answer". */
   autoDecideMinConfidence: z.number().default(0.7).description('Below this confidence an AI adjudication is ignored and the item stays in 待裁决. 0 accepts every verdict; 1 accepts none unless certain.').volatile(),
   /** Explicit consolidation provider route; empty falls back to the extraction route. */

@@ -184,7 +184,7 @@ function diffTokens(before, after) {
   return runs
 }
 
-/** The scope sentence consolidation puts in a rewrite reason. */
+/** The scope sentence older proposals put in a rewrite reason (no longer produced). */
 const SCOPE_REASON = /^作用域要从\s*(\S+)\s*改成\s*(\S+)$/u
 
 /**

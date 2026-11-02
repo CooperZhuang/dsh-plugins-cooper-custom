@@ -14,7 +14,7 @@ import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, LlmRuntime } from '@deepseek-ai/dsh-llm'
-import { CONSOLIDATE_SYSTEM, classifyPlan, mergePendingPlan, parsePlan } from './consolidate.js'
+import { CONSOLIDATE_SYSTEM, classifyPlan, mergePendingPlan, parsePlan, pinExistingScopes } from './consolidate.js'
 import type { ConsolidationDispute, ConsolidationPlan } from './consolidate.js'
 import { formatEntry, parseEntry, slugify } from './storage.js'
 import { MemorySync, parseClockTime } from './sync.js'
@@ -91,10 +91,11 @@ export function applyConflictPlan(reply: string, oursText: string, theirsText: s
   if (plan === undefined || plan.upserts.length !== 1) return { disputes: [] }
   // A conflict is two revisions of ONE file, and the merge is written back to
   // that same path: scope is part of the path, so the merge cannot move the
-  // entry between scopes. Pinning the scope before classification keeps a model
-  // that echoed the other revision's scope from turning a merge into a scope
-  // move — the one edit the rules must never take unattended.
-  const pinned: ConsolidationPlan = { ...plan, upserts: plan.upserts.map((item) => ({ ...item, scope: ours.scope })) }
+  // entry between scopes. Pinning is the same rule every consolidation pass
+  // follows, and it also keeps a model that echoed the other revision's scope
+  // from staging a "move" that would write a second copy instead of editing the
+  // file both machines already share.
+  const pinned: ConsolidationPlan = pinExistingScopes(plan, [ours]).plan
   const classified = classifyPlan(pinned, { entries: [ours] })
   // The fragment travels with the rows so accepting one is a plain write.
   if (classified.disputes.length > 0) return { disputes: classified.disputes, upserts: pinned.upserts }

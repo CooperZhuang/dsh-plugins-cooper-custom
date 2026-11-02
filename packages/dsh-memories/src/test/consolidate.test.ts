@@ -22,6 +22,7 @@ import {
   applyPlan,
   hasApplicableFragment,
   parsePlan,
+  pinExistingScopes,
   proposalIsFresh,
   readPendingPlan,
   renderConsolidationInput,
@@ -347,7 +348,7 @@ test('classification applies what is reversible and asks about what is not', () 
   assert.equal(halved.disputes.length, 1)
   assert.match(halved.disputes[0]?.reason ?? '', /不到原来的一半/u)
 
-  // A person's own words, a pin, and a move between scopes are not the pass's call.
+  // A person's own words and a pin are not the pass's call.
   for (const [previous, expected] of [
     [entry({ id: 'a', title: 'A', body: quoted, source: 'user' }), /人手写/u],
     [entry({ id: 'a', title: 'A', body: quoted, pinned: true }), /置顶/u],
@@ -356,8 +357,12 @@ test('classification applies what is reversible and asks about what is not', () 
     assert.equal(result.disputes.length, 1)
     assert.match(result.disputes[0]?.reason ?? '', expected)
   }
+
+  // A scope is pinned, not asked about: the rewrite still applies, in the scope
+  // the memory already lives in, and the move creates no row for a person.
   const moved = classifyPlan(plan([rewrite(`${quoted} sharpened`, { scope: 'project' }) as never]), { entries: [base] })
-  assert.match(moved.disputes[0]?.reason ?? '', /作用域/u)
+  assert.equal(moved.disputes.length, 0)
+  assert.equal(moved.safe.upserts[0]?.scope, 'global', 'an existing memory keeps its scope')
 
   // Retirement: nothing ever read it is safe; something a session used is not.
   assert.equal(classifyPlan(plan([], ['a']), { entries: [base] }).safe.retire.length, 1)
@@ -436,4 +441,41 @@ test('applyPlan restores what it changed when a write fails', async () => {
   }, store.api, undefined, { entries: [first] }), /write exploded/u)
   // The first write is rolled back to the snapshot's content.
   assert.equal(store.get('global', 'a')?.body, 'original a')
+})
+
+test('an existing memory is pinned to its own scope; only new memories choose one', () => {
+  const existing = entry({ id: 'keep', title: 'Keep', body: 'machine fact about C:/Code and the PC' })
+  const plan: ConsolidationPlan = {
+    upserts: [
+      // The model read a path in the body and proposed project scope; the body
+      // rewrite itself is still wanted, so it is kept and re-scoped to global.
+      { id: 'keep', scope: 'project', kind: 'fact', title: 'Keep', body: 'machine fact about C:/Code and the PC, reworded', tags: [] },
+      // A brand-new memory has no scope to keep, so the pass may place it.
+      { id: null, scope: 'project', kind: 'fact', title: 'New', body: 'this workspace only', tags: [] },
+    ],
+    retire: [],
+    skills: [],
+    notes: '',
+  }
+  const { plan: pinned, pinned: moves } = pinExistingScopes(plan, [existing])
+  assert.deepEqual(moves, [{ id: 'keep', proposed: 'project', kept: 'global' }])
+  assert.equal(pinned.upserts[0]?.scope, 'global', 'the existing memory stays where it lives')
+  assert.match(pinned.upserts[0]?.body ?? '', /reworded/u, 'the rewrite itself is untouched')
+  assert.equal(pinned.upserts[1]?.scope, 'project', 'a new memory keeps the proposed scope')
+  // Already-honest plans come back as the same object, so the common path costs nothing.
+  const honest: ConsolidationPlan = { upserts: [{ id: 'keep', scope: 'global', kind: 'fact', title: 'Keep', body: 'x', tags: [] }], retire: [], skills: [], notes: '' }
+  const kept = pinExistingScopes(honest, [existing])
+  assert.equal(kept.plan, honest)
+  assert.deepEqual(kept.pinned, [])
+
+  // One id can live in both scopes; the proposal names the copy to pin, so a
+  // project copy stays project even when a global copy shares the id.
+  const twins = [entry({ id: 'twin', title: 'Twin', body: 'global copy' }), entry({ id: 'twin', scope: 'project', title: 'Twin', body: 'project copy' })]
+  const twinPlan: ConsolidationPlan = {
+    upserts: [{ id: 'twin', scope: 'project', kind: 'fact', title: 'Twin', body: 'project copy, reviewed', tags: [] }],
+    retire: [], skills: [], notes: '',
+  }
+  const twinsResult = pinExistingScopes(twinPlan, twins)
+  assert.equal(twinsResult.pinned.length, 0, 'naming the copy it lives in is not a move')
+  assert.equal(twinsResult.plan.upserts[0]?.scope, 'project')
 })

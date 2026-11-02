@@ -134,7 +134,7 @@ const FIELDS = [
   {
     field: 'autoDecide', kind: 'boolean',
     label: { zh: '合并争议交给 AI 裁决', en: 'Let an AI adjudicate merge disputes' },
-    hint: { zh: '合并里那些「只是判断、不是承诺」的变更（例如这条被读过 2 次就想退役、改写后正文变短）改由一次受限子代理裁决：它只回答"有没有丢信息"，答 accept 或 reject 并给置信度。永久保留、人手写、跨作用域搬移三类仍然等你。关掉则全部进「待裁决」。', en: 'Changes blocked only because they are a judgement rather than a promise are adjudicated by one tool-free child that answers accept or reject with a confidence. Permanent, user-written and scope-moving items still wait for you. Off sends everything to the panel.' },
+    hint: { zh: '合并里那些「只是判断、不是承诺」的变更（例如这条被读过 2 次就想退役、改写后正文变短）改由一次受限子代理裁决：它只回答"有没有丢信息"，答 accept 或 reject 并给置信度。永久保留、人手写两类仍然等你（作用域不归合并改，已有记忆钉在原作用域）。关掉则全部进「待裁决」。', en: 'Changes blocked only because they are a judgement rather than a promise are adjudicated by one tool-free child that answers accept or reject with a confidence. Permanent and user-written items still wait for you; a merge never moves a memory between scopes. Off sends everything to the panel.' },
   },
   {
     field: 'autoDecideMinConfidence', kind: 'number', min: 0, max: 1, step: 0.05,
