@@ -202,7 +202,7 @@ function memoryContext(entries, loops, question) {
 async function answer(question, context) {
   const material = context.trim().length === 0 ? '（无资料）' : context
   return await chat([
-    { role: 'system', content: '只依据下面提供的资料回答问题；资料里没有的信息就回答「不知道」。资料可能提到多个项目，问题里的「这个项目」指资料中与问题最相关的那个项目。回答一两句话，不要复述资料。' },
+    { role: 'system', content: '只依据下面提供的资料回答问题；资料里没有的信息就回答「不知道」。资料可能提到多个项目，问题里的「这个项目」指资料中与问题最相关的那个项目。回答要完整：问题问到的每件事都要答到，资料里与该问题相关的条件或替代做法也要一并说明；简短直接，不要复述资料。' },
     { role: 'user', content: `资料：\n${material}\n\n问题：${question}` },
   ], { numPredict: 200 })
 }
@@ -216,7 +216,7 @@ async function judge(scenario, answerText) {
       必需点: scenario.required,
       禁止点: scenario.forbidden,
       回答: answerText,
-      要求: '回答表达了全部必需点（意思对即可，不要求原词）且没有表达禁止点，才算通过。禁止点只有在回答把它当作本问题的答案或当前事实来肯定时才算违反；回答把它作为例外、条件或对照提起（比如回答「CI 里仍可用 3000」并不违反「本地必须用 3000」）不算违反；回答明确否定禁止点或给出相反说法（比如禁止点是「改配置后测的」，回答说是「旧配置下测的」）更不算违反。回答「不知道」不算通过。只返回 {"pass":true|false,"reason":"一句话"}。',
+      要求: '判通过的两条规则。一、必需点：回答必须表达每一条（意思对即可，不要求原词）。二、禁止点：只有回答把禁止点描述的做法/说法当作正确或当前事实来支持时，才算“表达禁止点”。回答明确反对、劝阻、否定它，或说它不成立，都不算违反；判断时只看回答的主张，不要因为出现相同词语就判违反。例如禁止点「可以直接 force-push」，回答「不要直接 force-push，先问我」不算违反；禁止点「双击结果可以当准」，回答「不要相信双击结果」不算违反。禁止点在回答里作为例外、条件或对照被提起（例如回答「CI 里仍可用 3000」并不违反「本地必须用 3000」）也不算违反。回答「不知道」不算通过。只返回 {"pass":true|false,"reason":"一句话"}。',
     }) },
   ], { json: true, numPredict: 200 })
   try {
@@ -251,11 +251,22 @@ async function anchorGate() {
   // words fails a correct answer. This anchor pins the negation rule.
   const opposite = await judge({ question: '这些延迟数字是什么配置下测的？', required: ['旧限流配置'], forbidden: ['改限流后的配置'] },
     '这些数字是旧限流配置下测的。')
+  // And a partial answer must fail: the round-3 open-plan row failed both arms
+  // for omitting the second promise, and the judge has to be able to see that.
+  const partial = await judge({ question: '本地起服务和跑测试分别用什么？', required: ['起服务用 4567', '测试用 pnpm test'], forbidden: [] },
+    '起服务用 4567。')
+  // A negated prohibition must pass. Round 4 failed two correct answers
+  // ("不要相信双击结果", "禁止直接在 main 上改") because the judge only saw the
+  // forbidden point's words; this anchor pins the rule the prompt states.
+  const negated = await judge({ question: '可以直接 force-push 吗？', required: ['不能直接 force-push'], forbidden: ['可以直接 force-push'] },
+    '不能，不要直接 force-push，推之前先问我。')
   return {
-    pass: good.pass === true && bad.pass === false && opposite.pass === true,
+    pass: good.pass === true && bad.pass === false && opposite.pass === true && partial.pass === false && negated.pass === true,
     good: good.pass,
     bad: bad.pass,
     opposite: opposite.pass,
+    partial: partial.pass,
+    negated: negated.pass,
   }
 }
 
@@ -273,7 +284,7 @@ async function regrade(file) {
   if (report.bankHash !== expected) throw new Error('bank changed since that run: hash mismatch, refusing to re-grade')
   const byId = new Map(BANK.map((scenario) => [scenario.id, scenario]))
   const anchor = await anchorGate()
-  if (!anchor.pass) console.log(`  WARNING: judge anchor pair failed (good=${anchor.good}, bad=${anchor.bad}, opposite=${anchor.opposite}); grades are suspect`)
+  if (!anchor.pass) console.log(`  WARNING: judge anchor pair failed (good=${anchor.good}, bad=${anchor.bad}, opposite=${anchor.opposite}, partial=${anchor.partial}, negated=${anchor.negated}); grades are suspect`)
   console.log(`re-grade ${report.rows.length} rows from ${file}`)
   for (const row of report.rows) {
     const scenario = byId.get(row.id)
@@ -283,7 +294,7 @@ async function regrade(file) {
       row[arm] = { ...row[arm], pass: verdict.pass, reason: verdict.reason }
     }
   }
-  report.judge = { version: 'v3-negation', anchor }
+  report.judge = { version: 'v4-negation-prohibition', anchor }
   report.regradedFrom = file
   for (const arm of ['memory', 'rag', 'closed']) {
     report.arms[arm] = percentage(report.rows.filter((row) => row[arm].pass).length, report.rows.length)
@@ -310,12 +321,21 @@ async function regrade(file) {
 async function main() {
   const regradeFile = argValue('--regrade')
   if (regradeFile !== undefined) return await regrade(regradeFile)
-  const scenarios = BANK.slice(0, Math.max(1, LIMIT ?? BANK.length))
+  const only = argValue('--only')
+  const slice = BANK.slice(0, Math.max(1, LIMIT ?? BANK.length))
+  const scenarios = only === undefined ? slice : slice.filter((scenario) => only.split(',').includes(scenario.id))
+  if (scenarios.length === 0) throw new Error('--only matched no scenario')
   const hash = bankHash(scenarios)
   await mkdir(DATA, { recursive: true })
-  // A fresh store per run: memory from a previous run would change the recipe.
-  await rm(STORE_DIR, { recursive: true, force: true })
-  await mkdir(STORE_DIR, { recursive: true })
+  // `--reuse-store` keeps the extraction of a previous run and re-runs only the
+  // answer and judge steps. Use it when the variable under test is the answer
+  // prompt or the judge, so extraction sampling noise cannot move the numbers.
+  const reuseStore = process.argv.includes('--reuse-store')
+  if (!reuseStore) {
+    // A fresh store per run: memory from a previous run would change the recipe.
+    await rm(STORE_DIR, { recursive: true, force: true })
+    await mkdir(STORE_DIR, { recursive: true })
+  }
 
   // One store per scenario, the way a real workspace has its own project scope.
   // The previous run pooled all scenarios into one project scope, and the memory
@@ -328,7 +348,30 @@ async function main() {
 
   /* ---------------------------------------------------------- extraction --- */
   const extraction = { drafts: 0, stored: 0, unsupported: 0, empty: 0, loops: 0 }
-  for (const [index, scenario] of scenarios.entries()) {
+  if (reuseStore) {
+    extraction.drafts = null
+    extraction.unsupported = null
+    for (const [index, scenario] of scenarios.entries()) {
+      const dir = join(STORE_DIR, scenario.id)
+      const root = join(PROJECT_ROOT, scenario.id)
+      const store = new MemoryStore(dir)
+      let project
+      try {
+        project = await store.list('project', root, { fresh: true })
+      } catch {
+        throw new Error(`--reuse-store was requested but ${dir} is missing; run without it first`)
+      }
+      const global = await store.list('global', undefined, { fresh: true })
+      const ledger = await readLoops(dir)
+      const open = ledger.loops.filter((loop) => loop.state === 'open').length
+      contexts.set(scenario.id, { store, root, loops: ledger.loops })
+      extraction.stored += project.length + global.length
+      extraction.empty += project.length + global.length === 0 ? 1 : 0
+      extraction.loops += open
+      console.log(`  reuse ${index + 1}/${scenarios.length} ${scenario.id}: ${project.length} project + ${global.length} global entries, ${open} loop(s)`)
+    }
+    console.log(`  reused store · ${extraction.stored} entries, ${extraction.loops} open loops (extraction counters n/a)`)
+  } else for (const [index, scenario] of scenarios.entries()) {
     const dir = join(STORE_DIR, scenario.id)
     const root = join(PROJECT_ROOT, scenario.id)
     const store = new MemoryStore(dir)
@@ -383,8 +426,9 @@ async function main() {
     usage: { ...usage, estimatedCny: Number(cost.toFixed(3)) },
     bankHash: hash,
     scenarios: scenarios.length,
-    judge: { version: 'v3-negation', anchor },
+    judge: { version: 'v4-negation-prohibition', anchor },
     store: 'per-scenario',
+    reusedStore: reuseStore,
     extraction,
     arms: {},
     paired: {},
@@ -407,7 +451,9 @@ async function main() {
   console.log(`rag     ${report.arms.rag}`)
   console.log(`closed  ${report.arms.closed}`)
   console.log(`paired: ${report.paired.memoryVsClosed}; ${report.paired.memoryVsRag}; ${report.paired.ragVsClosed}`)
-  console.log(`extraction: ${extraction.stored} stored / ${extraction.drafts} candidates, ${extraction.unsupported} rejected by the quote check, ${extraction.empty} scenarios stored nothing`)
+  console.log(extraction.drafts === null
+    ? `extraction: reused store (${extraction.stored} entries, ${extraction.loops} open loops)`
+    : `extraction: ${extraction.stored} stored / ${extraction.drafts} candidates, ${extraction.unsupported} rejected by the quote check, ${extraction.empty} scenarios stored nothing`)
   const byCategory = new Map()
   for (const row of rows) {
     const bucket = byCategory.get(row.category) ?? { total: 0, memory: 0, rag: 0, closed: 0 }
@@ -436,7 +482,9 @@ async function main() {
     '',
     `配对：${report.paired.memoryVsClosed}; ${report.paired.memoryVsRag}; ${report.paired.ragVsClosed}`,
     '',
-    `抽取：${extraction.stored} 条入库 / ${extraction.drafts} 个候选；引文校验拒绝 ${extraction.unsupported} 个；${extraction.empty} 个场景一条没存下；新开 ${extraction.loops} 条 open loop。`,
+    ...extraction.drafts === null
+      ? [`抽取：复用上一轮 store（${extraction.stored} 条、${extraction.loops} 条 open loop），本轮没有重新抽取。`]
+      : [`抽取：${extraction.stored} 条入库 / ${extraction.drafts} 个候选；引文校验拒绝 ${extraction.unsupported} 个；${extraction.empty} 个场景一条没存下；新开 ${extraction.loops} 条 open loop。`],
     `判分：judge v2（禁止点例外语义），锚点自检 ${anchor.pass ? '通过' : '未通过'}（good=${anchor.good}, bad=${anchor.bad}）。`,
     '',
     '| 场景 | 类别 | memory | rag | closed |',
