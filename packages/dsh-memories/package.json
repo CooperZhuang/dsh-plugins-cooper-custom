@@ -62,7 +62,8 @@
     "eval:acceptance": "node scripts/eval-acceptance.mjs",
     "eval:recall-log": "node scripts/eval-recall-log.mjs",
     "report": "node scripts/report.mjs",
-    "prepare": "npm run build"
+    "prepare": "npm run build",
+    "eval:e2e": "node bench/e2e/run.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.5 || ^4.0.6-alpha.1",

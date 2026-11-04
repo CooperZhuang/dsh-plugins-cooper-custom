@@ -8,7 +8,10 @@ node bench/run-bench.mjs                # 四条对照臂：出厂打分 / BM25 
 node bench/ablate.mjs                   # 复刻打分函数后逐项拆解：idf、长度、饱和、注入排序
 node bench/analyze.mjs                  # 字段贡献、闸门拒绝原因、按 kind 的召回
 node bench/sensitivity.mjs              # BM25 的 k1×b×字段重复 64 格敏感性
+node bench/e2e/run.mjs                  # 端到端三臂（记忆 / 整段原文 / 闭卷），见 e2e/README.md
 ```
+
+前五个是**检索排名**基准；`e2e/` 是**答案**基准——记忆有没有让回答变对，闭卷能不能猜中。
 
 `bench/data/` 全部由记忆库派生（含用户私事），`sensitivity.md` 引用了真实条目原文，
 两者都在 `.gitignore` 里，不进仓库。
