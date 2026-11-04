@@ -11,6 +11,21 @@
  */
 import type { ContextFormed } from '@deepseek-ai/dsh-llm'
 
+/**
+ * Since 0.2.2-rc.1 `GenerateOptions.purpose` is `LlmRequestPurpose`, derived
+ * from `LlmRequestPurposeMap`, which the kernel ships empty for producer
+ * packages to augment (its own `dsh-compaction-basic` passes the runtime string
+ * from plain JS). Memory's auxiliary calls have been tagged `'compaction'`
+ * since 0.1.x — the DeepSeek adapter maps that to
+ * `x-deepseek-harness-compact: 1` — so declare the key here rather than drop
+ * the tag the requests have always carried.
+ */
+declare module '@deepseek-ai/dsh-llm' {
+  interface LlmRequestPurposeMap {
+    compaction: true
+  }
+}
+
 /** A memory scope: cross-project (`global`) or workspace-bound (`project`). */
 export type MemoryScope = 'global' | 'project'
 

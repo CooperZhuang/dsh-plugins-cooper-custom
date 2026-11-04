@@ -1035,7 +1035,7 @@
         ctx.effect(
           () => () => {
             try {
-              headerButtonDispose?.dispose?.()
+              headerButtonDispose?.()
             } catch {
               /* 卸载失败不影响其它入口 */
             }
@@ -1100,8 +1100,8 @@
               )
               return () => {
                 try {
-                  disposeTitle?.dispose?.()
-                  disposeBody?.dispose?.()
+                  disposeTitle?.()
+                  disposeBody?.()
                   disposeDefinition?.()
                 } catch {
                   /* 卸载失败不影响其它入口 */
@@ -1674,8 +1674,8 @@
               )
               return () => {
                 try {
-                  disposeTitle?.dispose?.()
-                  disposeBody?.dispose?.()
+                  disposeTitle?.()
+                  disposeBody?.()
                   disposeDefinition?.()
                 } catch {
                   /* 卸载失败不影响其它入口 */

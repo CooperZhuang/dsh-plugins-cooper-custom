@@ -121,8 +121,15 @@ if (module.inject.includes('settings')) throw new Error('the settings domain has
 const plugin = ctx.plugin(module, config)
 await new Promise((settle) => setTimeout(settle, 200))
 
-/** What the plugin is running with: its resolved entry config, refs and all. */
-const mounted = [...(ctx.registry.get(module)?.fibers ?? [])][0]?.config
+/**
+ * What the plugin is running with: its resolved entry config, refs and all.
+ *
+ * Cordis 4.1.0 split the fiber's two configs apart: `config` now holds the raw
+ * plugin input, while the resolved object handed to `apply` — the one whose
+ * volatile fields are live references — is the public `effectiveConfig` getter
+ * (the Loader reads it the same way in `_commitVolatile`).
+ */
+const mounted = [...(ctx.registry.get(module)?.fibers ?? [])][0]?.effectiveConfig
 
 /**
  * Commit a tunable change the way the Loader does.

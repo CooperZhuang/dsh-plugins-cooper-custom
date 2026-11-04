@@ -16,7 +16,7 @@
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -29,17 +29,17 @@ function check(ok, label) {
 }
 
 // ---- 1. 入口能加载，形状对 ----
-const main = await import(join(root, "lib", "index.js"));
+const main = await import(pathToFileURL(join(root, "lib", "index.js")).href);
 check(main.name === "dsh-purge", `主入口 name=${main.name}`);
 check(Array.isArray(main.inject) && main.inject.join(",") === "systemPrompt,tools", `主入口 inject=${main.inject?.join(",")}`);
 check(typeof main.apply === "function", "主入口导出 apply()");
 check(typeof main.default === "object" && main.default?.name === "dsh-purge", "主入口有 default 插件对象");
 
-const redteam = await import(join(root, "lib", "redteam", "index.js"));
+const redteam = await import(pathToFileURL(join(root, "lib", "redteam", "index.js")).href);
 check(redteam.name === "dsh-purge-redteam", `演练台入口 name=${redteam.name}`);
 check(typeof redteam.apply === "function", "演练台入口导出 apply()");
 
-const composition = await import(join(root, "lib", "redteam", "preset-composition.js"));
+const composition = await import(pathToFileURL(join(root, "lib", "redteam", "preset-composition.js")).href);
 check(typeof composition.readPresetDefinition === "function", "预设解析器可用");
 
 // ---- 2. 随包预设符合 0.2.1-rc.2 的子代理约定 ----

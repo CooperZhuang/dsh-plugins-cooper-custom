@@ -52,6 +52,19 @@ export function runRtk({ command, args, input, timeoutMs, signal, maxOutputBytes
 
     function killGroup() {
       if (child.pid === undefined) return
+      if (process.platform === 'win32') {
+        // Windows has no process-group signals: `process.kill(-pid)` throws, the
+        // child survives, and its open stdout pipe keeps this process alive after
+        // a timeout/abort (observed as the whole test file hanging). taskkill /T
+        // walks the tree, which is what `detached` was buying on POSIX.
+        try {
+          spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true })
+            .on('error', () => { /* already gone */ })
+        } catch {
+          // already gone
+        }
+        return
+      }
       try {
         process.kill(-child.pid, 'SIGKILL')
       } catch {

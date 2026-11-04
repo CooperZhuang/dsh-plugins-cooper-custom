@@ -6,13 +6,13 @@ DeepSeek Harness 自研插件集合。每个插件仍是独立的 npm 包（各�
 
 | 包 | 用途 | 内核基线 |
 |---|---|---|
-| `packages/dsh-memories` | 跨会话记忆：抽取、召回、反思层、persona、承诺台账、桌宠通知通道 | 0.2.2-alpha.2（peer 区间也覆盖 0.2.1-rc.x） |
-| `packages/dsh-rtk-slim` | 工具输出瘦身（长输出压缩进 spill，按需取回） | 0.2.2-alpha.2（peer 区间也覆盖 0.2.1-rc.x） |
-| `packages/dsh-purge` | 破甲 / 红队补丁（宿主文件补丁 + 预设 + Drill 控制台）；**未挂载**，启用要点 Apply | 0.2.2-alpha.2（补丁库已按 asar 解包树逐条核对，见 `packages/dsh-purge/docs/host-patch-audit-0.2.2.md`） |
-| `packages/dsh-session-toolbox` | 会话删除 + 会话归位（右栏两个页签 + `session_admin` / `session_move` 工具） | 0.2.2-alpha.2 / 0.2.1-rc.x |
+| `packages/dsh-memories` | 跨会话记忆：抽取、召回、反思层、persona、承诺台账、桌宠通知通道 | 0.2.2-rc.1（peer 区间也覆盖 0.2.1-rc.x） |
+| `packages/dsh-rtk-slim` | 工具输出瘦身（长输出压缩进 spill，按需取回） | 0.2.2-rc.1（peer 区间也覆盖 0.2.1-rc.x） |
+| `packages/dsh-purge` | 破甲 / 红队补丁（宿主文件补丁 + 预设 + Drill 控制台）；**未挂载**，启用要点 Apply | 0.2.2-rc.1（补丁库已按 rc.1 asar 树逐条核对，见 `packages/dsh-purge/docs/host-patch-audit-0.2.2-rc.1.md`） |
+| `packages/dsh-session-toolbox` | 会话删除 + 会话归位（右栏两个页签 + `session_admin` / `session_move` 工具） | 0.2.2-rc.1 / 0.2.1-rc.x |
 | `packages/dsh-session-store` | 会话存储共享库（项目目录 key 编解码、jsonl.zstd 帧、workspace registry）；被 toolbox 依赖 | 内核无关（v4 日志已实测） |
-| `packages/dsh-folder-path` | 粘贴文件夹路径而不是尝试上传（功能仅 Windows） | 0.2.2-alpha.2 |
-| `packages/dsh-open-in-dsh` | 「通过 DSH 打开」：Windows 资源管理器右键动词；macOS 是 Finder 快速操作 + QSpace「服务」项 + `dsh-open`（桌面外壳启动参数交接，不经插件 HTTP 路由） | 0.2.2-alpha.2（peer 区间也覆盖 0.2.1-rc.x） |
+| `packages/dsh-folder-path` | 粘贴文件夹路径而不是尝试上传（功能仅 Windows） | 0.2.2-rc.1 |
+| `packages/dsh-open-in-dsh` | 「通过 DSH 打开」：Windows 资源管理器右键动词；macOS 是 Finder 快速操作 + QSpace「服务」项 + `dsh-open`（桌面外壳启动参数交接，不经插件 HTTP 路由） | 0.2.2-rc.1（peer 区间也覆盖 0.2.1-rc.x） |
 
 ## 目录与历史
 
@@ -98,3 +98,13 @@ peer 区间改成「旧区间 `|| ^0.2.2-alpha.2`」（Cordis/Schemastery 同理
   3. 组合包/客户端导出路径：`dsh.client.inject|external|platform`、`dsh.bundle.patch`、`@deepseek-ai/dsh-client-ui-settings/client` 这些本仓库用到的入口在 2.0.21 的 `app.asar` 里都还在；
   4. 客户端 keyed 槽必须传 `options.key`、list 槽必须传 `options.id`（同 key/id 同 priority 再注册会 throw）——本仓库所有注册点都已满足。
 `dsh-purge` 的宿主文件补丁库已在 0.2.2-alpha.2 宿主（asar 解包树）上逐条核对：82 条中 7 条补了 0.2.2 锚点/路径，桌面壳 3 条因 2.0.21 架构重写标 optional，其余命中或既有失效（逐条矩阵见 `packages/dsh-purge/docs/host-patch-audit-0.2.2.md`）；插件保持未挂载（asar 解包→重启→宿主自检链路未验证）。
+
+2026-11-05 复核（桌面端 0.2.2-rc.1，2026-11-04 17:30 安装；内核包 `@deepseek-ai/dsh-*` 0.2.2-rc.1、Cordis 4.1.0、Schemastery 3.19.0、Cosmokit 1.9.0；数据来自 app.asar 内 331 个内核包的 package.json）：
+`dsh-memories` 的 devDependencies 钉到 0.2.2-rc.1 / Cordis 4.1.0 / Schemastery 3.19.0，`dsh-rtk-slim` 的 devDependencies 钉到 0.2.2-rc.1；peer 区间未改（`^0.2.1-rc.2 || ^0.2.2-alpha.2` 在 semver 预发布规则下仍满足 0.2.2-rc.1，Cordis `^4.0.5`、Schemastery `^3.18.5` 同理）。当版破坏面在本仓库的落点：
+  1. `dsh-llm` 的 `GenerateOptions.purpose` 从 `'compaction' | 'session-title'` 改成 `LlmRequestPurpose`（由内核留空的 `LlmRequestPurposeMap` 派生，注释写明"declared by their producer packages"）——唯一真实类型破坏，运行时零 diff。`dsh-memories/src/types.ts` 用 `declare module` 增补 `compaction: true`，保住 DeepSeek 适配器按 `purpose === 'compaction'` 加的 `x-deepseek-harness-compact: 1` 头；
+  2. Cordis 4.1.0 的实质重构（`internal/config|update` 签名、`EventsService.register/unregister` 转 private、`Fiber.store→committed`、**`LoggerLevel` 里 INFO 与 WARN 数值互换**）本仓库零处使用；`activation-smoke.mjs` 改读 `fiber.effectiveConfig`（4.1.0 把 raw 输入留在 `fiber.config`，解析后、volatile 仍是 live 引用的那份在公开 getter 里）；
+  3. `dsh-agent` / `dsh-tools` / `dsh-session` / `dsh-home-paths` / `dsh-agent-preset` / `dsh-typert-protocol` 的 `.d.ts` 在 alpha.2↔rc.1 逐字节相同；`schemastery` / `cosmokit` 的 `lib/` 逐文件哈希相同；客户端 `slots` / `settings` / `locale` / `conversation` / `sidebar-right` / plugin-manager 的槽契约只有加法（`settings.section.icon`、`destination`/`flashes`/`menuTabs`、Menu 新 props），`keyed slot … requires options.key` 语义未变；
+  4. 各包复跑：`dsh-memories` tsc 0 错 + 424 pass（含远端新增的 e2e 用例）+ activation smoke OK；`dsh-session-toolbox` 68、`dsh-session-store` 41、`dsh-folder-path` 28、`dsh-open-in-dsh` 39、`dsh-rtk-slim` 54 + typecheck；`dsh-purge` build-client 产物与提交版一致、smoke 27/27（顺带修掉 Windows 上 `node scripts/smoke.mjs` 用 ESM 绝对路径 import 报 `ERR_UNSUPPORTED_ESM_URL_SCHEME`，改用 `pathToFileURL`）。
+`dsh-purge` 补丁库在 0.2.2-rc.1 asar 上重核：82 条里只有 #17 `FS_OBSERVATION_INTENT_FREE` 真失配（rc.1 的 `editIntent` 改委托 `requirePresent(target, actor, "edit")`，旧锚点只命中 writeIntent，状态会从 pending 变 skipped 的假阳性），已补 rc.1 锚点变体并保留旧回退；桌面壳 #45/#83 因 rc.1 恢复 electron-updater / DesktopHostProcess close 处理而重新命中，#82 `DSH_PROFILE` 兜底机制在 rc.1 已消失、建议上游退役。全量 apply 模拟：59 条规则 / 50 个文件 / 83 处，与 alpha.2 基线一致，apply 后 0 pending（逐条矩阵见 `packages/dsh-purge/docs/host-patch-audit-0.2.2-rc.1.md`）。
+另修一处**非 rc.1 引入**的旧缺陷：`dsh-session-toolbox` 客户端把 `ctx.slots.inject()` 的返回值当 `{ dispose }` 调用（该 API 返回的是 disposer 函数），真卸载/换注册路径上是空操作；已改成直接调用函数（`Fiber.dispose` 的 `nativeTabDispose` 保持原样）。
+客户端 UI 的**实际渲染**本轮只做了契约核对与宿主日志实测（memories remote namespace、session-toolbox 两条 HTTP 路由、easyrewrite 浏览器半边在 rc.1 下都起来了），没有在浏览器里逐页点；profile 里的第三方插件保持现有版本（`dsh-easyrewrite` 不要升 3.x：现有补丁对 3.0.0 的 `lib/client.js` 失配且会触发 `ERR_PNPM_UNUSED_PATCH`）。

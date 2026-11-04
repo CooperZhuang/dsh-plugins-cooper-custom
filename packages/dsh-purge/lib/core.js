@@ -3232,6 +3232,21 @@ const NEW_TOOL_PATCHES = [
           '\t\treturn void 0;\n' +
           '\t}',
       },
+      {
+        // 0.2.2-rc.1：editIntent 改成委托 requirePresent(target, actor, "edit")，
+        // 旧 editIntent 锚点失配（writeIntent 锚点仍命中，所以状态只从 pending 变 skipped，
+        // 不清洗也不报错，edit 的 read-first 闸门会静默留着）。这里只放行 edit；
+        // deleteIntent 也走同一 helper，但旧规则本就只管 edit，不顺手扩大范围。
+        pattern:
+          '\teditIntent(target, actor) {\n' +
+          '\t\treturn this.requirePresent(target, actor, "edit");\n' +
+          '\t}',
+        replace:
+          '\teditIntent(target, actor) {\n' +
+          '\t\t// [dsh-purge] observation bypass: edits are unconditional (no read-first gate).\n' +
+          '\t\treturn void 0;\n' +
+          '\t}',
+      },
     ],
     markers: [
       "[dsh-purge] observation bypass: writes are unconditional",
@@ -4271,6 +4286,9 @@ const NEW_TOOL_PATCHES = [
     desc: "官方桌面升级安装已下载的新版本，不再重新打开旧的解开目录",
     file: "desktop-shell",
     surfaces: ["desktop"],
+    // 0.2.2-alpha.2 的桌面壳去掉过 electron-updater（全树无 quitAndInstall）；0.2.2-rc.1
+    // 桌面壳（resources/app.asar 的 lib/main.js）又内置 electron-updater + quitAndInstall，
+    // 锚点重新命中（调用点 5 个 tab，4 tab 锚点按子串命中，缩进不变），规则随宿主复活。
     optional: true,
     skipIfMarked: true,
     replacements: [
@@ -4729,6 +4747,8 @@ const NEW_TOOL_PATCHES = [
     surfaces: ["desktop"],
     // 0.2.2-alpha.2：桌面壳已没有 DesktopHostProcess 子进程 close 处理（宿主改由 lib/host.js
     // + NextDesktopRuntime 启动），锚点全树都不存在；标 optional 免得永远报 pattern_not_found。
+    // 0.2.2-rc.1：桌面壳又恢复 dsh-desktop-host 子进程与 exitPromise/close 处理，锚点重新命中；
+    // 仍保持 optional，桌面渠道版随时可能再换架构。
     optional: true,
     replacements: [
       {
@@ -5648,6 +5668,10 @@ const NEW_TOOL_PATCHES = [
     desc: "主进程兜底 DSH_PROFILE=desktop：双击 exe 从 explorer 继承 env 常缺 DSH_PROFILE → host 'cannot determine the boot profile' → dsh-purge 插件没 activate → inject 全断",
     file: "desktop-shell",
     surfaces: ["desktop"],
+    // 0.2.2-rc.1：桌面壳已按 DSH_HOME 直接解析 profiles/desktop（resolveProfileDir），
+    // 启动不再消费 DSH_PROFILE（全 asar 只有 dsh-shell-env 把它当 tool-shell 运行时事实导出，
+    // "cannot determine the boot profile" 文本也消失）。锚点里的 home-paths region 相邻行也变了，
+    // 但重新挂锚点只会写入一个不再被读取的 env，因此保持 inert，建议上游退役该规则。
     optional: true,
     skipIfMarked: true,
     replacements: [
