@@ -31,9 +31,17 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { EXTRACT_SYSTEM, bindEvidence, parseExtraction } from '../../lib/extract.js'
 import { MemoryStore } from '../../lib/storage.js'
-import { renderHit, renderMemorySummary } from '../../lib/render.js'
+import { renderHit, renderMemorySummary, renderOpenLoops } from '../../lib/render.js'
 import { searchMemories } from '../../lib/search.js'
+import { mergeLoops, pruneLoops, readLoops, writeLoops } from '../../lib/loops.js'
 import { SCENARIOS } from './scenarios.mjs'
+
+// The extra bank is separate so the first 23 scenarios stay byte-identical to
+// the run they were measured in; a missing file simply means "base bank only".
+const SCENARIOS_EXTRA = await import('./scenarios-extra.mjs')
+  .then((module) => module.SCENARIOS_EXTRA ?? [])
+  .catch(() => [])
+const BANK = [...SCENARIOS, ...SCENARIOS_EXTRA]
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const DATA = join(HERE, '..', 'data')
@@ -44,7 +52,7 @@ const OLLAMA = process.env.OLLAMA_HOST ?? 'http://127.0.0.1:11434'
 const DEEPSEEK = 'https://api.deepseek.com/chat/completions'
 const PROVIDER = argValue('--provider') ?? 'ollama'
 const MODEL = argValue('--model') ?? (PROVIDER === 'deepseek' ? 'deepseek-chat' : 'qwen3.5:latest')
-const LIMIT = Number(argValue('--limit') ?? SCENARIOS.length)
+const LIMIT = argValue('--limit') === undefined ? undefined : Number(argValue('--limit'))
 const SUMMARY_BYTES = 4096
 const RECALL_LIMIT = 4
 // deepseek-chat list price, CNY per million tokens; the off-peak window is half.
@@ -155,14 +163,16 @@ async function extractScenario(scenario) {
   ], { json: true, numPredict: 1_200 })
   const parsed = parseExtraction(reply, 5, `e2e-${scenario.id}`)
   const bound = bindEvidence(parsed.drafts, window.sources)
-  return { drafts: bound.drafts, unsupported: bound.unsupported, summary: parsed.summary }
+  return { drafts: bound.drafts, unsupported: bound.unsupported, summary: parsed.summary, loops: parsed.loops }
 }
 
 /** Persist one scenario's verified drafts; returns the stored ids. */
-async function storeScenario(store, scenario, drafts) {
+async function storeScenario(scenario, root, drafts) {
+  const dir = join(STORE_DIR, scenario.id)
+  const store = new MemoryStore(dir)
   const stored = []
   for (const draft of drafts) {
-    const projectRoot = draft.scope === 'project' ? PROJECT_ROOT : undefined
+    const projectRoot = draft.scope === 'project' ? root : undefined
     const result = await store.upsert(draft, projectRoot, 'auto')
     stored.push(result.entry.id)
   }
@@ -170,26 +180,29 @@ async function storeScenario(store, scenario, drafts) {
 }
 
 /** The context the memory arm sees: the injected summary plus on-demand recall. */
-function memoryContext(entries, question) {
+function memoryContext(entries, loops, question) {
   const groups = [
     { scope: 'global', label: 'global', entries: entries.global },
     { scope: 'project', label: 'project:e2e', entries: entries.project },
   ]
+  // The plugin puts open loops inside the same injected block as the memories;
+  // this arm mirrors that, otherwise it measures a context the user never sees.
+  const loopNote = renderOpenLoops(loops, { now: Date.now() })
   const summary = renderMemorySummary(groups.map((group) => ({
     label: group.label,
     heading: group.label,
     entries: group.entries,
     total: group.entries.length,
-  })), { maxBytes: SUMMARY_BYTES, maxEntriesPerScope: 12 })
+  })), { maxBytes: SUMMARY_BYTES, maxEntriesPerScope: 12, ...loopNote === undefined ? {} : { note: loopNote } })
   const hits = searchMemories(groups, question, { limit: RECALL_LIMIT }).map(renderHit)
-  return [summary ?? '', ...hits.length === 0 ? [] : ['', 'On-demand recall:', ...hits]].join('\n')
+  return [summary ?? loopNote ?? '', ...hits.length === 0 ? [] : ['', 'On-demand recall:', ...hits]].join('\n')
 }
 
 /** Ask one arm to answer, using only what that arm is given. */
 async function answer(question, context) {
   const material = context.trim().length === 0 ? '（无资料）' : context
   return await chat([
-    { role: 'system', content: '只依据下面提供的资料回答问题；资料里没有的信息就回答「不知道」。回答一两句话，不要复述资料。' },
+    { role: 'system', content: '只依据下面提供的资料回答问题；资料里没有的信息就回答「不知道」。资料可能提到多个项目，问题里的「这个项目」指资料中与问题最相关的那个项目。回答一两句话，不要复述资料。' },
     { role: 'user', content: `资料：\n${material}\n\n问题：${question}` },
   ], { numPredict: 200 })
 }
@@ -203,7 +216,7 @@ async function judge(scenario, answerText) {
       必需点: scenario.required,
       禁止点: scenario.forbidden,
       回答: answerText,
-      要求: '回答表达了全部必需点（意思对即可，不要求原词）且没有表达禁止点，才算通过；回答「不知道」不算通过。只返回 {"pass":true|false,"reason":"一句话"}。',
+      要求: '回答表达了全部必需点（意思对即可，不要求原词）且没有表达禁止点，才算通过。禁止点只有在回答把它当作本问题的答案或当前事实来肯定时才算违反；回答把它作为例外、条件或对照提起（比如回答「CI 里仍可用 3000」并不违反「本地必须用 3000」）不算违反；回答明确否定禁止点或给出相反说法（比如禁止点是「改配置后测的」，回答说是「旧配置下测的」）更不算违反。回答「不知道」不算通过。只返回 {"pass":true|false,"reason":"一句话"}。',
     }) },
   ], { json: true, numPredict: 200 })
   try {
@@ -219,40 +232,134 @@ function percentage(passed, total) {
   return total === 0 ? '—' : `${(passed / total * 100).toFixed(1)}% (${passed}/${total})`
 }
 
+/**
+ * Two fixed anchors that pin the judge's forbidden-point rule.
+ *
+ * The first run's one memory-arm failure was exactly this ambiguity: the answer
+ * said "本地 4567，CI 仍可用 3000" and was graded as violating "本地用 3000".
+ * An anchor pair makes that rule checkable before any paid grading: a correct
+ * answer that mentions the exception must pass, a wrong answer must fail.
+ */
+async function anchorGate() {
+  const question = '本地开发服务器该用哪个端口？'
+  const good = await judge({ question, required: ['本地用 4567'], forbidden: ['本地必须用 3000'] },
+    '本地开发固定用 4567，3000 会和其他项目冲突；CI 里仍可用 3000。')
+  const bad = await judge({ question, required: ['本地用 4567'], forbidden: ['本地必须用 3000'] },
+    '本地开发就用 3000。')
+  // The second failure mode seen in a run: the forbidden point is the OPPOSITE
+  // of what the answer says ("旧配置下测的"), and a judge that matches on shared
+  // words fails a correct answer. This anchor pins the negation rule.
+  const opposite = await judge({ question: '这些延迟数字是什么配置下测的？', required: ['旧限流配置'], forbidden: ['改限流后的配置'] },
+    '这些数字是旧限流配置下测的。')
+  return {
+    pass: good.pass === true && bad.pass === false && opposite.pass === true,
+    good: good.pass,
+    bad: bad.pass,
+    opposite: opposite.pass,
+  }
+}
+
+/**
+ * Re-grade a saved run's stored answers with the current judge — no new answers.
+ *
+ * A judge rule can be wrong without the answers being wrong: round 3 failed one
+ * correct answer because the forbidden point was the opposite of what it said.
+ * Re-grading keeps the answers and the bank frozen, so the only thing that
+ * changes is the grading rule; the original scores stay in the source file.
+ */
+async function regrade(file) {
+  const report = JSON.parse(await readFile(file, 'utf8'))
+  const expected = bankHash(BANK.slice(0, report.scenarios))
+  if (report.bankHash !== expected) throw new Error('bank changed since that run: hash mismatch, refusing to re-grade')
+  const byId = new Map(BANK.map((scenario) => [scenario.id, scenario]))
+  const anchor = await anchorGate()
+  if (!anchor.pass) console.log(`  WARNING: judge anchor pair failed (good=${anchor.good}, bad=${anchor.bad}, opposite=${anchor.opposite}); grades are suspect`)
+  console.log(`re-grade ${report.rows.length} rows from ${file}`)
+  for (const row of report.rows) {
+    const scenario = byId.get(row.id)
+    if (scenario === undefined) throw new Error(`scenario ${row.id} is not in the current bank`)
+    for (const arm of ['memory', 'rag', 'closed']) {
+      const verdict = await judge(scenario, row[arm].answer)
+      row[arm] = { ...row[arm], pass: verdict.pass, reason: verdict.reason }
+    }
+  }
+  report.judge = { version: 'v3-negation', anchor }
+  report.regradedFrom = file
+  for (const arm of ['memory', 'rag', 'closed']) {
+    report.arms[arm] = percentage(report.rows.filter((row) => row[arm].pass).length, report.rows.length)
+  }
+  const pairs = (left, right) => {
+    const gain = report.rows.filter((row) => row[left].pass && !row[right].pass).length
+    const loss = report.rows.filter((row) => !row[left].pass && row[right].pass).length
+    return `${left} 赢 ${gain} / 输 ${loss}`
+  }
+  report.paired = {
+    memoryVsClosed: pairs('memory', 'closed'),
+    memoryVsRag: pairs('memory', 'rag'),
+    ragVsClosed: pairs('rag', 'closed'),
+  }
+  const target = file.replace(/\.json$/u, '-regraded.json')
+  await writeFile(target, `${JSON.stringify(report, null, 2)}\n`)
+  console.log(`memory  ${report.arms.memory}`)
+  console.log(`rag     ${report.arms.rag}`)
+  console.log(`closed  ${report.arms.closed}`)
+  console.log(`paired: ${report.paired.memoryVsClosed}; ${report.paired.memoryVsRag}; ${report.paired.ragVsClosed}`)
+  console.log(`results: ${target}`)
+}
+
 async function main() {
-  const scenarios = SCENARIOS.slice(0, Math.max(1, LIMIT))
+  const regradeFile = argValue('--regrade')
+  if (regradeFile !== undefined) return await regrade(regradeFile)
+  const scenarios = BANK.slice(0, Math.max(1, LIMIT ?? BANK.length))
   const hash = bankHash(scenarios)
   await mkdir(DATA, { recursive: true })
   // A fresh store per run: memory from a previous run would change the recipe.
   await rm(STORE_DIR, { recursive: true, force: true })
   await mkdir(STORE_DIR, { recursive: true })
-  const store = new MemoryStore(STORE_DIR)
+
+  // One store per scenario, the way a real workspace has its own project scope.
+  // The previous run pooled all scenarios into one project scope, and the memory
+  // arm then correctly refused to apply "松鼠记账的提交信息…" to "本项目" — a
+  // harness artifact, not a memory failure. Per-scenario stores also keep each
+  // scenario's loops together instead of hiding the newest ones behind the cap.
+  const contexts = new Map()
 
   console.log(`bank ${hash.slice(0, 12)} · ${scenarios.length} scenarios · model ${MODEL}`)
 
   /* ---------------------------------------------------------- extraction --- */
-  const extraction = { drafts: 0, stored: 0, unsupported: 0, empty: 0 }
-  const storedIds = new Map()
+  const extraction = { drafts: 0, stored: 0, unsupported: 0, empty: 0, loops: 0 }
   for (const [index, scenario] of scenarios.entries()) {
+    const dir = join(STORE_DIR, scenario.id)
+    const root = join(PROJECT_ROOT, scenario.id)
+    const store = new MemoryStore(dir)
     const result = await extractScenario(scenario)
     extraction.drafts += result.drafts.length + result.unsupported
     extraction.unsupported += result.unsupported
     extraction.empty += result.drafts.length === 0 && result.unsupported === 0 ? 1 : 0
-    storedIds.set(scenario.id, await storeScenario(store, scenario, result.drafts))
-    extraction.stored += storedIds.get(scenario.id).length
-    console.log(`  extract ${index + 1}/${scenarios.length} ${scenario.id}: ${result.drafts.length} stored, ${result.unsupported} rejected`)
+    const stored = await storeScenario(scenario, root, result.drafts)
+    extraction.stored += stored.length
+    let ledger = await readLoops(dir)
+    ledger = pruneLoops(mergeLoops(ledger, result.loops ?? [], Date.now(), scenario.id), Date.now())
+    await writeLoops(dir, ledger)
+    extraction.loops += ledger.loops.filter((loop) => loop.state === 'open').length
+    contexts.set(scenario.id, { store, root, loops: ledger.loops })
+    console.log(`  extract ${index + 1}/${scenarios.length} ${scenario.id}: ${stored.length} stored, ${result.unsupported} rejected, ${result.loops?.length ?? 0} loop(s)`)
   }
-  const entries = {
-    project: await store.list('project', PROJECT_ROOT, { fresh: true }),
-    global: await store.list('global', undefined, { fresh: true }),
-  }
+  console.log(`  loops: ${extraction.loops} open`)
 
   /* -------------------------------------------------------------- arms --- */
+  const anchor = await anchorGate()
+  if (!anchor.pass) console.log(`  WARNING: judge anchor pair failed (good=${anchor.good}, bad=${anchor.bad}); grades below are suspect`)
   const rows = []
   for (const [index, scenario] of scenarios.entries()) {
     const ragContext = scenario.turns.map((turn) => `${turn.role === 'user' ? '用户' : '助手'}：${turn.text}`).join('\n')
+    const context = contexts.get(scenario.id)
+    const entries = {
+      project: await context.store.list('project', context.root, { fresh: true }),
+      global: await context.store.list('global', undefined, { fresh: true }),
+    }
     const arms = {
-      memory: memoryContext(entries, scenario.question),
+      memory: memoryContext(entries, context.loops, scenario.question),
       rag: ragContext,
       closed: '',
     }
@@ -276,6 +383,8 @@ async function main() {
     usage: { ...usage, estimatedCny: Number(cost.toFixed(3)) },
     bankHash: hash,
     scenarios: scenarios.length,
+    judge: { version: 'v3-negation', anchor },
+    store: 'per-scenario',
     extraction,
     arms: {},
     paired: {},
@@ -327,7 +436,8 @@ async function main() {
     '',
     `配对：${report.paired.memoryVsClosed}; ${report.paired.memoryVsRag}; ${report.paired.ragVsClosed}`,
     '',
-    `抽取：${extraction.stored} 条入库 / ${extraction.drafts} 个候选；引文校验拒绝 ${extraction.unsupported} 个；${extraction.empty} 个场景一条没存下。`,
+    `抽取：${extraction.stored} 条入库 / ${extraction.drafts} 个候选；引文校验拒绝 ${extraction.unsupported} 个；${extraction.empty} 个场景一条没存下；新开 ${extraction.loops} 条 open loop。`,
+    `判分：judge v2（禁止点例外语义），锚点自检 ${anchor.pass ? '通过' : '未通过'}（good=${anchor.good}, bad=${anchor.bad}）。`,
     '',
     '| 场景 | 类别 | memory | rag | closed |',
     '| --- | --- | --- | --- | --- |',

@@ -13,6 +13,7 @@ import { decayOf, importanceOf, matchCredit, recencyOf, relevanceOf, timeBoost }
 import type { ScopeEntries } from './search.js'
 import { parseTimeRange } from './time.js'
 import type { SessionNote } from './storage.js'
+import type { LoopItem } from './loops.js'
 
 /** Opening and closing frame of the injected, once-per-conversation block. */
 export const MEMORY_OPEN = '<memory-context>'
@@ -519,6 +520,66 @@ export function renderMemorySummaryResult(
   }
   const shortest = attempts.at(-1)?.text ?? ''
   return { text: bytes(shortest) <= options.maxBytes ? shortest : truncate(shortest, options.maxBytes), listed: [] }
+}
+
+/** Limits for the open-loop section that rides with the summary block. */
+export interface OpenLoopOptions {
+  /** Most loops to list. */
+  readonly maxEntries?: number
+  /** UTF-8 byte budget for the section. */
+  readonly maxBytes?: number
+  /** Clock used to label a deadline. */
+  readonly now?: number
+}
+
+/**
+ * Render the user's open loops as a short section of the injected block.
+ *
+ * Loops were deliberately kept out of the memory store: they are obligations
+ * with a lifecycle, not facts. But leaving them out of the *injected context*
+ * was a real miss — measured in the end-to-end benchmark, the extractor filed
+ * "明天把登录页截图补齐" as a loop and the memory arm then answered "不知道"
+ * about it. A future session asked "我明天要做什么" and nothing in the context
+ * knew. The loop ledger already answers it, bounded by TTL and a cap, so it is
+ * cheap to include.
+ *
+ * Only `open` loops are listed; closed, dropped and expired ones are history.
+ * A deadline sorts first and is shown as a date, because "no date" is a note
+ * and an overdue date is a fact worth seeing.
+ *
+ * @param loops - the ledger's loops.
+ * @param options - caps and clock.
+ * @returns the section, or `undefined` when nothing is open.
+ */
+export function renderOpenLoops(loops: readonly LoopItem[], options: OpenLoopOptions = {}): string | undefined {
+  const now = options.now ?? Date.now()
+  const open = loops
+    .filter((loop) => loop.state === 'open')
+    // Deadline first (overdue then soonest), then the newest promises: a loop
+    // made today is what a session is most likely asking about, and the oldest
+    // ones were already shown in earlier summaries of the same store.
+    .sort((left, right) => (left.dueAt ?? Number.MAX_SAFE_INTEGER) - (right.dueAt ?? Number.MAX_SAFE_INTEGER)
+      || right.openedAt - left.openedAt)
+  if (open.length === 0) return undefined
+  const maxEntries = options.maxEntries ?? 8
+  const maxBytes = options.maxBytes ?? 800
+  const header = 'Open loops (the user said they would do these; not done yet):'
+  const lines = [header]
+  let used = bytes(header)
+  for (const loop of open.slice(0, maxEntries)) {
+    const text = loop.text.replace(/\s+/gu, ' ').trim().slice(0, 100)
+    if (text.length === 0) continue
+    const due = loop.dueAt === undefined
+      ? 'no date'
+      : loop.dueAt < now ? 'overdue' : new Date(loop.dueAt).toISOString().slice(0, 10)
+    const line = `- ${due} · ${text}`
+    if (used + bytes(line) + 1 > maxBytes) break
+    used += bytes(line) + 1
+    lines.push(line)
+  }
+  if (lines.length === 1) return undefined
+  if (open.length > lines.length - 1) lines.push(`- … ${open.length - (lines.length - 1)} more open`)
+  return lines.join('\n')
 }
 
 /** Render one search hit for the model. */

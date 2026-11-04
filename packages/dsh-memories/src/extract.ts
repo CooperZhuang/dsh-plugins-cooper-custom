@@ -90,10 +90,11 @@ export const EXTRACT_SYSTEM = [
   '',
   'Also return "loops": things the USER said they would do or asked to be reminded of, and that are still not done ("我明天发出去", "下周再看", "周五前给你"). These are not memories — they are obligations with a deadline and a lifecycle, and the only thing that can justify speaking up without being asked.',
   '- One short sentence each, in the user\'s framing, naming the object ("把报价单发出去", not "邮件相关").',
+  '- NEVER drop the time word: if the user said 明天/周五/下周三, the loop text must start with it ("明天把登录页的截图补齐"), because a later question may be exactly "我明天要做什么"; resolve "dueAt" to the absolute ISO date computed from today\'s date given above, and omit it when no deadline was said.',
   '- "dueAt" only when a deadline was actually said, as ISO date or date-time. Never invent one: a loop without a deadline is a note, and nagging somebody about a note turns help into supervision.',
   '- Skip what the session shows as already done, and skip the assistant\'s own to-dos. An empty array is the normal result.',
   'Prefer few high-value memories over many trivial ones. Return at most the requested number.',
-  'Reply with JSON only, no prose and no code fence: {"memories":[{"scope":"global"|"project","kind":string,"title":string,"body":string,"tags":string[],"appliesTo":string,"quote":string}],"summary":string}',
+  'Reply with JSON only, no prose and no code fence: {"memories":[{"scope":"global"|"project","kind":string,"title":string,"body":string,"tags":string[],"appliesTo":string,"quote":string}],"loops":[{"text":string,"dueAt":string?}],"summary":string}',
   'Write the "memories" array first and the "summary" paragraph last: the reply is capped, and a summary written first can spend the whole budget before the first memory is complete.',
   'Write "summary" as one paragraph (2-4 sentences) saying what this session was about — the task, the decisions, and anything that would help someone judge the memories above later. It is stored as the evidence behind them.',
   'When nothing is worth remembering, reply exactly {"memories":[],"summary":""}.'
@@ -164,13 +165,28 @@ function parseLoops(value: unknown): { text: string; dueAt?: number }[] {
   const seen = new Set<string>()
   for (const item of value) {
     if (loops.length >= 10) break
-    if (typeof item !== 'object' || item === null) continue
-    const record = item as Record<string, unknown>
+    // A bare string is accepted as the text: observed in the end-to-end run,
+    // DeepSeek read the prompt's "things the user would do" and returned
+    // ["把登录页的截图补齐", ...]. The shape is lossless to normalize (there is
+    // no deadline to lose), and dropping the whole list silently lost an open
+    // promise the ledger exists to keep.
+    const record = typeof item === 'string'
+      ? { text: item }
+      : typeof item === 'object' && item !== null ? item as Record<string, unknown> : undefined
+    if (record === undefined) continue
     const text = typeof record['text'] === 'string' ? record['text'].replace(/\s+/gu, ' ').trim().slice(0, 200) : ''
     if (text.length < 4 || seen.has(text)) continue
     seen.add(text)
     const parsed = typeof record['dueAt'] === 'string' ? Date.parse(record['dueAt']) : Number.NaN
-    loops.push(Number.isFinite(parsed) ? { text, dueAt: parsed } : { text })
+    // A resolved deadline must be plausible against the extraction's own clock.
+    // Observed in the e2e run: the model read "明天" and answered a date four
+    // months in the past, which then rendered as an overdue loop and made the
+    // promise unreadable. A date that far outside the window is a guess, and a
+    // guessed deadline is worse than none, so the text is kept without it.
+    const plausible = Number.isFinite(parsed)
+      && parsed >= Date.now() - 30 * 86_400_000
+      && parsed <= Date.now() + 366 * 86_400_000
+    loops.push(plausible ? { text, dueAt: parsed } : { text })
   }
   return loops
 }
@@ -444,6 +460,14 @@ export function bindEvidence(
   return { drafts: verified, unsupported }
 }
 
+/** The user's local calendar date, as `YYYY-MM-DD`, for resolving relative times. */
+function localDate(now = new Date()): string {
+  // `sv-SE` short date is ISO-like and uses the runtime's local time zone; UTC
+  // would name the wrong day for a user east or west of it (at 01:30 in Shanghai,
+  // the UTC date is still yesterday).
+  return new Intl.DateTimeFormat('sv-SE', { dateStyle: 'short' }).format(now)
+}
+
 /** Everything one extraction call needs. */
 export interface ExtractionRequest {
   /** Session being mined. */
@@ -569,6 +593,7 @@ export async function runExtraction(llm: LlmRuntime, request: ExtractionRequest)
   const known = request.knownTitles ?? []
   const framed = [
     `Workspace scope label: ${request.projectLabel}`,
+    `Today's date is ${localDate()} (the user's local date). Resolve every relative time in the transcript against it.`,
     `Extract at most ${request.maxMemories} memories from this transcript.`,
     ...known.length === 0 ? [] : [
       '',

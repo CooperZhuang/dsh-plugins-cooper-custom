@@ -11,7 +11,7 @@ import test from 'node:test'
 import { createVolatile, updateVolatile } from '@deepseek-ai/cosmokit'
 import { MemoryStore, formatEntry, parseEntry, projectSlug, slugify } from '../storage.js'
 import { browseMemories, matchCredit, relevanceOfOne, scoreEntry, searchMemories } from '../search.js'
-import { rankForSummary, renderMemorySummary, selectForSummary } from '../render.js'
+import { rankForSummary, renderMemorySummary, renderOpenLoops, selectForSummary } from '../render.js'
 import { DEFAULT_MAX_SUMMARY_BYTES, consolidationRouteOf, normalizeSettings, readTunables, resolveConfig } from '../config.js'
 import { name } from '../index.js'
 import { MEMORY_SOURCE_KIND } from '../types.js'
@@ -840,6 +840,23 @@ test('summary renders both scopes and stays inside its byte budget', () => {
   assert.match(text, /Global memories/u)
   assert.match(text, /Project memories/u)
   assert.equal(renderMemorySummary([], { maxBytes: 100, maxEntriesPerScope: 5 }), undefined)
+})
+
+test('open loops render in deadline order, and closed ones stay out', () => {
+  const now = Date.parse('2026-11-05T00:00:00Z')
+  const text = renderOpenLoops([
+    { id: 'open-a', text: '把登录页的截图补齐', openedAt: 1, state: 'open' },
+    { id: 'open-b', text: '周五前把报价发出去', openedAt: 2, dueAt: now - 86_400_000, state: 'open' },
+    { id: 'done-c', text: '已经做完的事', openedAt: 3, state: 'done' },
+  ], { now })
+  assert.ok(text !== undefined)
+  assert.match(text, /overdue · 周五前把报价发出去/u)
+  assert.match(text, /no date · 把登录页的截图补齐/u)
+  // A closed loop is history, not something the model should be told about.
+  assert.doesNotMatch(text, /已经做完的事/u)
+  // Overdue comes first: it is the one that needs acting on.
+  assert.ok(text.indexOf('周五前把报价发出去') < text.indexOf('把登录页的截图补齐'))
+  assert.equal(renderOpenLoops([{ id: 'expired-d', text: 't', openedAt: 1, state: 'expired' }], { now }), undefined)
 })
 
 test('entry config resolves paths, clamps tunables, and reads live references', () => {

@@ -16,6 +16,7 @@ import test from 'node:test'
 import { MemoriesRuntime, isCatchAllDirectory } from '../index.js'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
+import { writeLoops } from '../loops.js'
 
 /** A context stand-in exposing only what the runtime touches. */
 const stubContext = {
@@ -471,4 +472,30 @@ test('a scope that has filled up still shows a memory written after it filled', 
   assert.ok(summary !== undefined)
   assert.match(summary, /The correction/u, 'the reserved slot is what makes a new memory visible')
   assert.match(summary, /… 9 more not shown|… \d+ more not shown/u, 'the block still says how much it hides')
+})
+
+test('an open loop is injected even when the memory store is empty', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-memories-loops-inj-'))
+  const runtime = new MemoriesRuntime(stubContext, { memoriesDir: dir, autoExtract: false })
+  t.after(() => runtime.dispose())
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const agent = stubAgent(stubSession(dir))
+
+  // The end-to-end benchmark caught this: the extractor filed "明天把登录页截图
+  // 补齐" as a loop, the loop ledger knew it, and the injected context did not.
+  await writeLoops(dir, {
+    version: 1,
+    loops: [
+      { id: 'loop-shot', text: '明天把登录页的截图补齐', openedAt: Date.now(), state: 'open' },
+      { id: 'loop-done', text: '已经发出去的报价', openedAt: Date.now(), state: 'done' },
+    ],
+  })
+
+  const block = await runtime.injectionFor(agent)
+  assert.ok(block !== undefined, 'a loop alone is something to say')
+  assert.match(JSON.stringify(block.content), /登录页的截图/u)
+  assert.doesNotMatch(JSON.stringify(block.content), /已经发出去的报价/u, 'closed loops are history')
+
+  // And it stays out of the store: a loop is an obligation, not a memory fact.
+  assert.equal((await runtime.store.list('global', undefined, { fresh: true })).length, 0)
 })
