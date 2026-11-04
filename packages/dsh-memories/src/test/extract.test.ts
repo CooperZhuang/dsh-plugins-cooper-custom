@@ -16,7 +16,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { MemoriesRuntime } from '../index.js'
 import type { MemoryEntry } from '../types.js'
-import { EXTRACT_JSON_SCHEMA, collectWindow, parseExtraction, redactSecrets, runExtraction } from '../extract.js'
+import { EXTRACT_JSON_SCHEMA, bindEvidence, collectWindow, parseExtraction, redactSecrets, runExtraction } from '../extract.js'
 import { normalizeSettings } from '../config.js'
 import { peakDelayMs } from '../schedule.js'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -52,10 +52,46 @@ function fakeLlm(reply: string, seen: { system?: string | undefined; user?: stri
       seen.system = options.system
       seen.user = options.messages.map((message) => message.content.filter((block) => block.type === 'text').map((block) => block.text ?? '').join('')).join('\n')
       return (async function* chunks() {
-        yield textChunk(reply)
+        yield textChunk(withQuote(reply, transcriptQuote(options)))
         yield stopChunk()
       })()
     },
+  }
+}
+
+/**
+ * The first user line of the framed prompt, quoted the way a model would.
+ *
+ * The extractor is asked to copy a verbatim passage from the transcript, and
+ * this fake copies the first user message so tests of other behaviour keep
+ * their hand-written replies short. Evidence checks themselves get dedicated
+ * tests with explicit quotes below.
+ */
+function transcriptQuote(options: { messages: { content: { type: string; text?: string }[] }[] }): string | undefined {
+  const prompt = options.messages
+    .map((message) => message.content.filter((block) => block.type === 'text').map((block) => block.text ?? '').join(''))
+    .join('\n')
+  const line = /(?:^|\n)(?:USER|ASSISTANT): ([^\n]+)/u.exec(prompt)?.[1]
+  return line === undefined ? undefined : line.trim().slice(0, 160)
+}
+
+/** Add `quote` to every memory of a canned reply that does not already carry one. */
+function withQuote(reply: string, quote: string | undefined): string {
+  if (quote === undefined || quote.length === 0) return reply
+  const start = reply.indexOf('{')
+  const end = reply.lastIndexOf('}')
+  if (start < 0 || end <= start) return reply
+  try {
+    const value = JSON.parse(reply.slice(start, end + 1)) as { memories?: unknown }
+    if (!Array.isArray(value.memories)) return reply
+    for (const item of value.memories) {
+      if (typeof item !== 'object' || item === null) continue
+      const record = item as Record<string, unknown>
+      if (record['quote'] === undefined) record['quote'] = quote
+    }
+    return JSON.stringify(value)
+  } catch {
+    return reply
   }
 }
 
@@ -166,6 +202,30 @@ test('parseExtraction redacts secrets inside extracted memories and the summary'
   const parsed = parseExtraction('{"summary":"they pasted sk-abcdefghijklmnopqrstuvwx","memories":[{"scope":"global","title":"API key","body":"the key is sk-abcdefghijklmnopqrstuvwx"}]}', 5, 'session-1')
   assert.equal(parsed.drafts[0]?.body, 'the key is [redacted]')
   assert.equal(parsed.summary, 'they pasted [redacted]')
+  // A quote that is entirely a credential is dropped, not stored as "[redacted]":
+  // an evidence field reading "[redacted]" proves nothing.
+  const secretQuote = parseExtraction('{"memories":[{"scope":"global","title":"t","body":"b","appliesTo":"a","quote":"sk-abcdefghijklmnopqrstuvwx"}]}', 5, 'session-1')
+  assert.equal(secretQuote.drafts[0]?.quote, undefined)
+})
+
+test('bindEvidence accepts only a quote that appears verbatim in one message', () => {
+  const sources = [
+    { seq: 3, text: 'I always deploy with pnpm run ship.' },
+    { seq: 4, text: 'Also run tsc before publishing.' },
+  ]
+  const base = { scope: 'global' as const, title: 't', body: 'b', tags: [] }
+  const bound = bindEvidence([
+    { ...base, title: 'exact', quote: 'I always deploy with pnpm run ship.' },
+    // Line wrapping changes whitespace, not the words; that still counts.
+    { ...base, title: 'wrapped', quote: 'Also run tsc\nbefore publishing.' },
+    { ...base, title: 'paraphrased', quote: 'I usually deploy with pnpm.' },
+    { ...base, title: 'too short', quote: 'pnpm' },
+    { ...base, title: 'missing' },
+  ], sources)
+  assert.deepEqual(bound.drafts.map((draft) => draft.title), ['exact', 'wrapped'])
+  assert.equal(bound.drafts[0]?.evidenceSeq, 3)
+  assert.equal(bound.drafts[1]?.evidenceSeq, 4)
+  assert.equal(bound.unsupported, 3)
 })
 
 test('collectWindow reads only human/assistant prose after the watermark', () => {
@@ -204,7 +264,8 @@ test('the extraction JSON schema is closed and requires the documented fields', 
   assert.deepEqual([...EXTRACT_JSON_SCHEMA.required], ['memories', 'summary'])
   // `appliesTo` is required because it is the field that lets a paraphrased turn
   // find the memory again; half the store was unsearchable without it.
-  assert.deepEqual([...EXTRACT_JSON_SCHEMA.properties.memories.items.required], ['scope', 'title', 'body', 'appliesTo'])
+  // `quote` is required because it is the only evidence the code can check.
+  assert.deepEqual([...EXTRACT_JSON_SCHEMA.properties.memories.items.required], ['scope', 'title', 'body', 'appliesTo', 'quote'])
 })
 
 test('runExtraction sends the transcript and returns parsed drafts', async () => {
@@ -221,16 +282,47 @@ test('runExtraction sends the transcript and returns parsed drafts', async () =>
   })
   assert.equal(outcome.kind, 'memories')
   assert.equal(outcome.kind === 'memories' ? outcome.drafts.length : 0, 1)
+  // The fake copied the user's line, so the draft carries the message it came from.
+  assert.equal(outcome.kind === 'memories' ? outcome.drafts[0]?.evidenceSeq : undefined, 1)
   assert.match(seen.system ?? '', /durable, reusable facts/u)
+  assert.match(seen.system ?? '', /"quote"/u)
   assert.match(seen.user ?? '', /I always use pnpm here/u)
   assert.match(seen.user ?? '', /project:work/u)
+})
+
+test('a candidate whose quote is not in the transcript is dropped, not stored', async () => {
+  const session = stubSession('C:\\work', [
+    { seq: 1, role: 'user', text: 'I always use pnpm here.' },
+    { seq: 2, role: 'assistant', text: 'Then add a workspace file.' },
+  ])
+  const reply = (quote: string) => ({
+    stream: () => (async function* chunks() {
+      yield textChunk(JSON.stringify({ memories: [{ scope: 'project', title: 'Use pnpm', body: 'This repo uses pnpm.', appliesTo: 'installing', quote }] }))
+      yield stopChunk()
+    })(),
+  })
+  const request = {
+    session,
+    window: collectWindow(session, 0, 10, 10_000),
+    projectLabel: 'project:work',
+    maxOutputTokens: 512,
+    maxMemories: 5,
+    timeoutMs: 5_000,
+    signal: new AbortController().signal,
+  }
+  // Paraphrasing the source is exactly the failure the check exists to catch.
+  const paraphrased = await runExtraction(reply('I usually use pnpm.') as never, request)
+  assert.deepEqual(paraphrased.kind === 'none' ? paraphrased.reason : paraphrased.kind, 'unsupported-evidence')
+  // An assistant line is a valid source too; the seq tells the reader which turn.
+  const fromAssistant = await runExtraction(reply('Then add a workspace file.') as never, request)
+  assert.equal(fromAssistant.kind === 'memories' ? fromAssistant.drafts[0]?.evidenceSeq : undefined, 2)
 })
 
 test('runExtraction reports an empty window and a missing route without calling the model', async () => {
   const session = stubSession('C:\\work', [{ seq: 1, role: 'user', text: 'hi' }])
   const empty = await runExtraction(fakeLlm('{}') as never, {
     session,
-    window: { text: '', lastSeq: undefined, messages: 0 },
+    window: { text: '', lastSeq: undefined, messages: 0, sources: [] },
     projectLabel: 'project:work',
     maxOutputTokens: 128,
     maxMemories: 1,
@@ -254,13 +346,13 @@ test('runExtraction reports an empty window and a missing route without calling 
 })
 
 test('a reply the output cap cut short is salvaged, never thrown', async () => {
-  const session = stubSession('C:\\work', [{ seq: 1, role: 'user', text: 'hi' }])
+  const session = stubSession('C:\\work', [{ seq: 1, role: 'user', text: 'Hi, remember this workflow.' }])
   const truncated = {
     stream: () => (async function* chunks() {
       // Two complete memories, then the cut lands inside the third object.
       yield textChunk('{"summary":"The user set up a workflow.","memories":['
-        + '{"scope":"project","title":"First fact","body":"Body one.","tags":["a"]},'
-        + '{"scope":"global","title":"Second fact","body":"Body two.","tags":["b"]},'
+        + '{"scope":"project","title":"First fact","body":"Body one.","tags":["a"],"quote":"remember this workflow"},'
+        + '{"scope":"global","title":"Second fact","body":"Body two.","tags":["b"],"quote":"remember this workflow"},'
         + '{"scope":"project","title":"Third fac')
       yield { type: 'finish', reason: { kind: 'max-tokens' } } as unknown as StreamChunk
     })(),
@@ -535,7 +627,7 @@ test('a capped window cools down, and retries the moment the cap it blamed chang
           yield { type: 'finish', reason: { kind: 'max-tokens' } } as unknown as StreamChunk
           return
         }
-        yield textChunk('{"memories":[{"scope":"project","title":"A fact","body":"A fact.","tags":["x"]}]}')
+        yield textChunk('{"memories":[{"scope":"project","title":"A fact","body":"A fact.","tags":["x"],"quote":"worth remembering"}]}')
         yield stopChunk()
       })()
     },
@@ -611,7 +703,7 @@ test('a reply capped mid-array keeps the memories that were already complete', a
   // same truncation kept nothing — that is the case the test above pins.
   const capped = {
     stream: () => (async function* chunks() {
-      yield textChunk('{"memories":[{"scope":"project","kind":"fact","title":"First fact","body":"Finished before the cap.","appliesTo":"任何时候"},{"scope":"project","kind":"fact","title":"Second fact","body":"cut off he')
+      yield textChunk('{"memories":[{"scope":"project","kind":"fact","title":"First fact","body":"Finished before the cap.","appliesTo":"任何时候","quote":"Something worth remembering."},{"scope":"project","kind":"fact","title":"Second fact","body":"cut off he')
       yield { type: 'finish', reason: { kind: 'max-tokens' } } as unknown as StreamChunk
     })(),
   }
@@ -636,7 +728,7 @@ test('the resolved route carries the reasoning level that spends the cap', async
   })
   const lined = {
     stream: () => (async function* chunks() {
-      yield textChunk('{"memories":[{"scope":"project","kind":"fact","title":"T","body":"B","appliesTo":"A"}],"summary":"s')
+      yield textChunk('{"memories":[{"scope":"project","kind":"fact","title":"T","body":"B","appliesTo":"A","quote":"Remember this."}],"summary":"s')
       yield { type: 'finish', reason: { kind: 'max-tokens' } } as unknown as StreamChunk
     })(),
   }

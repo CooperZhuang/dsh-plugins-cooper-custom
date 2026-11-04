@@ -127,9 +127,42 @@ test('entry files round-trip through format and parse', () => {
     updatedAt: 1_700_000_100_000,
     uses: 4,
     lastUsedAt: 1_700_000_200_000,
+    quote: 'We never run npm install here.',
+    evidenceSeq: 12,
   })
   const parsed = parseEntry(formatEntry(value), 'global', 'fallback')
   assert.deepEqual(parsed, value)
+})
+
+test('an evidence quote is kept across an unchanged rewrite and dropped when the body changes', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-memories-evidence-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const store = new MemoryStore(dir)
+  await store.upsert({
+    scope: 'global',
+    title: 'Ship with pnpm',
+    body: 'Run pnpm run ship.',
+    tags: [],
+    quote: 'We always ship with pnpm run ship.',
+    evidenceSeq: 7,
+    sourceSession: 'session-42',
+  }, undefined, 'auto')
+  const stored = await store.read('global', undefined, 'ship-with-pnpm')
+  assert.equal(stored?.quote, 'We always ship with pnpm run ship.')
+  assert.equal(stored?.evidenceSeq, 7)
+  assert.match(await readFile(join(dir, 'entries', 'ship-with-pnpm.md'), 'utf8'),
+    /^quote: We always ship with pnpm run ship\.$/mu)
+
+  // A rewrite that leaves the body alone still restates the same claim.
+  await store.upsert({ scope: 'global', title: 'Ship with pnpm', body: 'Run pnpm run ship.', tags: [] }, undefined, 'auto')
+  assert.equal((await store.read('global', undefined, 'ship-with-pnpm'))?.quote, 'We always ship with pnpm run ship.')
+
+  // A rewrite that changes the body may state something the excerpt never did,
+  // so the stale quote must not survive looking like proof.
+  await store.upsert({ scope: 'global', title: 'Ship with pnpm', body: 'Ship with pnpm, not npm run ship.', tags: [] }, undefined, 'auto')
+  const rewritten = await store.read('global', undefined, 'ship-with-pnpm')
+  assert.equal(rewritten?.quote, undefined)
+  assert.equal(rewritten?.evidenceSeq, undefined)
 })
 
 test('an entry records the session it came from, and keeps it across a rewrite', async (t) => {

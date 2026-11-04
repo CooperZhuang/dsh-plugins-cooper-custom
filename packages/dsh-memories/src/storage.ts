@@ -205,6 +205,8 @@ export function formatEntry(entry: MemoryEntry): string {
     ...entry.voice === 'user' ? ['voice: user'] : [],
     ...entry.supersedes !== undefined && entry.supersedes.length > 0 ? [`supersedes: ${entry.supersedes}`] : [],
     ...entry.sourceSession !== undefined && entry.sourceSession.length > 0 ? [`session: ${entry.sourceSession}`] : [],
+    ...entry.quote !== undefined && entry.quote.length > 0 ? [`quote: ${entry.quote}`] : [],
+    ...entry.evidenceSeq !== undefined && entry.evidenceSeq > 0 ? [`evidenceSeq: ${entry.evidenceSeq}`] : [],
     ...entry.derivedFrom !== undefined && entry.derivedFrom.length > 0 ? [`derivedFrom: ${entry.derivedFrom.join(', ')}`] : [],
     `created: ${new Date(entry.createdAt).toISOString()}`,
     `updated: ${new Date(entry.updatedAt).toISOString()}`,
@@ -265,6 +267,9 @@ export function parseEntry(text: string, scope: MemoryScope, fallbackId: string)
   const voice = fields.get('voice') === 'user' ? 'user' as const : undefined
   const supersedes = fields.get('supersedes')
   const sourceSession = fields.get('session')
+  const quote = fields.get('quote')
+  const rawEvidenceSeq = Number(fields.get('evidenceseq') ?? '0')
+  const evidenceSeq = Number.isFinite(rawEvidenceSeq) && rawEvidenceSeq > 0 ? Math.trunc(rawEvidenceSeq) : undefined
   // A list of ids in one comma-separated line, the same shape `tags` and `keys`
   // use; an entry written before the field existed simply has none.
   const derivedFrom = (fields.get('derivedfrom') ?? '').split(',').map((value) => value.trim()).filter((value) => value.length > 0)
@@ -286,6 +291,8 @@ export function parseEntry(text: string, scope: MemoryScope, fallbackId: string)
     ...voice === undefined ? {} : { voice },
     ...supersedes !== undefined && supersedes.length > 0 ? { supersedes } : {},
     ...sourceSession !== undefined && sourceSession.length > 0 ? { sourceSession } : {},
+    ...quote !== undefined && quote.length > 0 ? { quote } : {},
+    ...evidenceSeq !== undefined ? { evidenceSeq } : {},
     ...derivedFrom.length > 0 ? { derivedFrom } : {},
     createdAt: parseTime(fields.get('created'), updatedAt),
     updatedAt,
@@ -1188,6 +1195,20 @@ export class MemoryStore {
       const previous = await this.read(draft.scope, projectRoot, similar)
       supersedes = previous !== undefined && carriesForward(previous, draft) ? similar : undefined
     }
+    // Evidence binding is tied to the exact body it supported. A draft that
+    // carries a verified quote (automatic extraction) sets it; a rewrite that
+    // leaves the body alone keeps the existing one; a rewrite that changes the
+    // body drops it, because the old excerpt no longer supports the new claim.
+    // Keeping a stale quote would be worse than having none: it would look like
+    // proof while pointing at a sentence the entry no longer restates.
+    const bodyChanged = existing === undefined || existing.body.trim() !== draft.body.trim()
+    const draftQuote = draft.quote === undefined ? undefined : draft.quote.trim()
+    const quote = draftQuote !== undefined && draftQuote.length > 0
+      ? draftQuote
+      : existing !== undefined && !bodyChanged ? existing.quote : undefined
+    const evidenceSeq = draftQuote !== undefined && draftQuote.length > 0
+      ? draft.evidenceSeq
+      : existing !== undefined && !bodyChanged ? existing.evidenceSeq : undefined
     const entry: MemoryEntry = {
       id,
       scope: draft.scope,
@@ -1207,6 +1228,8 @@ export class MemoryStore {
       // Provenance survives a rewrite: a consolidation that re-words an entry
       // must not erase which conversation it came from.
       ...sourceSession !== undefined && sourceSession.length > 0 ? { sourceSession } : {},
+      ...quote !== undefined && quote.length > 0 ? { quote } : {},
+      ...evidenceSeq !== undefined && evidenceSeq > 0 ? { evidenceSeq } : {},
       ...derivedFrom.length > 0 ? { derivedFrom } : {},
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,

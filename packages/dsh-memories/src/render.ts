@@ -546,6 +546,9 @@ export function renderEntry(entry: MemoryEntry): string {
     ...entry.sourceSession === undefined
       ? []
       : [`session: ${entry.sourceSession} (memory action=evidence, or memories/sessions/${entry.sourceSession}.md)`],
+    ...entry.quote === undefined
+      ? []
+      : [`evidence${entry.evidenceSeq === undefined ? '' : ` @seq ${entry.evidenceSeq}`}: "${entry.quote}"`],
     '',
     entry.body,
   ].join('\n')

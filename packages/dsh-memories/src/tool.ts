@@ -271,6 +271,13 @@ export function registerMemoryTool(ctx: Context, runtime: MemoriesRuntime): () =
               return { ok: false, action: args.action, message: `No memory with id ${JSON.stringify(id)}.`, results: [] }
             }
             context = `Memory ${JSON.stringify(found.title)}: `
+            // The verbatim excerpt checked before the entry was written. Without
+            // it the reader can only open the session note, which is the model's
+            // own summary — the very thing the quote exists to be checked against.
+            if (found.quote !== undefined && found.quote.length > 0) {
+              const at = found.evidenceSeq === undefined ? '' : ` @seq ${found.evidenceSeq}`
+              context += `\nevidence${at}: "${found.quote}"\n`
+            }
             // The merge trail. A consolidation folds several memories into one
             // and archives the sources, so without this the only record of what
             // the surviving claim was built from is a list of ids nobody can

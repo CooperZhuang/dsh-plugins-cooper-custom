@@ -25,6 +25,16 @@ export interface ExtractWindow {
   readonly lastSeq: number | undefined
   /** Number of messages included. */
   readonly messages: number
+  /**
+   * The messages behind {@link ExtractWindow.text}, with their surface seq.
+   *
+   * The extractor answers with a verbatim quote, and this is what the quote is
+   * checked against: a candidate whose quote is not a substring of one of these
+   * messages is dropped before it reaches the store. `text` is not enough
+   * because it carries the `USER:`/`ASSISTANT:` prefixes and the quote comes from
+   * the message body.
+   */
+  readonly sources: readonly { readonly seq: number; readonly text: string }[]
 }
 
 /**
@@ -70,6 +80,7 @@ export const EXTRACT_SYSTEM = [
   '- "knowledge": a non-obvious technique worth reusing.',
   '- "fact": durable background that is none of the above.',
   'Always provide "appliesTo": a short phrase in the user\'s words saying when this memory matters ("准备推送代码之前"). It is the field that lets a paraphrased turn find the memory, and it is required.',
+  'Every memory must also carry "quote": one continuous passage copied VERBATIM from a single message in the transcript above (8-200 characters), keeping its punctuation and wording exactly, and without the "USER:"/"ASSISTANT:" line prefix. Choose the sentence that carries the claim — the user stating it, or the assistant\'s conclusion you are recording — not a greeting, a question or your own summary. Never paraphrase the quote, combine two messages, or invent one. The quote is checked as an exact substring of the transcript before the memory is written, and a memory whose quote does not appear there is discarded, so a paraphrased quote loses the memory.',
   '',
   'Mark whose words a memory preserves with "voice":',
   '- "user" when the user themselves stated it: how they want work done, a correction they issued, a habit, an opinion, a rule they set ("以后都…", "不要…", "我喜欢…").',
@@ -82,7 +93,7 @@ export const EXTRACT_SYSTEM = [
   '- "dueAt" only when a deadline was actually said, as ISO date or date-time. Never invent one: a loop without a deadline is a note, and nagging somebody about a note turns help into supervision.',
   '- Skip what the session shows as already done, and skip the assistant\'s own to-dos. An empty array is the normal result.',
   'Prefer few high-value memories over many trivial ones. Return at most the requested number.',
-  'Reply with JSON only, no prose and no code fence: {"memories":[{"scope":"global"|"project","kind":string,"title":string,"body":string,"tags":string[],"appliesTo":string}],"summary":string}',
+  'Reply with JSON only, no prose and no code fence: {"memories":[{"scope":"global"|"project","kind":string,"title":string,"body":string,"tags":string[],"appliesTo":string,"quote":string}],"summary":string}',
   'Write the "memories" array first and the "summary" paragraph last: the reply is capped, and a summary written first can spend the whole budget before the first memory is complete.',
   'Write "summary" as one paragraph (2-4 sentences) saying what this session was about — the task, the decisions, and anything that would help someone judge the memories above later. It is stored as the evidence behind them.',
   'When nothing is worth remembering, reply exactly {"memories":[],"summary":""}.'
@@ -105,7 +116,7 @@ export const EXTRACT_JSON_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['scope', 'title', 'body', 'appliesTo'],
+        required: ['scope', 'title', 'body', 'appliesTo', 'quote'],
         properties: {
           scope: { type: 'string', enum: ['global', 'project'] },
           kind: { type: 'string', enum: ['fact', 'preference', 'knowledge', 'failure', 'procedure'] },
@@ -114,6 +125,7 @@ export const EXTRACT_JSON_SCHEMA = {
           tags: { type: 'array', items: { type: 'string' } },
           keys: { type: 'array', items: { type: 'string' } },
           appliesTo: { type: 'string' },
+          quote: { type: 'string' },
           voice: { type: 'string', enum: ['user', 'assistant'] },
           durability: { type: 'string', enum: ['durable', 'snapshot'] },
           asOf: { type: 'string' },
@@ -216,7 +228,7 @@ export function collectWindow(
   maxChars: number,
 ): ExtractWindow {
   const floor = SessionSeq(Math.max(0, Math.trunc(afterSeq)))
-  const lines: { seq: number; text: string }[] = []
+  const lines: { seq: number; role: 'user' | 'assistant'; text: string }[] = []
   for (const seq of session.surface.nodes) {
     if (seq <= floor) continue
     const event = session.eventAt(seq)
@@ -227,21 +239,26 @@ export function collectWindow(
     if (message === null) continue
     const text = blockText(message.content)
     if (text.length === 0) continue
-    lines.push({ seq, text: `${message.role === 'user' ? 'USER' : 'ASSISTANT'}: ${text}` })
+    lines.push({ seq, role: message.role === 'user' ? 'user' : 'assistant', text })
   }
   const selected = lines.slice(-maxMessages)
-  const kept: string[] = []
+  const kept: { seq: number; role: 'user' | 'assistant'; text: string }[] = []
   let used = 0
   for (let index = selected.length - 1; index >= 0; index -= 1) {
     const line = selected[index]
     if (line === undefined) continue
-    const cost = line.text.length + 1
+    const cost = `${line.role === 'user' ? 'USER' : 'ASSISTANT'}: ${line.text}`.length + 1
     if (used + cost > maxChars && kept.length > 0) break
     used += cost
-    kept.unshift(line.text)
+    kept.unshift(line)
   }
   const lastSeq = selected.at(-1)?.seq
-  return { text: kept.join('\n\n'), lastSeq, messages: kept.length }
+  return {
+    text: kept.map((line) => `${line.role === 'user' ? 'USER' : 'ASSISTANT'}: ${line.text}`).join('\n\n'),
+    lastSeq,
+    messages: kept.length,
+    sources: kept.map((line) => ({ seq: line.seq, text: line.text })),
+  }
 }
 
 /**
@@ -338,6 +355,12 @@ export function parseExtraction(text: string, maxMemories: number, sessionId: st
     // extractor's own claim if it parsed, otherwise the moment of extraction.
     const snapshot = record['durability'] === 'snapshot'
     const parsedAsOf = typeof record['asOf'] === 'string' ? Date.parse(record['asOf']) : Number.NaN
+    // The evidence excerpt. Kept as close to the reply as verification allows:
+    // only whitespace is normalized (a long transcript line may be re-wrapped),
+    // never punctuation or wording — those are what the substring check proves.
+    const quote = typeof record['quote'] === 'string'
+      ? redactSecrets(record['quote'].replace(/\s+/gu, ' ').trim()).slice(0, 300)
+      : ''
     // "assistant" is the default and is stored as absent, so every entry written
     // before this field existed keeps its meaning.
     const voice = record['voice'] === 'user' ? 'user' as const : undefined
@@ -350,6 +373,7 @@ export function parseExtraction(text: string, maxMemories: number, sessionId: st
       keys,
       ...voice === undefined ? {} : { voice },
       ...appliesTo.length > 0 ? { appliesTo } : {},
+      ...quote.length > 0 && quote !== '[redacted]' ? { quote } : {},
       ...snapshot ? { durability: 'snapshot' as const, asOf: Number.isFinite(parsedAsOf) ? parsedAsOf : Date.now() } : {},
       sourceSession: sessionId,
     })
@@ -358,6 +382,66 @@ export function parseExtraction(text: string, maxMemories: number, sessionId: st
   result.dropped = usable.length - result.drafts.length
   result.loops = parseLoops(envelope.loops)
   return result
+}
+
+/**
+ * Shortest quote that can count as evidence.
+ *
+ * Four characters was too few in practice: a phrase like "这个" or "pnpm" occurs
+ * in most messages, so it would "verify" a claim it does not support. Eight
+ * characters is about the shortest span that can carry a claim in Chinese and
+ * still be unique enough to be worth checking.
+ */
+const MIN_QUOTE_CHARS = 8
+
+/** Collapse whitespace so a re-wrapped quote still matches its source line. */
+function squash(value: string): string {
+  return value.replace(/\s+/gu, ' ').trim()
+}
+
+/** What {@link bindEvidence} made of one reply. */
+export interface EvidenceBinding {
+  /** Drafts that carry a quote found verbatim in the window's messages. */
+  readonly drafts: readonly MemoryDraft[]
+  /** Drafts dropped because the quote was missing, too short, or not in the transcript. */
+  readonly unsupported: number
+}
+
+/**
+ * Check every draft's quote against the transcript it claims to come from.
+ *
+ * This is the mechanical half of the evidence contract: the extractor is asked
+ * to copy a verbatim passage, and nothing else in the pipeline can tell a copied
+ * passage from a plausible one. A draft without a usable quote is dropped rather
+ * than stored unverified — the whole point of the field is that a memory the
+ * transcript does not support must not enter the store silently. The message the
+ * quote matched supplies an `evidenceSeq`, so `memory action=evidence` can point
+ * at the exact turn.
+ *
+ * @param drafts - drafts parsed from the reply.
+ * @param sources - messages in the window the reply was shown.
+ * @returns the verified drafts and how many were rejected.
+ */
+export function bindEvidence(
+  drafts: readonly MemoryDraft[],
+  sources: readonly { readonly seq: number; readonly text: string }[],
+): EvidenceBinding {
+  const verified: MemoryDraft[] = []
+  let unsupported = 0
+  for (const draft of drafts) {
+    const quote = draft.quote === undefined ? '' : squash(draft.quote)
+    if (quote.length < MIN_QUOTE_CHARS) {
+      unsupported += 1
+      continue
+    }
+    const source = sources.find((candidate) => squash(candidate.text).includes(quote))
+    if (source === undefined) {
+      unsupported += 1
+      continue
+    }
+    verified.push({ ...draft, evidenceSeq: source.seq })
+  }
+  return { drafts: verified, unsupported }
 }
 
 /** Everything one extraction call needs. */
@@ -423,6 +507,12 @@ export type ExtractionOutcome =
     readonly summary: string
     /** Usable drafts the reply offered beyond `maxMemories`, reported to the caller. */
     readonly dropped: number
+    /**
+     * Drafts rejected because their evidence quote did not appear verbatim in
+     * the window. Reported so a rising count is visible instead of reading as
+     * an unusually quiet extractor.
+     */
+    readonly unsupported: number
     readonly route: ExtractionRoute
     /**
      * Whether the reply was cut short by the output cap and salvaged.
@@ -450,7 +540,7 @@ export type ExtractionOutcome =
      * empty answer: they are reported, never thrown, and `max-tokens` is the
      * one that tells a reader which configuration knob to raise.
      */
-    readonly reason: 'empty-window' | 'no-route' | 'empty-reply' | 'max-tokens' | 'incomplete'
+    readonly reason: 'empty-window' | 'no-route' | 'empty-reply' | 'unsupported-evidence' | 'max-tokens' | 'incomplete'
     /**
      * The route the call ran on, when one was resolved.
      *
@@ -532,23 +622,34 @@ export async function runExtraction(llm: LlmRuntime, request: ExtractionRequest)
     const salvaged = complete.drafts.length > 0
       ? complete
       : parseExtraction(repairTruncatedJson(text), request.maxMemories, request.session.id)
-    if (salvaged.drafts.length > 0) {
+    // Evidence is checked before "was anything kept": a salvaged object whose
+    // quote is not in the transcript is exactly the case the check exists for.
+    const bound = bindEvidence(salvaged.drafts, request.window.sources)
+    if (bound.drafts.length > 0) {
       return {
         kind: 'memories',
-        drafts: salvaged.drafts,
+        drafts: bound.drafts,
         loops: salvaged.loops,
         summary: salvaged.summary,
         dropped: salvaged.dropped,
+        unsupported: bound.unsupported,
         route,
         truncated: true,
         ...usage === undefined ? {} : { usage },
       }
     }
+    if (bound.unsupported > 0) {
+      return { kind: 'none', reason: 'unsupported-evidence', route, ...usage === undefined ? {} : { usage } }
+    }
     return { kind: 'none', reason: finish === 'max-tokens' ? 'max-tokens' : 'incomplete', route, ...usage === undefined ? {} : { usage } }
   }
   const parsed = parseExtraction(text, request.maxMemories, request.session.id)
   if (parsed.drafts.length === 0) return { kind: 'none', reason: 'empty-reply', route, ...usage === undefined ? {} : { usage } }
-  return { kind: 'memories', drafts: parsed.drafts, loops: parsed.loops, summary: parsed.summary, dropped: parsed.dropped, route, ...usage === undefined ? {} : { usage } }
+  const bound = bindEvidence(parsed.drafts, request.window.sources)
+  if (bound.drafts.length === 0) {
+    return { kind: 'none', reason: 'unsupported-evidence', route, ...usage === undefined ? {} : { usage } }
+  }
+  return { kind: 'memories', drafts: bound.drafts, loops: parsed.loops, summary: parsed.summary, dropped: parsed.dropped, unsupported: bound.unsupported, route, ...usage === undefined ? {} : { usage } }
 }
 
 /**

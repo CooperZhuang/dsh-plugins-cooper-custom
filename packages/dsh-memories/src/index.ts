@@ -2438,6 +2438,13 @@ export class MemoriesRuntime {
           // number and putting the extractor on a route that fits the job.
           this.log.info('dsh-memories: session %s hit the %d-token extraction cap on %s before writing anything usable; raise extractMaxOutputTokens%s',
             key, this.settings.extractMaxOutputTokens, describeExtractionRoute(outcome.route), spend)
+        } else if (outcome.reason === 'unsupported-evidence') {
+          // Every candidate failed the verbatim-quote check. This is not "nothing
+          // worth remembering" — it means the reply looked plausible but could
+          // not be tied back to any message, which is precisely the failure the
+          // evidence contract exists to catch. The knob to look at is the route.
+          this.log.info('dsh-memories: session %s produced only memory candidates whose evidence quote did not appear in the transcript, so none were stored; check the extraction route on %s%s',
+            key, describeExtractionRoute(outcome.route), spend)
         } else {
           this.log.decision('dsh-memories: session %s produced no memories (%s)%s', key, outcome.reason, spend)
         }
@@ -2469,14 +2476,25 @@ export class MemoriesRuntime {
           this.log.info('dsh-memories: the extractor offered %d more than the cap of %d, so they were dropped (raise extractMaxMemories to keep them)',
             outcome.dropped, this.settings.extractMaxMemories)
         }
+        if (outcome.unsupported > 0) {
+          // The quote check is the only thing standing between a plausible
+          // sentence and an entry that claims the user said it. A rising count
+          // means the reply is paraphrasing instead of copying, which is a
+          // prompt/route problem — say so rather than letting the pass look
+          // merely less productive.
+          this.log.info('dsh-memories: dropped %d candidate(s) from session %s whose evidence quote did not appear verbatim in the transcript',
+            outcome.unsupported, key)
+        }
       }
       // Only a completed extraction may consume the transcript window. A capped
       // or incomplete reply is retryable: advancing here would turn a provider
       // failure into `nothing-new` on every later periodic pass and lose the
       // unmined conversation permanently. An explicit empty reply is complete
-      // and may advance because the model answered that there was no memory.
+      // and may advance because the model answered that there was no memory; so
+      // is a reply whose every candidate failed the quote check, because retrying
+      // would resend the same window and most likely reproduce the same reply.
       const advancesWatermark = outcome.kind === 'memories'
-        || outcome.kind === 'none' && outcome.reason === 'empty-reply'
+        || outcome.kind === 'none' && (outcome.reason === 'empty-reply' || outcome.reason === 'unsupported-evidence')
       if (advancesWatermark) {
         this.capped.delete(key)
         this.state.putSession(key, {

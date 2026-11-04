@@ -51,6 +51,8 @@ export interface BackfillWindow {
   readonly firstSeq: number
   readonly lastSeq: number
   readonly messages: number
+  /** Message bodies behind `text`, for the extraction quote check. */
+  readonly sources: readonly { readonly seq: number; readonly text: string }[]
 }
 
 /** zstd frame magic bytes; a session log is a concatenation of frames. */
@@ -224,13 +226,19 @@ export function planWindows(
   const windows: BackfillWindow[] = []
   const messageCap = Math.max(1, Math.trunc(maxMessages))
   const charCap = Math.max(200, Math.trunc(maxChars))
-  let current: string[] = []
+  let current: { seq: number; text: string; line: string }[] = []
   let cost = 0
   let firstSeq = 0
   let lastSeq = 0
   const flush = (): void => {
     if (current.length === 0) return
-    windows.push({ text: current.join('\n\n'), firstSeq, lastSeq, messages: current.length })
+    windows.push({
+      text: current.map((entry) => entry.line).join('\n\n'),
+      firstSeq,
+      lastSeq,
+      messages: current.length,
+      sources: current.map((entry) => ({ seq: entry.seq, text: entry.text })),
+    })
     current = []
     cost = 0
   }
@@ -239,7 +247,7 @@ export function planWindows(
     const lineCost = line.length + (current.length === 0 ? 0 : 2)
     if (current.length > 0 && (current.length >= messageCap || cost + lineCost > charCap)) flush()
     if (current.length === 0) firstSeq = message.seq
-    current.push(line)
+    current.push({ seq: message.seq, text: message.text, line })
     lastSeq = message.seq
     cost += lineCost
   }
