@@ -285,7 +285,7 @@ test('the Session row menu offers the action only when it can work', async () =>
 
     const actions = await menu.resolve({ sessionId: 's1', displayTitle: 'Project' }, new AbortController().signal)
     assert.deepEqual(actions.map((action) => action.id), ['qspace'])
-    assert.equal(actions[0].label, '用 QSpace 打开工作目录')
+    assert.equal(actions[0].label, '在 QSpace 中显示')
     assert.equal(actions[0].failureLabel, '无法打开，请重试')
     assert.equal(actions[0].disabled, undefined)
 

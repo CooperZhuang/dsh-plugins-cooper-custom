@@ -12,7 +12,7 @@
     "terminal": "在终端中打开",
     "explorer": "在资源管理器中显示",
     "qspaceDocument": "用 QSpace 打开所在目录",
-    "qspaceSession": "用 QSpace 打开工作目录",
+    "qspaceSession": "在 QSpace 中显示",
     "sessionNoCwd": "会话没有工作目录",
     "failed": "无法打开，请重试"
   }
