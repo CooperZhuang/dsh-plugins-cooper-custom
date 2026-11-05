@@ -1,12 +1,11 @@
 /**
- * Browser-half tests for the three Session-scoped entries.
+ * Browser-half tests for the two Session-scoped entries.
  *
  * The shipped bundle is executed the way the DSH client executes it — a classic
  * script registering a lazy factory — so these cover the artifact, not a copy
  * of the source. The slot contract is asserted from the registrations
- * themselves (name / id / order / inject), and the components are called with
- * the props those slots actually pass: `absolutePath` for the document header,
- * `sessionId` for the Conversation header.
+ * themselves (name / id / order / inject), and the component is called with
+ * the props the slot actually passes: `absolutePath` for the document header.
  *
  * The Host is faked at fetch level, so what these tests can catch is the part
  * that would fail silently in the UI: a button wired to the wrong route, a
@@ -25,7 +24,6 @@ const bundle = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
 
 /** The slot names this backport has to land on, exactly as the Host declares them. */
 const DOCUMENT_SLOT = 'sidebar.right.tab.document.actions'
-const HEADER_SLOT = 'conversation.session.header.actions'
 
 /** The seed React the bundle is allowed to reach through the module table. */
 function fakeReact() {
@@ -193,7 +191,7 @@ async function settle() {
   await new Promise((resolve) => setTimeout(resolve, 0))
 }
 
-test('the three entries register on the contracts the Host declares', async () => {
+test('the two entries register on the contracts the Host declares', async () => {
   await withBrowser(hostFetch([], []), () => {
   const mounted = mount()
 
@@ -210,18 +208,11 @@ test('the three entries register on the contracts the Host declares', async () =
   assert.equal(typeof document.order, 'number')
   assert.equal(document.locale, 'dsh-open-in-dsh')
 
-  // Conversation header: a list slot on the session scope.
-  const header = slotRegistration(mounted.slots, HEADER_SLOT)
-  assert.equal(header.id, 'open-with.qspace')
-  assert.equal(typeof header.component, 'function')
-
-  // Both rendered entries take QSpace availability as an injected hook, not a
-  // fetch of their own.
-  for (const entry of [document, header]) {
-    const injected = entry.inject()
-    assert.equal(typeof injected.hooks.qspaceAvailable.getSnapshot, 'function')
-    assert.equal(typeof injected.hooks.qspaceAvailable.subscribe, 'function')
-  }
+  // The rendered entry takes QSpace availability as an injected hook, not a
+  // fetch of its own.
+  const injected = document.inject()
+  assert.equal(typeof injected.hooks.qspaceAvailable.getSnapshot, 'function')
+  assert.equal(typeof injected.hooks.qspaceAvailable.subscribe, 'function')
 
   // The plugin now depends on the slot service; without it apply would throw.
   assert.ok(mounted.exports.inject.includes('slots'))
@@ -251,26 +242,6 @@ test('the document entry opens the file\'s directory, not the file', async () =>
   })
 })
 
-test('the Conversation header opens the session, never a guessed path', async () => {
-  const calls = []
-  await withBrowser(hostFetch(['qspace'], calls), async () => {
-    const mounted = mount()
-    const action = slotRegistration(mounted.slots, HEADER_SLOT).component
-    const t = (key) => mounted.dictionaries['dsh-open-in-dsh'].zh[key] ?? key
-
-    const element = action({ sessionId: 's1', t, useQspaceAvailable: () => true })
-    assert.equal(element.type, 'button')
-    assert.deepEqual(element.children, ['QSpace 打开'])
-    assert.equal(element.props.title, '用 QSpace 打开工作目录')
-
-    element.props.onClick()
-    await settle()
-    assert.equal(calls.length, 1)
-    assert.equal(calls[0].url, ROUTE_OPEN_SESSION)
-    assert.deepEqual(JSON.parse(calls[0].init.body), { sessionId: 's1', app: 'qspace' })
-  })
-})
-
 test('a refused launch raises the localized failure toast', async () => {
   const calls = []
   const overrides = {
@@ -280,20 +251,17 @@ test('a refused launch raises the localized failure toast', async () => {
   await withBrowser(hostFetch(['qspace'], calls, overrides), async () => {
     const mounted = mount()
     const t = (key) => mounted.dictionaries['dsh-open-in-dsh'].zh[key] ?? key
-    const header = slotRegistration(mounted.slots, HEADER_SLOT).component({ sessionId: 's1', t, useQspaceAvailable: () => true })
     const document = slotRegistration(mounted.slots, DOCUMENT_SLOT).component({
       absolutePath: '/work/docs/a.md',
       t,
       useQspaceAvailable: () => true,
     })
 
-    header.props.onClick()
-    await settle()
     document.props.onClick()
     await settle()
 
-    assert.equal(calls.length, 2)
-    assert.deepEqual(mounted.notices, ['无法打开，请重试', '无法打开，请重试'])
+    assert.equal(calls.length, 1)
+    assert.deepEqual(mounted.notices, ['无法打开，请重试'])
   })
 })
 
@@ -302,13 +270,10 @@ test('nothing renders when QSpace cannot be launched or the target is unknown', 
     const mounted = mount()
     const t = (key) => mounted.dictionaries['dsh-open-in-dsh'].zh[key] ?? key
     const document = slotRegistration(mounted.slots, DOCUMENT_SLOT).component
-    const header = slotRegistration(mounted.slots, HEADER_SLOT).component
 
     assert.equal(document({ absolutePath: '/work/a.md', t, useQspaceAvailable: () => false }), null)
-    assert.equal(header({ sessionId: 's1', t, useQspaceAvailable: () => false }), null)
-    // No path reported by the preview, and no session on the header scope.
+    // No path reported by the preview.
     assert.equal(document({ absolutePath: undefined, t, useQspaceAvailable: () => true }), null)
-    assert.equal(header({ t, useQspaceAvailable: () => true }), null)
   })
 })
 

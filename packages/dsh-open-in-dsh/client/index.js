@@ -56,10 +56,9 @@ const ROUTE_APPS = '/dsh-open-in-dsh/api/v1/apps'
 /**
  * The Host's Session route; carried by hand in lib/index.js.
  *
- * The two Session-scoped entries (the Conversation header button and the
- * sidebar row menu) only ever know a session id. This route is where the Host
- * turns that id into a directory, so the browser half never guesses a cwd and
- * never sends one.
+ * The Session-scoped entry (the sidebar row menu) only ever knows a session
+ * id. This route is where the Host turns that id into a directory, so the
+ * browser half never guesses a cwd and never sends one.
  */
 const ROUTE_OPEN_SESSION = '/dsh-open-in-dsh/api/v1/open-session'
 
@@ -335,49 +334,6 @@ function createDocumentAction(React, deps) {
   return QspaceDocumentAction
 }
 
-/**
- * Build the Conversation-header button: "open this Session's working directory
- * in QSpace".
- *
- * The session id is a strict Session-slot prop; the directory is the Host's
- * business (`POST .../open-session`), so this half never guesses a cwd.
- *
- * @param React - the seed React module.
- * @param deps - `{openSession, fail}`: the Host launcher and the failure toast.
- * @returns the slot component for `conversation.session.header.actions`.
- */
-function createHeaderAction(React, deps) {
-  const h = elementFactory(React)
-  /**
-   * @param props - slot props: `sessionId`, `useQspaceAvailable`, `t`.
-   * @returns the button, or null when QSpace is not launchable here.
-   */
-  function QspaceSessionHeaderAction(props) {
-    if (h === null) return null
-    const available = readAvailability(props)
-    const sessionId = typeof props.sessionId === 'string' ? props.sessionId : ''
-    if (available !== true || sessionId === '') return null
-    const label = props.t('menu.qspaceSession')
-    return h(
-      'button',
-      {
-        type: 'button',
-        'data-dsh-open-in-dsh': 'session-header',
-        title: label,
-        'aria-label': label,
-        style: QSPACE_BUTTON_STYLE,
-        onClick: () => {
-          Promise.resolve()
-            .then(() => deps.openSession('qspace', sessionId))
-            .catch(() => deps.fail())
-        },
-      },
-      props.t('menu.sessionHeader'),
-    )
-  }
-  return QspaceSessionHeaderAction
-}
-
 /** Test and troubleshooting surface; not part of the plugin API. */
 const __internals = {
   appIdsFrom,
@@ -387,7 +343,6 @@ const __internals = {
   parentDirectory,
   createAvailability,
   createDocumentAction,
-  createHeaderAction,
   MENU_APP_ORDER,
 }
 
@@ -625,11 +580,9 @@ function createPlugin(require) {
       'dsh-open-in-dsh: session menu',
     )
 
-    // The two rendered entries. `slots.inject` waits for the declaration, so a
-    // composition without the document preview or the Conversation header
-    // simply never asks for them.
+    // The one rendered entry. `slots.inject` waits for the declaration, so a
+    // composition without the document preview simply never asks for it.
     const documentAction = createDocumentAction(React, { openWith: launch, fail: notifyFailure })
-    const headerAction = createHeaderAction(React, { openSession: openSession, fail: notifyFailure })
     ctx.slots.inject('sidebar.right.tab.document.actions', () =>
       ctx.slots.register(
         {
@@ -642,19 +595,6 @@ function createPlugin(require) {
         documentAction,
       ),
     )
-    ctx.slots.inject('conversation.session.header.actions', () =>
-      ctx.slots.register(
-        {
-          name: 'conversation.session.header.actions',
-          id: 'open-with.qspace',
-          order: 10,
-          locale: NS,
-          inject: () => ({ hooks: { qspaceAvailable: qspace } }),
-        },
-        headerAction,
-      ),
-    )
-
     /**
      * Apply one announced folder.
      *

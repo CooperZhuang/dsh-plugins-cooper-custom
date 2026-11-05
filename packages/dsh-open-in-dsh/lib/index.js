@@ -134,10 +134,10 @@ export const ROUTE_OPEN_WITH = '/dsh-open-in-dsh/api/v1/open-with'
 export const ROUTE_APPS = '/dsh-open-in-dsh/api/v1/apps'
 
 /**
- * The Session-scoped entries (the Conversation header button and the sidebar
- * row menu) know a session id, never a directory: the browser half has the
- * Session projection, not the stored header. This route is where the Host
- * turns "session X" into "directory D" and launches D.
+ * The Session-scoped entry (the sidebar row menu) knows a session id, never a
+ * directory: the browser half has the Session projection, not the stored
+ * header. This route is where the Host turns "session X" into "directory D"
+ * and launches D.
  *
  * The browser still only names an allowlisted app id plus a session id; the
  * path never crosses the wire, so a forged request cannot open an arbitrary

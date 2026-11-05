@@ -13,7 +13,6 @@
     "explorer": "Show in Explorer",
     "qspaceDocument": "Open folder in QSpace",
     "qspaceSession": "Open workspace folder in QSpace",
-    "sessionHeader": "Open in QSpace",
     "sessionNoCwd": "No workspace folder",
     "failed": "Could not open. Try again."
   }

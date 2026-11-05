@@ -13,7 +13,6 @@
     "explorer": "在资源管理器中显示",
     "qspaceDocument": "用 QSpace 打开所在目录",
     "qspaceSession": "用 QSpace 打开工作目录",
-    "sessionHeader": "QSpace 打开",
     "sessionNoCwd": "会话没有工作目录",
     "failed": "无法打开，请重试"
   }
