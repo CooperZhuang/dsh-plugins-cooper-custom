@@ -1,0 +1,152 @@
+diff --git a/lib/client.js b/lib/client.js
+index a808158..fdaaad0 100644
+--- a/lib/client.js
++++ b/lib/client.js
+@@ -2579,6 +2579,7 @@ window.__ModuleLoader__.load({
+ 		*/
+ 		/** The zh dictionary (also registered into the DSH locale registry under {@link LOCALE_NS}). */
+ 		const zh = {
++			sessionRowTabsTitle: "此会话有侧栏页签",
+ 			files: "文件",
+ 			guideDescFiles: "浏览工作区文件树，点开即预览或编辑",
+ 			guideDescGit: "Git 变更与本轮文件改动，双视角合一",
+@@ -3235,6 +3236,7 @@ window.__ModuleLoader__.load({
+ 		};
+ 		/** The en dictionary (key-set-equal to zh, enforced by the type annotation). */
+ 		const en = {
++			sessionRowTabsTitle: "This session has sidebar tabs",
+ 			files: "Files",
+ 			guideDescFiles: "Browse the workspace tree; click a file to preview or edit",
+ 			guideDescGit: "Git changes and this session's file edits, in one tab",
+@@ -33926,6 +33928,109 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
+ 			"remote",
+ 			"remote.session"
+ 		];
++		// [local-patch:session-row-icon-helpers] dsh-better-sidebar 0.30.0 local patch:
++		// a non-interactive trailing icon on Session rows (DSH 0.2.2+ slot
++		// `sidebar.session.row.trailing`) for sessions whose persisted better-sidebar
++		// layout still holds tabs. The published bundle has no row-level surface, so
++		// this block plus the registration in apply() is carried by
++		// scripts/patches/dsh-better-sidebar-session-icon.patch. Re-check after every
++		// dsh-better-sidebar upgrade and regenerate the patch against that version.
++		const SESSION_ROW_ICON_PREFIX = "dsh-sidebar:v1";
++		const SESSION_ROW_ICON_RESET = (() => {
++			try {
++				return new URLSearchParams(window.location.search).has("dsh-sidebar-reset");
++			} catch {
++				return false;
++			}
++		})();
++		const sessionRowIconCache = new Map();
++		function countSessionRowTabs(state) {
++			let count = 0;
++			const walk = (node) => {
++				if (node === null || typeof node !== "object") return;
++				if (node.kind === "leaf") {
++					if (Array.isArray(node.tabs)) count += node.tabs.length;
++					return;
++				}
++				if (Array.isArray(node.children)) for (const child of node.children) walk(child);
++			};
++			walk(state?.bottomSplits);
++			return count;
++		}
++		function sessionHasRowTabs(store, sessionId) {
++			if (store === void 0 || typeof sessionId !== "string") return false;
++			const cached = store.getSessionState(sessionId);
++			if (cached !== undefined) return countSessionRowTabs(cached) > 0;
++			if (SESSION_ROW_ICON_RESET) return false;
++			let raw = null;
++			try {
++				raw = window.localStorage.getItem(`${SESSION_ROW_ICON_PREFIX}:${sessionId}`);
++			} catch {
++				return false;
++			}
++			if (raw === null) return false;
++			const hit = sessionRowIconCache.get(sessionId);
++			if (hit !== undefined && hit.raw === raw) return hit.has;
++			let has = false;
++			try {
++				has = countSessionRowTabs(JSON.parse(raw)) > 0;
++			} catch {
++				has = false;
++			}
++			if (sessionRowIconCache.size > 512) sessionRowIconCache.clear();
++			sessionRowIconCache.set(sessionId, {
++				raw,
++				has
++			});
++			return has;
++		}
++		// `props.sessionId` is the host's owner share for this root list seat (each
++		// row renders renderSlot('sidebar.session.row.trailing', { sessionId }));
++		// `store` is bound by the registration wrapper in apply() — a root-scoped
++		// list entry's inject face is argument-less, so the plugin's per-activation
++		// store travels through the component closure instead.
++		function SessionRowTabsIcon(props, store) {
++			const subscribe = react.useMemo(() => (listener) => store.subscribe(listener), [store]);
++			const getSnapshot = react.useCallback(() => store.getSnapshot(), [store]);
++			react.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
++			if (!sessionHasRowTabs(store, props.sessionId)) return null;
++			return react.createElement("span", {
++				className: "dsh-better-sidebar-session-row-tabs",
++				title: t("sessionRowTabsTitle"),
++				"data-better-sidebar-row-tabs": "",
++				style: {
++					display: "inline-flex",
++					alignItems: "center",
++					justifyContent: "center",
++					width: "14px",
++					height: "14px",
++					marginLeft: "4px",
++					flex: "none",
++					color: "inherit",
++					opacity: "0.6"
++				}
++			}, react.createElement("svg", {
++				width: 14,
++				height: 14,
++				viewBox: "0 0 16 16",
++				fill: "none",
++				"aria-hidden": "true",
++				focusable: "false"
++			}, react.createElement("rect", {
++				x: 1.75,
++				y: 2.75,
++				width: 12.5,
++				height: 10.5,
++				rx: 2.25,
++				stroke: "currentColor",
++				strokeWidth: 1.25
++			}), react.createElement("path", {
++				d: "M9.75 3v10",
++				stroke: "currentColor",
++				strokeWidth: 1.25
++			})));
++		}
++		// [/local-patch:session-row-icon-helpers]
+ 		/**
+ 		* Error boundary over the sidebar tree (root scope): a render error in the
+ 		* sidebar SHELL itself must never blank the page silently — the shared
+@@ -33985,6 +34090,21 @@ Mode: this is a continuable side conversation. Your answers stay in this side th
+ 			const sidebarStore = createSidebarStore();
+ 			const service = createBetterSidebarService(sidebarStore);
+ 			ctx.provide("betterSidebar", service);
++			// [local-patch:session-row-icon-register] DSH 0.2.2+ per-Session trailing
++			// seat: `slots.inject` waits for the workspace UI's declaration (it is
++			// owned by another entry) and re-registers if that declaration is
++			// restored. The slot is a ROOT-scoped list: ui-renderer calls an entry's
++			// inject with no arguments and spreads the owner props ({ sessionId })
++			// last, so the session id arrives as a component prop. Only the store is
++			// bound here, through this per-activation component wrapper. The seat is
++			// non-interactive by contract.
++			const sessionRowTabsIcon = (props) => SessionRowTabsIcon(props, sidebarStore);
++			ctx.effect(() => ctx.slots.inject("sidebar.session.row.trailing", () => ctx.slots.register({
++				name: "sidebar.session.row.trailing",
++				id: "dsh-better-sidebar:session-row-tabs",
++				order: 10
++			}, sessionRowTabsIcon)), "dsh-better-sidebar: session row tabs icon");
++			// [/local-patch:session-row-icon-register]
+ 			ctx.effect(() => () => {
+ 				disposeSidechatSurfaces(service);
+ 			}, "dsh-better-sidebar: sidechat surface adapters");
