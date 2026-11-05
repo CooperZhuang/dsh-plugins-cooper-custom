@@ -135,6 +135,15 @@ test('the check is not vacuous: a descriptor with an undefined label is rejected
     /not losslessly JSON-serializable/u,
   )
 })
+test("the child's result is delivered to the caller, not announced to the parent inbox", () => {
+  // The pass awaits `run.result` itself. With the default `parent` delivery the
+  // kernel also pushes a settlement message into the parent's inbox, and a child
+  // that answers in plain text instead of calling `structured_output` is marked
+  // `error` — so a perfectly good plan arrived as "Background subagent failed".
+  const spec = buildActivationSpec(routedRequest(), PROMPT, AbortSignal.timeout(1_000))
+  assert.equal(spec.delivery, 'caller')
+})
+
 test('the spec carries the signal at the top level, where the kernel reads it', () => {
   // The kernel's continuable path calls `spec.signal.throwIfAborted()` and passes
   // `spec.signal` into prepareContinuable; it never looks at `spec.request.signal`.

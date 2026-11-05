@@ -519,6 +519,18 @@ export interface ActivationSpec {
    * kernel boundary, not at this module's type boundary.
    */
   signal: AbortSignal
+  /**
+   * Where the child's settlement notice goes.
+   *
+   * `caller` is right for this pass: the plugin consumes `run.result` itself, so
+   * a settlement message pushed into the parent's inbox is noise. That noise was
+   * actively misleading — the kernel marks a child that answers in plain text
+   * instead of calling `structured_output` as `error`, so the parent was told
+   * "Background subagent ... failed before it finished" while the plan had in fact
+   * arrived intact (2026-11-06). The kernel's own plugin-creator starts its
+   * children the same way.
+   */
+  delivery?: 'caller' | 'parent'
   request: {
     prompt: { type: 'text'; text: string }[]
     parent: Agent
@@ -671,6 +683,11 @@ export function buildActivationSpec(
     // descriptor validator BEFORE the child starts, and the symptom is a
     // silently dead consolidation pass rather than a start error.
     label: CONSOLIDATE_LABEL,
+    // The result is consumed here, not by the parent conversation: a settlement
+    // notice for this child is noise, and when the child misses
+    // `structured_output` that notice reads as a failure even though the answer
+    // arrived. See {@link ActivationSpec.delivery}.
+    delivery: 'caller',
     // Same class of mistake as the label, one field later: the kernel reads
     // `spec.signal` and never `spec.request.signal`, so it has to be here too.
     signal: timeout,
