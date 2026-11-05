@@ -43,6 +43,22 @@ function argValue(name) {
 }
 
 const LIMIT = Number(argValue('--limit') ?? Infinity)
+const ANSWER_VARIANT = argValue('--answer-variant') ?? 'complete'
+
+/**
+ * Answer-side prompt variants.
+ *
+ * `complete` is the current prompt; `commit` additionally tells the model not to
+ * hedge with "资料没有提到" when the material does contain the answer. Five of the
+ * more20 failures were context-had-it-but-answer-hedged, so this is a controlled
+ * test of the answer side alone (same store, same questions, same judge).
+ */
+const ANSWER_SYSTEMS = {
+  complete: '只依据下面提供的资料回答问题；资料里没有的信息就回答「不知道」。资料可能提到多个项目，问题里的「这个项目」指资料中与问题最相关的那个项目。回答要完整：问题问到的每件事都要答到，资料里与该问题相关的条件或替代做法也要一并说明；简短直接，不要复述资料。',
+  commit: '只依据下面提供的资料回答问题。资料里有答案就直接给出结论，不要用「资料没有提到…」的口吻回避；问题问到的每个数字、名称、日期、路径都要写出来。资料里确实没有的，才回答「不知道」。回答要完整：问题问到的每件事都要答到，资料里与该问题相关的条件或替代做法一并说明；简短直接，不要复述资料。',
+}
+const ANSWER_SYSTEM = ANSWER_SYSTEMS[ANSWER_VARIANT]
+if (ANSWER_SYSTEM === undefined) throw new Error(`unknown --answer-variant: ${ANSWER_VARIANT}`)
 
 /** DeepSeek's off-peak window: 00:30–08:30 Beijing time, half price. */
 function offPeak(now = Date.now()) {
@@ -71,7 +87,7 @@ function memoryContext(entries, question) {
 async function answer(chat, question, context) {
   const material = context.trim().length === 0 ? '（无资料）' : context
   return await chat([
-    { role: 'system', content: '只依据下面提供的资料回答问题；资料里没有的信息就回答「不知道」。资料可能提到多个项目，问题里的「这个项目」指资料中与问题最相关的那个项目。回答要完整：问题问到的每件事都要答到，资料里与该问题相关的条件或替代做法也要一并说明；简短直接，不要复述资料。' },
+    { role: 'system', content: ANSWER_SYSTEM },
     { role: 'user', content: `资料：\n${material}\n\n问题：${question}` },
   ], { numPredict: 200 })
 }
@@ -142,6 +158,7 @@ async function main() {
     candidatesHash: createHash('sha256').update(JSON.stringify(candidates.sessions.map((session) => session.sessionId))).digest('hex'),
     judge: { anchor },
     reextract: reextract ?? null,
+    answerVariant: ANSWER_VARIANT,
     sessions: bank.sessions.length,
     questions: rows.length,
     arms: {},
