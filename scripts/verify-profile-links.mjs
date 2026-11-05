@@ -18,7 +18,7 @@
  *   node scripts/verify-profile-links.mjs --fix        # 缺失/未链接的文件补成硬链接
  *   node scripts/verify-profile-links.mjs --profile ~/.dsh/profiles/headless
  */
-import { existsSync, linkSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'node:fs';
+import { existsSync, linkSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -46,6 +46,11 @@ if (!existsSync(join(profile, 'node_modules'))) {
     console.error(`profile 下没有 node_modules：${profile}`);
     process.exit(2);
 }
+
+// 判断一个包是否「应该」和仓库同 inode：只有 file:/link: 依赖才会被 pnpm 链接，
+// registry 依赖装的是包本身，比对 detached 没有意义。
+const manifest = JSON.parse(readFileSync(join(profile, 'package.json'), 'utf8'));
+const dependencies = manifest.dependencies ?? {};
 
 /** 递归列出 dir 下的相对文件路径（忽略点开头的文件/目录）。 */
 function walk(dir) {
@@ -77,12 +82,21 @@ let fixed = 0;
 const lines = [];
 
 for (const name of packages) {
-    const sourceLib = join(packagesDir, name, 'lib');
-    const installedRoot = join(profile, 'node_modules', name);
-    const installedLib = join(installedRoot, 'lib');
-    // 没装进这个 profile、或源码还没构建（lib/ 是 gitignore 产物），都不归本脚本管。
+    const installedLib = join(profile, 'node_modules', name, 'lib');
+    // 没装进这个 profile 的包不归本脚本管。
     if (!existsSync(installedLib)) continue;
+    const spec = dependencies[name];
+    if (spec === undefined) {
+        lines.push(`${name}: 不是该 profile 的直接依赖，跳过`);
+        continue;
+    }
+    if (!/^(file|link):/.test(spec)) {
+        lines.push(`${name}: 依赖来自仓库（${spec}），不做硬链接比对`);
+        continue;
+    }
+    const sourceLib = join(packagesDir, name, 'lib');
     checked += 1;
+    // 源码还没构建（lib/ 是 gitignore 产物）时不归本脚本管。
     if (!existsSync(sourceLib)) {
         lines.push(`${name}: 源码没有 lib/（尚未构建？），跳过`);
         continue;
@@ -92,25 +106,12 @@ for (const name of packages) {
     const installedFiles = new Set(walk(installedLib).map((path) => path.slice(installedLib.length + 1)));
     const missing = [];
     const detached = [];
-    let linked = 0;
 
     for (const rel of sourceFiles) {
         const source = join(sourceLib, rel);
         const target = join(installedLib, rel);
         if (!existsSync(target)) missing.push(rel);
         else if (!sameInode(source, target)) detached.push(rel);
-        else linked += 1;
-    }
-
-    // 不是硬链接安装（registry 包的拷贝、或整包被重新 `pnpm install` 成普通目录）：
-    // 本服务只负责硬链接安装的写穿一致性，这种包交给版本核对，别报一堆 detached。
-    if (linked === 0) {
-        const note = missing.length > 0
-            ? `；另有 ${missing.length} 个源码文件没装进去（${missing.slice(0, 3).join(', ')}${missing.length > 3 ? ' …' : ''}）`
-            : '';
-        lines.push(`${name}: 不是硬链接安装，跳过（${installedLib}）${note}`);
-        problems += missing.length;
-        continue;
     }
 
     const extra = [...installedFiles].filter((rel) => !sourceFiles.includes(rel));
@@ -149,8 +150,10 @@ if (fix) {
     process.exit(0);
 }
 console.log('');
-console.log(`结论：${problems} 处不一致。新增文件不会随 build 进 profile：`);
-console.log('  pnpm --dir <profile> remove <name> && pnpm --dir <profile> add --ignore-scripts <file:路径>');
-console.log('  或者直接 node scripts/verify-profile-links.mjs --fix');
+console.log(`结论：${problems} 处不一致。常见成因：`);
+console.log('  - build 新增的源文件不会随 build 进 profile（file: 硬链接只写穿已有文件）');
+console.log('  - git checkout / merge 重写了仓库里的源文件，硬链接被换成内容相同的普通文件（已 detached）');
+console.log('修法：node scripts/verify-profile-links.mjs --fix');
+console.log('  或 pnpm --dir <profile> remove <name> && pnpm --dir <profile> add --ignore-scripts <file:路径>');
 console.log('  改完记得让宿主重新 import（补链接后改 profile 的 cordis.patch.yml 可触发 hmr 重组；实在不行再重启）。');
 process.exit(1);
