@@ -6,3 +6,8 @@ nodeLinker: hoisted
 # 不从 npm 装（这些包在 npm 上的版本落后于宿主，盲目安装会解析到错误实现）。
 # 关掉自动安装 peer，profile 解析时由宿主自己的内核满足。
 autoInstallPeers: false
+
+# 安全修复：dev 依赖树里的 zod 4.4.3 有内存耗尽告警，统一提到修复版
+# （GHSA: zod oversized constrained collections；fixed in 4.6.6+）。运行时依赖不含 zod。
+overrides:
+  zod: ^4.6.7
