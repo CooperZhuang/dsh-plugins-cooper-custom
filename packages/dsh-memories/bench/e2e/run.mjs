@@ -35,6 +35,7 @@ import { renderHit, renderMemorySummary, renderOpenLoops } from '../../lib/rende
 import { searchMemories } from '../../lib/search.js'
 import { mergeLoops, pruneLoops, readLoops, writeLoops } from '../../lib/loops.js'
 import { SCENARIOS } from './scenarios.mjs'
+import { anchorGate, createJudge, percentage } from './judge.mjs'
 
 // The extra bank is separate so the first 23 scenarios stay byte-identical to
 // the run they were measured in; a missing file simply means "base bank only".
@@ -137,6 +138,8 @@ async function chat(messages, { json = false, numPredict = 500 } = {}) {
   return ''
 }
 
+const judge = createJudge(chat)
+
 /** Freeze identity of the bank: the exact scenarios a run was measured on. */
 function bankHash(scenarios) {
   return createHash('sha256').update(JSON.stringify(scenarios)).digest('hex')
@@ -207,86 +210,6 @@ async function answer(question, context) {
   ], { numPredict: 200 })
 }
 
-/** Read a per-point flag the judge returned, by its index. */
-function pointFlag(list, index, key) {
-  const item = Array.isArray(list) ? list.find((entry) => entry !== null && typeof entry === 'object' && Number(entry.index) === index) : undefined
-  return item?.[key] === true
-}
-
-/**
- * Grade one answer blind, one point at a time.
- *
- * A whole-answer pass/fail let the judge mix two points together: round 5 failed
- * a correct answer because the forbidden point and the answer both mentioned
- * "改限流后的数字" while the answer actually said the opposite. Asking for each
- * required point's `met` and each forbidden point's `violated` separately makes
- * the judgment structural, and the pass bit is then computed by code rather than
- * trusted from prose.
- */
-async function judge(scenario, answerText) {
-  const reply = await chat([
-    { role: 'system', content: '你是判分员，只返回 JSON。' },
-    { role: 'user', content: JSON.stringify({
-      问题: scenario.question,
-      回答: answerText,
-      必需点: scenario.required.map((point, index) => ({ index, point })),
-      禁止点: scenario.forbidden.map((point, index) => ({ index, point })),
-      要求: '逐条判断，不要给整体印象分。必需点：回答是否表达了这个意思（意思对即可，不要求原词）。禁止点：回答是否在主张这条禁止的说法/做法成立？只有回答明确支持它才算违反；回答反对、劝阻、否定、说它不成立，或把它当例外/条件/对照提起，都不算违反；判断时只看回答的主张，不要因为出现相同词语就判违反。回答「不知道」时所有必需点 met=false。只返回 {"required":[{"index":0,"met":true|false}],"forbidden":[{"index":0,"violated":true|false}],"reason":"一句话"}，逐条覆盖每一个 index。',
-    }) },
-  ], { json: true, numPredict: 300 })
-  try {
-    const value = JSON.parse(reply)
-    const required = scenario.required.map((point, index) => ({ point, met: pointFlag(value.required, index, 'met') }))
-    const forbidden = scenario.forbidden.map((point, index) => ({ point, violated: pointFlag(value.forbidden, index, 'violated') }))
-    const pass = required.every((item) => item.met) && forbidden.every((item) => !item.violated)
-    return { pass, checks: { required, forbidden }, reason: String(value.reason ?? '') }
-  } catch {
-    // A judge that cannot answer is not a pass: report it as a failure with why.
-    return { pass: false, checks: { required: [], forbidden: [] }, reason: `judge reply was not JSON: ${reply.slice(0, 120)}` }
-  }
-}
-
-function percentage(passed, total) {
-  return total === 0 ? '—' : `${(passed / total * 100).toFixed(1)}% (${passed}/${total})`
-}
-
-/**
- * Two fixed anchors that pin the judge's forbidden-point rule.
- *
- * The first run's one memory-arm failure was exactly this ambiguity: the answer
- * said "本地 4567，CI 仍可用 3000" and was graded as violating "本地用 3000".
- * An anchor pair makes that rule checkable before any paid grading: a correct
- * answer that mentions the exception must pass, a wrong answer must fail.
- */
-async function anchorGate() {
-  const question = '本地开发服务器该用哪个端口？'
-  const good = await judge({ question, required: ['本地用 4567'], forbidden: ['本地必须用 3000'] },
-    '本地开发固定用 4567，3000 会和其他项目冲突；CI 里仍可用 3000。')
-  const bad = await judge({ question, required: ['本地用 4567'], forbidden: ['本地必须用 3000'] },
-    '本地开发就用 3000。')
-  // The second failure mode seen in a run: the forbidden point is the OPPOSITE
-  // of what the answer says ("旧配置下测的"), and a judge that matches on shared
-  // words fails a correct answer. This anchor pins the negation rule.
-  const opposite = await judge({ question: '这些延迟数字是什么配置下测的？', required: ['旧限流配置'], forbidden: ['改限流后的配置'] },
-    '这些数字是旧限流配置下测的。')
-  // And a partial answer must fail: the round-3 open-plan row failed both arms
-  // for omitting the second promise, and the judge has to be able to see that.
-  const partial = await judge({ question: '本地起服务和跑测试分别用什么？', required: ['起服务用 4567', '测试用 pnpm test'], forbidden: [] },
-    '起服务用 4567。')
-  // A negated prohibition must pass. Round 4 failed two correct answers
-  // ("不要相信双击结果", "禁止直接在 main 上改") because the judge only saw the
-  // forbidden point's words; this anchor pins the rule the prompt states.
-  const negated = await judge({ question: '可以直接 force-push 吗？', required: ['不能直接 force-push'], forbidden: ['可以直接 force-push'] },
-    '不能，不要直接 force-push，推之前先问我。')
-  return {
-    pass: good.pass === true && bad.pass === false && opposite.pass === true && partial.pass === false && negated.pass === true,
-    good: good.pass,
-    bad: bad.pass,
-    opposite: opposite.pass,
-    partial: partial.pass,
-    negated: negated.pass,
-  }
-}
 
 /**
  * Re-grade a saved run's stored answers with the current judge — no new answers.
@@ -301,7 +224,7 @@ async function regrade(file) {
   const expected = bankHash(BANK.slice(0, report.scenarios))
   if (report.bankHash !== expected) throw new Error('bank changed since that run: hash mismatch, refusing to re-grade')
   const byId = new Map(BANK.map((scenario) => [scenario.id, scenario]))
-  const anchor = await anchorGate()
+  const anchor = await anchorGate(judge)
   if (!anchor.pass) console.log(`  WARNING: judge anchor pair failed (good=${anchor.good}, bad=${anchor.bad}, opposite=${anchor.opposite}, partial=${anchor.partial}, negated=${anchor.negated}); grades are suspect`)
   console.log(`re-grade ${report.rows.length} rows from ${file}`)
   for (const row of report.rows) {
@@ -409,7 +332,7 @@ async function main() {
   console.log(`  loops: ${extraction.loops} open`)
 
   /* -------------------------------------------------------------- arms --- */
-  const anchor = await anchorGate()
+  const anchor = await anchorGate(judge)
   if (!anchor.pass) console.log(`  WARNING: judge anchor pair failed (good=${anchor.good}, bad=${anchor.bad}); grades below are suspect`)
   const rows = []
   for (const [index, scenario] of scenarios.entries()) {

@@ -63,7 +63,10 @@
     "eval:recall-log": "node scripts/eval-recall-log.mjs",
     "report": "node scripts/report.mjs",
     "prepare": "npm run build",
-    "eval:e2e": "node bench/e2e/run.mjs"
+    "eval:e2e": "node bench/e2e/run.mjs",
+    "eval:real": "node bench/real/run.mjs",
+    "eval:real:sample": "node bench/real/sample.mjs",
+    "eval:real:author": "node bench/real/author.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.5 || ^4.0.6-alpha.1",
