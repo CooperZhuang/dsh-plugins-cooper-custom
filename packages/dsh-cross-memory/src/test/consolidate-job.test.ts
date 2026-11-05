@@ -68,6 +68,20 @@ test('a later enqueue updates the root so the newest workspace wins', async (t) 
   assert.equal(runtime.state.getJob('global')?.root, 'C:\\work\\beta')
 })
 
+test('a later extraction does not push the due time back', async (t) => {
+  const { runtime } = await fixture(t)
+  runtime.enqueueConsolidation(1_000, false, 'C:\\work\\alpha')
+  const first = runtime.state.getJob('global')
+  assert.ok(first !== undefined)
+  // An active store keeps producing memories; the second enqueue must not
+  // re-arm the cooldown forever (the starvation the profile hit).
+  runtime.enqueueConsolidation(1_000 + 3_600_000, false, 'C:\\work\\beta')
+  const later = runtime.state.getJob('global')
+  assert.equal(later?.notBefore, first.notBefore, 'the due time stays the first one')
+  assert.equal(later?.enqueuedAt, first.enqueuedAt + 3_600_000, 'the activity time moves')
+  assert.equal(later?.root, 'C:\\work\\beta', 'the newest workspace still wins')
+})
+
 test('an enqueue without a root keeps the recorded one', async (t) => {
   const { runtime } = await fixture(t)
   runtime.enqueueConsolidation(1_000, false, 'C:\\work\\alpha')

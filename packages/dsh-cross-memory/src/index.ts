@@ -2765,12 +2765,18 @@ export class MemoriesRuntime {
    */
   enqueueConsolidation(now = Date.now(), readyNow = false, root?: string): void {
     if (!this.settings.consolidate) return
-    const notBefore = readyNow ? now : now + this.settings.consolidateCooldownHours * 3_600_000
     const existing = this.state.getJob(CONSOLIDATE_JOB)
     if (existing !== undefined) {
+      // A fresh extraction must NOT push the due time back. Doing so meant an
+      // active store — one that keeps producing memories more often than the
+      // cooldown — never became due at all, so the profile and the merge pass
+      // silently starved. Keep the earliest due time; only a manual enqueue
+      // (`/memories consolidate`) resets it to "now".
+      const notBefore = readyNow ? now : existing.notBefore
       this.state.putJob({ ...existing, enqueuedAt: now, notBefore, ...root === undefined ? {} : { root } })
       return
     }
+    const notBefore = readyNow ? now : now + this.settings.consolidateCooldownHours * 3_600_000
     this.state.putJob({ key: CONSOLIDATE_JOB, enqueuedAt: now, notBefore, retries: 0, ...root === undefined ? {} : { root } })
   }
 
