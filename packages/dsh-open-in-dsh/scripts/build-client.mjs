@@ -22,6 +22,37 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const source = readFileSync(join(root, 'client', 'index.js'), 'utf8')
 const target = join(root, 'lib', 'client.js')
 
+/** The marker client/index.js carries where the locale dictionaries belong. */
+const DICTIONARY_MARKER = '/* @menu-dictionaries */ { zh: {}, en: {} }'
+
+/**
+ * Read one locale file's menu labels, flattened to the keys the client looks up
+ * ('menu.qspace', 'menu.failed', ...).
+ *
+ * Building this from the shipped locale files keeps one source of truth: the
+ * same files also carry the plugin page's meta title and description.
+ *
+ * @param language - zh or en.
+ * @returns the flattened dictionary.
+ */
+function readMenuDictionary(language) {
+  const file = join(root, 'locale', language + '.json')
+  const parsed = JSON.parse(readFileSync(file, 'utf8'))
+  const menu = parsed.menu
+  if (menu === null || typeof menu !== 'object' || Array.isArray(menu)) {
+    throw new Error(file + ': missing the "menu" object the client bundle needs')
+  }
+  const entries = Object.entries(menu)
+  if (entries.length === 0) throw new Error(file + ': "menu" is empty')
+  return Object.fromEntries(entries.map(([key, value]) => ['menu.' + key, String(value)]))
+}
+
+const dictionaries = { zh: readMenuDictionary('zh'), en: readMenuDictionary('en') }
+if (!source.includes(DICTIONARY_MARKER)) {
+  throw new Error('client/index.js: the @menu-dictionaries marker moved; update scripts/build-client.mjs')
+}
+const withDictionaries = source.replace(DICTIONARY_MARKER, '/* @menu-dictionaries */ ' + JSON.stringify(dictionaries))
+
 const indent = (text) =>
   text
     .split('\n')
@@ -35,10 +66,11 @@ const bundle = `window.__ModuleLoader__.load({
     var exports = module.exports;
     Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
     // ---- client/index.js ----
-${indent(source)}
+${indent(withDictionaries)}
     const plugin = createPlugin(require);
     exports.apply = plugin.apply;
     exports.inject = plugin.inject;
+    exports.__internals = __internals;
     return module.exports;
   }
 });

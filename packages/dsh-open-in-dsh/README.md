@@ -3,6 +3,9 @@
 在 Windows 资源管理器里**右键一个文件夹**（或文件夹里的**空白处**）→「**通过 DSH 打开**」，
 DSH 就把这个目录作为工作区切入，并进到里面的一个空白会话。
 
+反方向也有入口：DSH 里的**文件/目录右键菜单**提供「用 QSpace Pro / Finder / VS Code /
+Warp / Terminal 打开」（Windows 是资源管理器），见下文「DSH 右键菜单里的『打开方式』」。
+
 - 已经登记过的工作区 → 直接切过去
 - 没登记过 → 自动新建对应工作区
 - **复用**该工作区已有的空白会话（不会每点一次就堆一个空会话）
@@ -275,13 +278,34 @@ await ctx.uiWorkspace.openWorkspace(ws.workspaceId)       // 连接并打开它�
 `openWorkspace` 内部就是 `reuseOrCreateBlank`：**有空白会话就复用，没有才建**——
 这正是「不要堆多余的窗口」想要的行为。
 
-### 三条路由
+### 五条路由
 
 | 路由 | 用途 |
 |---|---|
 | `POST /open` | 启动器提交目录；返回 `{seq, clients, recent}` |
 | `GET /events` | 页面跟随请求（SSE，带 `hello` 与回放） |
 | `GET /status` | 只报「有几个页面在跟」，无副作用 |
+| `GET /apps` | 菜单先问本平台有哪些白名单 app 真的装了；返回 `{platform, apps}` |
+| `POST /open-with` | 菜单把已存在的文件/目录交给白名单 app；返回 `{ok, app, path, directory}` |
+
+### DSH 右键菜单里的「打开方式」
+
+文件/目录的右键菜单通过 DSH 0.2.2 的 `@deepseek-ai/dsh-client-ui-context-menu` 注册
+（客户端 `dsh.client.inject` 声明依赖），点开后按宿主报告的可用 app 列动作：
+
+| 平台 | 动作 |
+|---|---|
+| macOS | QSpace Pro、Finder、VS Code、Warp、Terminal（装了才出现） |
+| Windows | 资源管理器（目录直接打开，文件用 `/select,` 定位） |
+
+安全边界在宿主：客户端只发 `{ path, app }`，`app` 必须是白名单 id，路径必须是**已存在**
+的绝对路径；命令由 `OPEN_WITH_APPS` 表拼成 argv、用 `execFile` 直接执行，不经过 shell。
+macOS 的 Finder 用 `open -R` 揭示，其余 app 用 `open -a <名字> <路径>`；Terminal/Warp
+拿到文件时落在它所在目录，而不是把文件当脚本跑。
+
+菜单化之后**不再需要给 `app.asar` 打 QSpace 补丁**：早期用
+`scripts/patch-open-in-app-qspace.mjs` 补过的机器把补丁撤掉即可（撤补丁由维护者统一做，
+本包不含该脚本）。
 
 `clients` 与 `recent` 一起决定**冷启动**：没人跟随、而且最近也没人跟随过，才是真的
 「DSH 没开」。页面只是**正在重连**（插件重挂载、刷新页面）时 `recent` 为真，`dsh web`

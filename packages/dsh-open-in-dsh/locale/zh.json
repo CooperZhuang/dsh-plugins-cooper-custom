@@ -1,6 +1,16 @@
 {
   "meta": {
     "title": "通过 DSH 打开",
-    "description": "在资源管理器里右键文件夹（或文件夹空白处），把该目录作为 DSH 工作区切入，并进到里面的一个空白会话。"
+    "description": "在文件管理器里右键文件夹，直接作为 DSH 工作区打开；文件/目录右键菜单也提供「用 QSpace 等打开」。",
+    "detail": "docs/DETAIL.zh.md"
+  },
+  "menu": {
+    "qspace": "用 QSpace Pro 打开",
+    "finder": "在 Finder 中显示",
+    "vscode": "用 VS Code 打开",
+    "warp": "用 Warp 打开",
+    "terminal": "在终端中打开",
+    "explorer": "在资源管理器中显示",
+    "failed": "无法打开，请重试"
   }
 }

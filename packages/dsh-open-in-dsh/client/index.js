@@ -37,6 +37,112 @@ function parseFrame(text) {
   }
 }
 
+/** Dictionary namespace owned by this plugin. */
+const NS = 'dsh-open-in-dsh'
+
+/**
+ * Menu labels. scripts/build-client.mjs replaces the marker below with the
+ * "menu" objects from locale/zh.json and locale/en.json, so the shipped bundle
+ * and the package's locale files cannot drift.
+ */
+const MENU_DICTIONARIES = /* @menu-dictionaries */ { zh: {}, en: {} }
+
+/** The Host's open-with route; carried by hand in lib/index.js. */
+const ROUTE_OPEN_WITH = '/dsh-open-in-dsh/api/v1/open-with'
+
+/** The Host's availability route; carried by hand in lib/index.js. */
+const ROUTE_APPS = '/dsh-open-in-dsh/api/v1/apps'
+
+/**
+ * Menu order. The Host reports the subset this platform can launch; this list
+ * decides how the actions stack when it reports several.
+ */
+const MENU_APP_ORDER = ['qspace', 'finder', 'vscode', 'warp', 'terminal', 'explorer']
+
+/**
+ * Whether a path is absolute in either spelling the Host accepts.
+ * @param value - the path to classify.
+ * @returns true for a POSIX, drive-letter or UNC absolute path.
+ */
+function isAbsolutePath(value) {
+  if (value.startsWith('/')) return true
+  if (value.length >= 3 && value[1] === ':' && (value[2] === '/' || value[2] === '\\')) return true
+  return value.startsWith('\\\\')
+}
+
+/**
+ * Resolve a Workspace-relative path against the Session directory.
+ * @param cwd - the Session's workspace root, when known.
+ * @param path - absolute or Workspace-relative path.
+ * @returns an absolute path, or null when a relative path has no root.
+ */
+function resolveWorkspacePath(cwd, path) {
+  if (isAbsolutePath(path)) return path
+  if (typeof cwd !== 'string' || cwd === '') return null
+  const separator = cwd.includes('\\') ? '\\' : '/'
+  return cwd.replace(/[/\\]+$/, '') + separator + path.replace(/^(?:\.?[/\\])+/, '')
+}
+
+/**
+ * Read the Host's availability answer into an ordered id list.
+ * @param payload - the Host response body.
+ * @returns allowlisted ids the Host reported, in menu order.
+ */
+function appIdsFrom(payload) {
+  if (payload === null || typeof payload !== 'object' || !Array.isArray(payload.apps)) return []
+  const reported = payload.apps.filter((id) => typeof id === 'string')
+  return MENU_APP_ORDER.filter((id) => reported.includes(id))
+}
+
+/**
+ * Lazy, page-lifetime availability reader.
+ *
+ * A successful answer is cached; a failed one is retried on the next menu
+ * opening, so one lost request does not hide the menu until a reload.
+ *
+ * @returns a function resolving the allowlisted ids for this platform.
+ */
+function createAppsReader() {
+  let cached = null
+  let pending = null
+  return async () => {
+    if (cached !== null) return cached
+    if (pending === null) {
+      pending = (async () => {
+        try {
+          const response = await fetch(ROUTE_APPS, { headers: { accept: 'application/json' }, cache: 'no-store' })
+          if (!response.ok) return []
+          const ids = appIdsFrom(await response.json())
+          if (ids.length > 0) cached = ids
+          return ids
+        } catch {
+          return []
+        } finally {
+          pending = null
+        }
+      })()
+    }
+    return pending
+  }
+}
+
+/**
+ * Build the localized open-with actions for one target.
+ * @param options - resolved app ids, absolute path, translate seat and launcher.
+ * @returns the context-menu action array.
+ */
+function createMenuActions(options) {
+  return options.apps.map((app) => ({
+    id: 'open-with.' + app,
+    label: options.translate('menu.' + app),
+    failureLabel: options.translate('menu.failed'),
+    run: () => options.launch(app, options.absolutePath),
+  }))
+}
+
+/** Test and troubleshooting surface; not part of the plugin API. */
+const __internals = { appIdsFrom, createMenuActions, resolveWorkspacePath, isAbsolutePath, MENU_APP_ORDER }
+
 /**
  * Build the browser plugin.
  * @returns the Cordis plugin export (`inject` + `apply`).
@@ -105,6 +211,78 @@ function createPlugin() {
     ctx.inject(['uiWorkspace'], (scoped) => {
       uiWorkspace = scoped.get('uiWorkspace')
     })
+
+    // Menu labels come from the package's locale files, inlined into this
+    // bundle at build time: a right-click never waits on a dictionary fetch.
+    ctx.effect(() => ctx.locale.register(NS, MENU_DICTIONARIES), 'dsh-open-in-dsh: menu dictionaries')
+    const t = ctx.locale.bind(NS)
+
+    /** Availability: one probe per page (the Host caches per process life). */
+    const apps = createAppsReader()
+
+    /**
+     * Absolute path for a captured file or directory target.
+     * @param target - the menu target value: { sessionId, path }.
+     * @returns the absolute path, or null when it cannot be resolved.
+     */
+    const absolutePathFor = (target) => {
+      const path = target !== null && typeof target === 'object' && typeof target.path === 'string' ? target.path : ''
+      if (path === '') return null
+      const cwd = ctx.sessions.list.getSnapshot().byId[target.sessionId]?.cwd
+      return resolveWorkspacePath(cwd, path)
+    }
+
+    /**
+     * Ask the Host to launch one allowlisted app on a path.
+     *
+     * The Host owns the command: this half can only name an id it received from
+     * the availability route, and the Host revalidates both the id and the path
+     * before spawning anything.
+     *
+     * @param app - allowlisted app id.
+     * @param path - absolute, validated path.
+     * @returns completion; rejects when the Host refuses or cannot launch.
+     */
+    const launch = async (app, path) => {
+      const response = await fetch(ROUTE_OPEN_WITH, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: path, app: app }),
+      })
+      let payload = null
+      try {
+        payload = await response.json()
+      } catch {
+        payload = null
+      }
+      if (!response.ok || payload === null || payload.ok !== true) {
+        const reason = payload !== null && typeof payload.reason === 'string' ? payload.reason : 'http-' + String(response.status)
+        throw new Error('dsh-open-in-dsh: open-with ' + app + ' failed (' + reason + ')')
+      }
+    }
+
+    /**
+     * Resolve the open-with actions for one captured file or directory.
+     * @param target - the menu target value: { sessionId, path }.
+     * @param signal - the provider's cancellation signal.
+     * @returns the action array; empty when there is nothing to offer.
+     */
+    const resolveActions = async (target, signal) => {
+      const absolutePath = absolutePathFor(target)
+      if (absolutePath === null) return []
+      const ids = await apps()
+      if (signal?.aborted) return []
+      return createMenuActions({ apps: ids, absolutePath: absolutePath, translate: t, launch: launch })
+    }
+
+    ctx.effect(
+      () => ctx.contextMenus.register({ id: 'open-with.file', target: 'file', order: 200, resolve: resolveActions }),
+      'dsh-open-in-dsh: file menu',
+    )
+    ctx.effect(
+      () => ctx.contextMenus.register({ id: 'open-with.directory', target: 'directory', order: 200, resolve: resolveActions }),
+      'dsh-open-in-dsh: directory menu',
+    )
 
     /**
      * Apply one announced folder.
@@ -189,6 +367,7 @@ function createPlugin() {
     window.__dshOpenIn = {
       route: EVENTS_PATH,
       open: openFolder,
+      openWith: launch,
       status: () => ({
         lastSeq,
         settings: { ...settings },
@@ -198,5 +377,5 @@ function createPlugin() {
     }
   }
 
-  return { inject: ['workspaces', 'sessions'], apply }
+  return { inject: ['workspaces', 'sessions', 'contextMenus', 'locale'], apply }
 }

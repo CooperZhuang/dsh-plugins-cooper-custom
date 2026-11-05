@@ -6,8 +6,10 @@
  * the meeting point. It owns one small HTTP surface on the `dsh web` server
  * that is already running:
  *
- *   POST /dsh-open-in-dsh/api/v1/open     a launcher hands over one folder path
- *   GET  /dsh-open-in-dsh/api/v1/events   the page follows requests over SSE
+ *   POST /dsh-open-in-dsh/api/v1/open        a launcher hands over one folder path
+ *   GET  /dsh-open-in-dsh/api/v1/events      the page follows requests over SSE
+ *   POST /dsh-open-in-dsh/api/v1/open-with   a right-click action opens a file or directory in a whitelisted app
+ *   GET  /dsh-open-in-dsh/api/v1/apps        which whitelisted apps this platform can actually launch
  *
  * On macOS the same open route is also served on a Unix domain socket
  * (`DEFAULT_SOCKET_PATH`). Nothing outside the Electron renderer can reach the
@@ -34,7 +36,8 @@
  *
  * @module dsh-open-in-dsh
  */
-import { chmodSync, mkdirSync, statSync, unlinkSync } from 'node:fs'
+import { execFile } from 'node:child_process'
+import { chmodSync, existsSync, mkdirSync, statSync, unlinkSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
@@ -113,6 +116,21 @@ export const ROUTE_EVENTS = '/dsh-open-in-dsh/api/v1/events'
  */
 export const ROUTE_STATUS = '/dsh-open-in-dsh/api/v1/status'
 
+/**
+ * The right-click menu's "open with <app>" action posts `{ path, app }` here.
+ *
+ * `app` is an id from `OPEN_WITH_APPS`, never a command, a binary path or an
+ * app name: the Host owns the whole argv, so the browser can only ask for one
+ * of the allowlisted launches.
+ */
+export const ROUTE_OPEN_WITH = '/dsh-open-in-dsh/api/v1/open-with'
+
+/**
+ * The menu asks this before it shows anything, so an app that is not installed
+ * on this machine never becomes an action that fails on click.
+ */
+export const ROUTE_APPS = '/dsh-open-in-dsh/api/v1/apps'
+
 /** How long an unanswered request stays replayable for a page that was closed. */
 const DEFAULT_BACKLOG_TTL_MS = 60_000
 
@@ -132,6 +150,90 @@ const RECENT_CLIENT_MS = 15_000
 
 /** One folder path; anything larger is not this request. */
 const MAX_REQUEST_BYTES = 16 * 1024
+
+/**
+ * The open-with allowlist: the only commands this plugin will ever spawn.
+ *
+ * A menu action sends an id from this table; the Host resolves that id to a
+ * fixed argv here. Nothing the browser sends is ever spliced into a command,
+ * so a forged pair can at worst name one of these launches with a path the
+ * Host itself validated.
+ *
+ * - darwin: Finder reveals with 'open -R'; every other app launches with
+ *   'open -a <name> <path>'. Terminal-like apps land on a file's directory,
+ *   because 'open -a Terminal <file>' would make Terminal run that file.
+ * - win32: Explorer opens a directory and selects a file.
+ */
+export const OPEN_WITH_APPS = Object.freeze({
+  darwin: Object.freeze([
+    Object.freeze({ id: 'qspace', app: 'QSpace Pro', bundle: 'QSpace Pro.app' }),
+    Object.freeze({ id: 'finder', always: true }),
+    Object.freeze({ id: 'vscode', app: 'Visual Studio Code', bundle: 'Visual Studio Code.app' }),
+    Object.freeze({ id: 'warp', app: 'Warp', bundle: 'Warp.app' }),
+    Object.freeze({ id: 'terminal', app: 'Terminal', always: true }),
+  ]),
+  win32: Object.freeze([Object.freeze({ id: 'explorer', always: true })]),
+})
+
+/** Where a macOS app bundle is probed for; the per-user folder comes second. */
+const DARWIN_APP_DIRS = Object.freeze(['/Applications', join(homedir(), 'Applications')])
+
+/** One path longer than this did not come from a right-click. */
+const MAX_PATH_LENGTH = 4096
+
+/** How long one launch may take before it is reported as failed. */
+const LAUNCH_TIMEOUT_MS = 10_000
+
+/**
+ * The allowlist entry for one id on one platform.
+ * @param platform - process.platform spelling.
+ * @param id - the id a menu action sent.
+ * @returns the entry, or undefined when the id is not allowlisted here.
+ */
+export function findOpenWithApp(platform, id) {
+  return (OPEN_WITH_APPS[platform] ?? []).find((entry) => entry.id === id)
+}
+
+/**
+ * Ids of the allowlisted apps this platform can actually launch.
+ *
+ * macOS bundles are probed by path in the two Applications folders; the
+ * system apps (Finder, Terminal) are always there. Windows contributes
+ * Explorer. An unknown platform contributes nothing, so the menu simply does
+ * not appear instead of offering launches that cannot work.
+ *
+ * @param platform - process.platform spelling.
+ * @param exists - file probe, for tests.
+ * @param appDirs - bundle search folders, for tests.
+ * @returns allowlisted ids, in registry order.
+ */
+export function availableApps(platform = process.platform, exists = existsSync, appDirs = DARWIN_APP_DIRS) {
+  return (OPEN_WITH_APPS[platform] ?? [])
+    .filter((entry) => entry.always === true || appDirs.some((dir) => exists(join(dir, entry.bundle))))
+    .map((entry) => entry.id)
+}
+
+/**
+ * The exact argv for one allowlisted launch.
+ * @param platform - process.platform spelling.
+ * @param appId - an allowlisted id.
+ * @param target - canonical path plus the directory flag.
+ * @returns the command to spawn, or null when the id is not allowlisted here.
+ */
+export function openWithCommand(platform, appId, target) {
+  const entry = findOpenWithApp(platform, appId)
+  if (entry === undefined) return null
+  if (platform === 'darwin') {
+    if (entry.id === 'finder') return { file: 'open', args: ['-R', target.path] }
+    const terminal = entry.id === 'terminal' || entry.id === 'warp'
+    const path = terminal && target.directory === false ? dirname(target.path) : target.path
+    return { file: 'open', args: ['-a', entry.app, path] }
+  }
+  if (platform === 'win32') {
+    return { file: 'explorer.exe', args: [target.directory ? target.path : '/select,' + target.path] }
+  }
+  return null
+}
 
 /**
  * Install the three routes.
@@ -186,6 +288,24 @@ export function apply(ctx, rawConfig = {}) {
           handler: createStatusHandler(hub, allowNonLoopback),
         }),
       'dsh-open-in-dsh: status route',
+    )
+    host.effect(
+      () =>
+        host.webServer.register({
+          kind: 'exact',
+          path: ROUTE_APPS,
+          handler: createAppsHandler(allowNonLoopback),
+        }),
+      'dsh-open-in-dsh: apps route',
+    )
+    host.effect(
+      () =>
+        host.webServer.register({
+          kind: 'exact',
+          path: ROUTE_OPEN_WITH,
+          handler: createOpenWithHandler(ctx, allowNonLoopback),
+        }),
+      'dsh-open-in-dsh: open-with route',
     )
     // macOS 的交接通道：同一个 open handler，第二个传输层。
     host.effect(
@@ -550,6 +670,141 @@ function createStatusHandler(hub, allowNonLoopback, peerIsTrusted = false) {
   }
 }
 
+/**
+ * Build the menu's availability route.
+ *
+ * The answer is probed once per plugin life and then cached: an app installed
+ * while the host runs shows up after a restart, the same rule the kernel's own
+ * open-in-app feature uses.
+ *
+ * @param allowNonLoopback - whether a non-loopback peer may ask.
+ * @param deps - platform/exists overrides, for tests.
+ * @returns the exact-route handler.
+ */
+export function createAppsHandler(allowNonLoopback = false, deps = {}) {
+  const platform = deps.platform ?? process.platform
+  const exists = deps.exists ?? existsSync
+  let cached = null
+  return (request, response) => {
+    if (request.method !== 'GET') {
+      sendJson(response, 405, { ok: false, reason: 'method-not-allowed' }, { allow: 'GET' })
+      return
+    }
+    if (!sameOrigin(request)) {
+      sendJson(response, 403, { ok: false, reason: 'cross-origin' })
+      return
+    }
+    if (!allowNonLoopback && !isLoopback(request)) {
+      sendJson(response, 403, { ok: false, reason: 'remote-not-supported' })
+      return
+    }
+    cached ??= availableApps(platform, exists)
+    sendJson(response, 200, { ok: true, platform, apps: cached })
+  }
+}
+
+/**
+ * Build the right-click action: validate a whitelisted app and an existing
+ * path, then spawn the one argv the allowlist names.
+ *
+ * The app id is checked against the allowlist before the path is touched, so
+ * a forged id is refused even by a caller that never had a valid path.
+ *
+ * @param ctx - host plugin context, for logs.
+ * @param allowNonLoopback - whether a non-loopback peer may launch.
+ * @param deps - platform/stat/exec overrides, for tests.
+ * @returns the exact-route handler.
+ */
+export function createOpenWithHandler(ctx, allowNonLoopback = false, deps = {}) {
+  const platform = deps.platform ?? process.platform
+  const stat = deps.stat ?? statSync
+  const exec = deps.exec ?? execFile
+  return async (request, response) => {
+    if (request.method !== 'POST') {
+      sendJson(response, 405, { ok: false, reason: 'method-not-allowed' }, { allow: 'POST' })
+      return
+    }
+    if (!sameOrigin(request)) {
+      sendJson(response, 403, { ok: false, reason: 'cross-origin' })
+      return
+    }
+    if (!allowNonLoopback && !isLoopback(request)) {
+      sendJson(response, 403, { ok: false, reason: 'remote-not-supported' })
+      return
+    }
+
+    let body
+    try {
+      body = await readJsonBody(request)
+    } catch (error) {
+      sendJson(response, 400, { ok: false, reason: 'bad-request', message: messageOf(error) })
+      return
+    }
+
+    const app = typeof body?.app === 'string' ? body.app.trim() : ''
+    if (findOpenWithApp(platform, app) === undefined) {
+      // The whole security story: no id, no command. A caller cannot smuggle
+      // a binary path or an app name in here.
+      sendJson(response, 400, { ok: false, reason: 'unknown-app', app, platform })
+      return
+    }
+
+    const claimed = typeof body?.path === 'string' ? body.path.trim().replace(/^"|"$/g, '') : ''
+    if (claimed === '' || !isAbsolute(claimed)) {
+      sendJson(response, 400, { ok: false, reason: 'path-not-absolute', path: String(body?.path ?? '') })
+      return
+    }
+    // Existing, canonical, regular file or directory. A path that cannot be
+    // opened far enough to prove it exists is refused before any spawn.
+    const target = existingPath(claimed, stat)
+    if (target === null) {
+      sendJson(response, 400, { ok: false, reason: 'path-not-found', path: claimed })
+      return
+    }
+
+    const command = openWithCommand(platform, app, target)
+    if (command === null) {
+      sendJson(response, 400, { ok: false, reason: 'unknown-app', app, platform })
+      return
+    }
+    try {
+      await runCommand(command, exec)
+    } catch (error) {
+      ctx.logger?.warn?.('dsh-open-in-dsh: open-with %s failed on %s: %s', app, target.path, messageOf(error))
+      sendJson(response, 500, { ok: false, reason: 'launch-failed', app, path: target.path, message: messageOf(error) })
+      return
+    }
+    ctx.logger?.info?.('dsh-open-in-dsh: opened %s with %s', target.path, app)
+    sendJson(response, 200, { ok: true, app, path: target.path, directory: target.directory })
+  }
+}
+
+/**
+ * Spawn one allowlisted command. execFile takes an argv array, so no shell
+ * ever parses the path or the app name.
+ *
+ * @param command - the exact command.
+ * @param exec - execFile, for tests.
+ * @returns completion; rejects with the spawn error.
+ */
+function runCommand(command, exec = execFile) {
+  return new Promise((settle, fail) => {
+    exec(command.file, command.args, { timeout: LAUNCH_TIMEOUT_MS, windowsHide: true }, (error) => {
+      if (error === null) {
+        settle()
+        return
+      }
+      // Explorer returns 1 even when it opened the folder; only a missing or
+      // unexecutable binary means the launch did not happen.
+      if (command.file === 'explorer.exe' && error.code !== 'ENOENT' && error.code !== 'EACCES') {
+        settle()
+        return
+      }
+      fail(error)
+    })
+  })
+}
+
 /** Render one SSE frame. */
 function sseFrame(event, data) {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
@@ -585,6 +840,29 @@ export function directoryPath(value) {
     return null
   }
   return resolve(text)
+}
+
+/**
+ * Canonicalize a claimed file or directory path.
+ *
+ * The path is not trusted because the browser sent it: it must be absolute,
+ * short enough to be a path, and resolve to a regular file or directory.
+ *
+ * @param value - the claimed path.
+ * @param stat - stat probe, for tests.
+ * @returns canonical path plus the directory flag, or null when it is not one.
+ */
+export function existingPath(value, stat = statSync) {
+  if (typeof value !== 'string') return null
+  const text = value.trim().replace(/^"|"$/g, '')
+  if (text === '' || text.length > MAX_PATH_LENGTH || text.includes(String.fromCharCode(0))) return null
+  if (!isAbsolute(text)) return null
+  try {
+    const info = stat(text)
+    if (info.isDirectory()) return { path: resolve(text), directory: true }
+    if (info.isFile()) return { path: resolve(text), directory: false }
+  } catch {}
+  return null
 }
 
 /**
