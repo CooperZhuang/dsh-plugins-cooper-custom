@@ -64,7 +64,7 @@ async function twoWayFixture(): Promise<{
 }> {
   const base = await mkdtemp(join(tmpdir(), 'dsh-cross-memory-sync-'))
   const remote = join(base, 'remote.git')
-  execFileSync('git', ['init', '--bare', '--quiet', remote])
+  execFileSync('git', ['init', '--bare', '--quiet', '-b', 'main', remote])
   const left = join(base, 'left')
   const right = join(base, 'right')
   await mkdir(join(left, 'entries'), { recursive: true })
