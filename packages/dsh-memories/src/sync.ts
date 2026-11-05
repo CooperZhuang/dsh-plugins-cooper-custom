@@ -568,6 +568,16 @@ export class MemorySync {
         const theirs = await tryGit(this.dir, ['show', ':' + '3:' + path], this.options.gitTimeoutMs)
         if (ours === undefined || theirs === undefined) continue
         conflicts += 1
+        // Both sides already agree byte for byte: nothing to decide, and git only
+        // stopped because the replayed commit touched a file upstream had also
+        // rewritten to the same text. This is common for per-host descriptors
+        // (`projects/*/hosts/<host>.json`), which every machine rewrites on open.
+        if (ours === theirs) {
+          await writeFile(join(this.dir, path), ours)
+          mergedByStructure += 1
+          await git(this.dir, ['add', path], this.options.gitTimeoutMs)
+          continue
+        }
         if (!isEntryPath(path)) {
           const merged = path === LOOPS_FILE ? mergeLoopLedgers(ours, theirs) : undefined
           if (merged !== undefined) {
