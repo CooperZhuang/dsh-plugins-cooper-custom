@@ -1,0 +1,127 @@
+{
+  "name": "dsh-cross-memory",
+  "description": "Cross-session memory for the DeepSeek Harness: project-scoped and global memories with an explicit memory tool, idle-time background extraction, consolidation, and layered summary injection",
+  "version": "0.2.0",
+  "private": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/**/*.js",
+    "lib/types/**/*.d.ts",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "icon.svg",
+    "locale",
+    "docs"
+  ],
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis-plugin",
+    "cordis",
+    "memory",
+    "memories",
+    "cross-session",
+    "agent-memory",
+    "persistent-memory"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CooperZhuang/dsh-plugins-cooper-custom.git",
+    "directory": "packages/dsh-cross-memory"
+  },
+  "homepage": "https://github.com/CooperZhuang/dsh-plugins-cooper-custom/tree/main/packages/dsh-cross-memory#readme",
+  "bugs": {
+    "url": "https://github.com/CooperZhuang/dsh-plugins-cooper-custom/issues"
+  },
+  "engines": {
+    "node": ">=24",
+    "dsh": "^0.2.1-rc.2 || ^0.2.2-alpha.2"
+  },
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-slots"
+      ],
+      "external": [
+        "@deepseek-ai/dsh-client-ui-settings/client"
+      ],
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/build-client.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.json && node scripts/build-client.mjs && node --test lib/test/*.test.js",
+    "smoke": "node scripts/activation-smoke.mjs .",
+    "seed": "node scripts/seed.mjs",
+    "eval": "node scripts/eval-extract.mjs",
+    "eval:retrieval": "node scripts/eval-retrieval.mjs",
+    "eval:backfill": "node scripts/eval-backfill.mjs",
+    "eval:rotation": "node scripts/eval-rotation.mjs",
+    "eval:coverage-projection": "node scripts/eval-coverage-projection.mjs",
+    "eval:acceptance": "node scripts/eval-acceptance.mjs",
+    "eval:recall-log": "node scripts/eval-recall-log.mjs",
+    "report": "node scripts/report.mjs",
+    "prepare": "npm run build",
+    "eval:e2e": "node bench/e2e/run.mjs",
+    "eval:real": "node bench/real/run.mjs",
+    "eval:real:sample": "node bench/real/sample.mjs",
+    "eval:real:author": "node bench/real/author.mjs"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.5 || ^4.0.6-alpha.1",
+    "@deepseek-ai/dsh-agent": "^0.2.1-rc.2 || ^0.2.2-alpha.2",
+    "@deepseek-ai/dsh-commands": "^0.2.1-rc.2 || ^0.2.2-alpha.2",
+    "@deepseek-ai/dsh-home-paths": "^0.2.1-rc.2 || ^0.2.2-alpha.2",
+    "@deepseek-ai/dsh-llm": "^0.2.1-rc.2 || ^0.2.2-alpha.2",
+    "@deepseek-ai/dsh-session": "^0.2.1-rc.2 || ^0.2.2-alpha.2",
+    "@deepseek-ai/dsh-tools": "^0.2.1-rc.2 || ^0.2.2-alpha.2",
+    "@deepseek-ai/schemastery": "^3.18.5 || ^3.18.6-alpha.1"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/cordis-plugin-loader": "^1.1.0",
+    "@deepseek-ai/dsh-agent": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-attachment": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-commands": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-home-paths": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-scope": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-session": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-session-projection": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-user-approval": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-workspace": "0.2.2-rc.1",
+    "@deepseek-ai/schemastery": "3.19.0",
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "@deepseek-ai/cosmokit": "^1.9.0"
+  },
+  "icon": "./icon.svg"
+}

@@ -1,7 +1,0 @@
-{
-  "meta": {
-    "title": "Cross-session memories",
-    "description": "Keeps durable preferences, decisions and pitfalls as a memory library injected and recalled in later sessions.",
-    "detail": "docs/DETAIL.md"
-  }
-}

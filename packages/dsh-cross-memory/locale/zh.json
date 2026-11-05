@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "跨记忆",
+    "description": "把值得留下的偏好、决定与踩坑整理成记忆库，在后续会话里按需注入和召回。",
+    "detail": "docs/DETAIL.zh.md"
+  }
+}
