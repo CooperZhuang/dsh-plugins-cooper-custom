@@ -39,7 +39,7 @@ export const CONSOLIDATE_SYSTEM = [
   'Rules:',
   '- Preserve every id you keep. A returned memory with an existing id REPLACES that memory; a new id ADDS one.',
   '- Prefer fewer, sharper memories. Never invent facts that are not in the input.',
-  '- Keep scope honest: a fact that is only true in one workspace stays "project"; a durable user preference or general tooling fact is "global". A fact that names a specific employer, product, customer, repository path, drive letter or internal host is NEVER global.',
+  '- Keep scope honest: an EXISTING memory never changes scope — scope decides which sessions a memory is injected into, so the pass places new memories but leaves current ones where they are. Choose a scope for a NEW memory by breadth: "global" for anything true across the developer\'s machines and projects (preferences, tooling, machine and path facts, network and proxy setup, how to move work between machines); "project" only for a fact about one workspace that would be wrong or meaningless anywhere else. Naming a machine, drive letter, repository path, host, employer or customer is not by itself evidence of project scope — a durable fact about the developer\'s own environment stays global even when it mentions such a name.',
   '- Keep the kind honest: "preference" for how the user wants work done, "failure" for something that went wrong, "procedure" for an ordered recipe, "knowledge" for a non-obvious technique, "fact" for background.',
   '- When you MERGE memories into one, list every id you folded in under "derivedFrom" (the ids you are retiring because their content now lives in the merged memory). A plain rewrite of one memory, or a brand-new memory, gets an empty list. This is the only record of what a merge replaced: the sources are archived, and without the list a future reader cannot check the merged claim against what it replaced.',
   '- Do not record secrets, credentials, transient task state, or restatements of code.',
@@ -775,9 +775,10 @@ export interface ConsolidationSnapshot {
  * "can this edit be undone or noticed if it is wrong". Archiving an entry nobody
  * ever read, folding a duplicate, sharpening a body while keeping its anchors:
  * all reversible or visible. Deleting the memory a session actually used,
- * rewriting what a person typed, silently moving a fact between scopes, or
- * dropping the paths a body cited — those need a human, because the loss is
- * invisible and the pass has no model of what it did not understand.
+ * rewriting what a person typed, or dropping the paths a body cited — those need
+ * a human, because the loss is invisible and the pass has no model of what it did
+ * not understand. A scope change is not on the list because it is not offered at
+ * all: every existing memory is pinned to the scope it already lives in.
  */
 export interface ConsolidationDispute {
   /** Entry id the decision is about. */
@@ -796,10 +797,10 @@ export interface ConsolidationDispute {
   readonly after: string
   /**
    * True when no automatic decision may be taken: a person wrote or pinned it, or
-   * the change moves it between scopes. Everything else may be adjudicated.
+   * marked it permanent. Everything else may be adjudicated.
    *
-   * These are the four promises the plugin makes to its owner, so the whole
-   * "automate the rest" design stops here: an AI may decide whether a merge lost
+   * These are the promises the plugin makes to its owner, so the whole "automate
+   * the rest" design stops here: an AI may decide whether a merge lost
    * information, it may not decide that a rule somebody pinned no longer applies.
    */
   readonly hard?: boolean
@@ -812,7 +813,51 @@ export interface ConsolidationDispute {
  * panel does. Kept next to {@link classifyPlan} so the two lists cannot drift.
  */
 function isHardStopReason(reason: string): boolean {
-  return reason.includes('人手写') || reason.includes('置顶') || reason.includes('永久保留') || reason.includes('作用域')
+  return reason.includes('人手写') || reason.includes('置顶') || reason.includes('永久保留')
+}
+
+/**
+ * Pin every existing memory to the scope it already lives in.
+ *
+ * A scope decides which sessions a memory is injected into, and a body that names
+ * a path, host or product says nothing about that: the developer's own machines,
+ * tools and cross-machine workflow are global even when they name a drive letter.
+ * Leaving the question to each pass produced two failure modes at once — a queue
+ * of "move this from global to project" decisions nobody wanted to answer, and a
+ * staged "move" whose acceptance wrote a second copy under the new scope (the
+ * original was never archived) and demoted its provenance to `auto`.
+ *
+ * So the rule is structural instead of conversational: the pass may place NEW
+ * memories anywhere, and every existing memory stays where it is. Callers that
+ * stage a disputed row must use the pinned plan too, or accepting that row would
+ * still write the proposed scope.
+ *
+ * @param plan - the plan the pass returned.
+ * @param entries - the entries as they were before the pass ran.
+ * @returns the plan with existing entries pinned, and each proposal that was overruled.
+ */
+export function pinExistingScopes(
+  plan: ConsolidationPlan,
+  entries: readonly MemoryEntry[],
+): { plan: ConsolidationPlan; pinned: readonly { id: string; proposed: MemoryScope; kept: MemoryScope }[] } {
+  // Indexed by id to the list of copies: one id can exist in both scopes, and the
+  // copy the proposal names is the one to pin, exactly as `classifyPlan` reads it.
+  const byId = new Map<string, MemoryEntry[]>()
+  for (const entry of entries) {
+    const list = byId.get(entry.id)
+    if (list === undefined) byId.set(entry.id, [entry])
+    else list.push(entry)
+  }
+  const pinned: { id: string; proposed: MemoryScope; kept: MemoryScope }[] = []
+  const upserts = plan.upserts.map((item) => {
+    if (item.id === null) return item
+    const candidates = byId.get(item.id) ?? []
+    const existing = candidates.find((entry) => entry.scope === item.scope) ?? candidates[0]
+    if (existing === undefined || existing.scope === item.scope) return item
+    pinned.push({ id: item.id, proposed: item.scope, kept: existing.scope })
+    return { ...item, scope: existing.scope }
+  })
+  return { plan: pinned.length === 0 ? plan : { ...plan, upserts }, pinned }
 }
 
 /** Paths a body cites, as anchors that must survive a rewrite. */
@@ -829,8 +874,10 @@ function citationCount(body: string): number {
  * The rules are deliberately about *loss*, not taste: the pass is allowed to
  * sharpen wording, merge duplicates and retire memories nothing ever read. It is
  * not allowed to quietly destroy a fact a session used, rewrite something a
- * person wrote, change where a memory lives, or drop the concrete anchors
- * (file paths) that made a body checkable.
+ * person wrote, or drop the concrete anchors (file paths) that made a body
+ * checkable. Scope is not a judgement at all: every existing entry is pinned to
+ * the scope it lives in (see {@link pinExistingScopes}), so a rewrite can never
+ * end up as a second copy in another scope.
  *
  * @param plan - the plan the pass returned.
  * @param snapshot - the entries as they were before it ran.
@@ -840,10 +887,9 @@ export function classifyPlan(
   plan: ConsolidationPlan,
   snapshot: ConsolidationSnapshot,
 ): { safe: ConsolidationPlan; disputes: readonly ConsolidationDispute[] } {
-  // Indexed by id alone: a plan that MOVES an entry between scopes names the new
-  // scope, so a scope+id lookup would miss the entry it is describing and treat a
-  // move as a brand-new memory — the one case where the old copy is the thing
-  // being changed.
+  // Indexed by id alone: a pinned plan reuses the entry's own scope, but a caller
+  // that skipped the pin still names an existing id here, and an id-only lookup
+  // finds the entry it is describing instead of treating it as a new memory.
   const byId = new Map<string, MemoryEntry[]>()
   for (const entry of snapshot.entries) {
     const list = byId.get(entry.id)
@@ -856,18 +902,20 @@ export function classifyPlan(
   }
   const disputes: ConsolidationDispute[] = []
   const safeUpserts: ConsolidationPlan['upserts'][number][] = []
-  for (const item of plan.upserts) {
-    const previous = item.id === null ? undefined : previousOf(item.id, item.scope)
+  for (const raw of plan.upserts) {
+    const previous = raw.id === null ? undefined : previousOf(raw.id, raw.scope)
     if (previous === undefined) {
       // A brand-new memory destroys nothing: it can be un-written.
-      safeUpserts.push(item)
+      safeUpserts.push(raw)
       continue
     }
+    // The structured form of the same rule: whatever the pass said about where an
+    // existing memory belongs, it stays where it lives.
+    const item = raw.scope === previous.scope ? raw : { ...raw, scope: previous.scope }
     const reasons: string[] = []
     if (previous.source === 'user') reasons.push('这条是人手写的')
     if (previous.pinned === true) reasons.push('这条是置顶的')
     if (previous.permanent === true) reasons.push('这条标记为永久保留')
-    if (previous.scope !== item.scope) reasons.push(`作用域要从 ${previous.scope} 改成 ${item.scope}`)
     const lostCitations = citationCount(previous.body) - citationCount(item.body)
     if (lostCitations > 0) reasons.push(`新版少了 ${lostCitations} 处文件路径引用`)
     // A body that shrinks by half is not a rewrite, it is a summary — and what
@@ -885,9 +933,9 @@ export function classifyPlan(
       reason: reasons.join('；'),
       before: previous.body,
       after: item.body,
-      // Reordering the four flags: user/pinned/permanent/move are promises; a
-      // citation loss or a halved body is a judgement about information, which
-      // is exactly what an adjudicator can be trusted with.
+      // Reordering the promises: user/pinned/permanent are promises; a citation
+      // loss or a halved body is a judgement about information, which is exactly
+      // what an adjudicator can be trusted with.
       ...reasons.some(isHardStopReason) ? { hard: true } : {},
     })
   }
@@ -931,6 +979,26 @@ export function classifyPlan(
     safe: { upserts: safeUpserts, retire: safeRetire, skills: plan.skills, notes: plan.notes },
     disputes,
   }
+}
+
+/**
+ * Whether one waiting row still carries the plan fragment that applies it.
+ *
+ * The rows and the plan are stored side by side, so a row can outlive its
+ * fragment: a sync conflict used to stage `upserts: []` beside real questions,
+ * and applying that empty plan "succeeded" without writing anything, after
+ * which the row — the only visible trace — was dropped. A row that has no
+ * matching upsert (rewrite) or retire entry has nothing to apply, and saying so
+ * is the only honest answer.
+ *
+ * @param plan - the plan stored with the pending rows.
+ * @param row - the decision a person is answering.
+ * @returns true when applying this row is more than a no-op.
+ */
+export function hasApplicableFragment(plan: ConsolidationPlan, row: ConsolidationDispute): boolean {
+  return row.action === 'retire'
+    ? plan.retire.includes(row.id)
+    : plan.upserts.some((item) => item.id === row.id)
 }
 
 /** Apply one plan against a store-like target. */

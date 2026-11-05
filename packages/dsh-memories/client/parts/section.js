@@ -46,8 +46,6 @@ const SECTION_COPY = {
     disputesIntro: '后台合并会自动执行可逆的改动（合并重复、收紧措辞、退役从没被读过的条目）。只有下面这些会伤到内容，才留给你决定——接受就按它改，驳回就原样保留，不动它过 72 小时会自动作废。',
     disputeRetire: '建议退役',
     disputeRewrite: '建议改写',
-    disputeBefore: '现在是',
-    disputeAfter: '改成',
     accept: '接受',
     reject: '保留原样',
     noDisputes: '没有待裁决的事项。',
@@ -94,8 +92,6 @@ const SECTION_COPY = {
     disputesIntro: 'Background consolidation applies what is reversible by itself: folding duplicates, sharpening wording, retiring memories nothing ever read. The rows below would lose something — accept applies the change, reject keeps the memory as it is, and doing nothing expires the question after 72 hours.',
     disputeRetire: 'retire',
     disputeRewrite: 'rewrite',
-    disputeBefore: 'now',
-    disputeAfter: 'would become',
     accept: 'Accept',
     reject: 'Keep as is',
     noDisputes: 'Nothing needs your decision.',
@@ -120,6 +116,113 @@ function whenText(ms) {
 }
 
 /**
+ * Split one disputed body into comparable tokens.
+ *
+ * CJK is compared character by character (a word boundary would hide the one
+ * character a rewrite actually changed), a latin run stays whole so `uses 12`
+ * does not turn into three one-letter diffs, and whitespace groups with the
+ * token after it so a moved space renders as part of the surrounding change.
+ */
+const DIFF_TOKEN = /[A-Za-z0-9_]+|\s+|[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]|[^\s]/gu
+
+/** Tokenize `text` for the word diff. */
+function diffSplit(text) {
+  return text.match(DIFF_TOKEN) ?? []
+}
+
+/**
+ * The word-level difference between two bodies.
+ *
+ * Common prefix and suffix are trimmed before the LCS pass, so the quadratic
+ * table only ever covers the changed span; adjacent tokens of the same kind are
+ * merged, and the result is a run list a renderer can walk in order.
+ *
+ * @param before - the body as stored today.
+ * @param after - the body the pass wants instead.
+ * @returns unchanged, removed, and added runs, in reading order.
+ */
+function diffTokens(before, after) {
+  const left = diffSplit(before)
+  const right = diffSplit(after)
+  let head = 0
+  while (head < left.length && head < right.length && left[head] === right[head]) head += 1
+  let tail = 0
+  while (tail < left.length - head && tail < right.length - head && left[left.length - 1 - tail] === right[right.length - 1 - tail]) tail += 1
+
+  const leftMid = left.slice(head, left.length - tail)
+  const rightMid = right.slice(head, right.length - tail)
+  const cols = rightMid.length + 1
+  // `table[i][j]` is the longest common subsequence of `leftMid[i..]` and
+  // `rightMid[j..]`, filled backwards so the walk below can go forwards and
+  // emit each run at the position it is read at.
+  const table = new Int32Array((leftMid.length + 1) * cols)
+  for (let i = leftMid.length - 1; i >= 0; i -= 1) {
+    for (let j = rightMid.length - 1; j >= 0; j -= 1) {
+      table[i * cols + j] = leftMid[i] === rightMid[j]
+        ? table[(i + 1) * cols + (j + 1)] + 1
+        : Math.max(table[(i + 1) * cols + j], table[i * cols + (j + 1)])
+    }
+  }
+
+  const runs = []
+  const push = (kind, text) => {
+    const last = runs[runs.length - 1]
+    if (last !== undefined && last.kind === kind) last.text += text
+    else runs.push({ kind, text })
+  }
+  for (const token of left.slice(0, head)) push('same', token)
+  let i = 0
+  let j = 0
+  while (i < leftMid.length && j < rightMid.length) {
+    if (leftMid[i] === rightMid[j]) { push('same', leftMid[i]); i += 1; j += 1 }
+    else if (table[(i + 1) * cols + j] >= table[i * cols + (j + 1)]) { push('del', leftMid[i]); i += 1 }
+    else { push('ins', rightMid[j]); j += 1 }
+  }
+  while (i < leftMid.length) { push('del', leftMid[i]); i += 1 }
+  while (j < rightMid.length) { push('ins', rightMid[j]); j += 1 }
+  for (const token of left.slice(left.length - tail)) push('same', token)
+  return runs
+}
+
+/** The scope sentence older proposals put in a rewrite reason (no longer produced). */
+const SCOPE_REASON = /^作用域要从\s*(\S+)\s*改成\s*(\S+)$/u
+
+/**
+ * Split a dispute reason into its grounds and its scope move.
+ *
+ * Consolidation joins grounds with `；` and states a move as
+ * `作用域要从 <from> 改成 <to>`. A move is not a ground — it is a fact about
+ * where the memory lives — so it is lifted out for the header instead of
+ * sitting in the middle of the reasons as one more sentence.
+ *
+ * @param reason - the reason text the pass wrote.
+ * @returns the scope move, if any, and the remaining grounds.
+ */
+function splitDisputeReason(reason) {
+  const reasons = []
+  let scope = null
+  const parts = typeof reason === 'string' ? reason.split('；') : []
+  for (const part of parts) {
+    const text = part.trim()
+    if (text.length === 0) continue
+    const move = SCOPE_REASON.exec(text)
+    if (move !== null && scope === null) {
+      scope = { from: move[1], to: move[2] }
+      continue
+    }
+    reasons.push(text)
+  }
+  return { scope, reasons }
+}
+
+/** The locale label for a memory scope, falling back to the raw value. */
+function scopeText(copy, scope) {
+  if (scope === 'global') return copy.global
+  if (scope === 'project') return copy.project
+  return scope
+}
+
+/**
  * Build the section component.
  *
  * @param React - the shell's React instance.
@@ -128,6 +231,25 @@ function whenText(ms) {
  */
 function createMemoriesSection(React, Card) {
   const h = React.createElement
+
+  /**
+   * One disputed body as a single reading line.
+   *
+   * There is no "before"/"after" pair any more: unchanged words read exactly as
+   * stored, words the pass removes are struck, words it adds are highlighted, so
+   * the difference is the layout instead of a caption. A retirement has no
+   * replacement; identical text is still shown once, because deciding whether a
+   * memory belongs where it is cannot be done without reading it.
+   */
+  function disputeBody(row) {
+    if (row.action === 'retire') return h('p', { key: 'diff', className: 'dshm-diff dshm-retire' }, row.before)
+    if (row.before === row.after) return h('p', { key: 'diff', className: 'dshm-diff' }, row.before)
+    return h('p', { key: 'diff', className: 'dshm-diff' }, diffTokens(row.before, row.after).map((run, at) => {
+      if (run.kind === 'same') return run.text
+      const name = run.kind === 'del' ? 'dshm-del' : 'dshm-ins'
+      return h(run.kind === 'del' ? 'del' : 'ins', { key: `${name}-${at}`, className: name }, run.text)
+    }))
+  }
 
   /** One entry row. */
   function EntryRow(props) {
@@ -538,34 +660,42 @@ function createMemoriesSection(React, Card) {
       }),
     ])
 
-    // Only the decisions a pass refused to make alone. The panel says what the
-    // memory says today and what the pass wants instead, because a rewrite is not
-    // decidable from its title.
-    const disputeRows = disputes.map((row) => h('li', { key: `${row.action}:${row.id}`, className: 'dshm-entry' }, [
-      h('div', { key: 'head', className: 'dshm-entry-head' }, [
-        h('h4', { key: 'title', className: 'dshm-entry-title' }, row.title),
-        h('span', { key: 'action', className: 'dshm-badge dshm-badge-global' }, row.action === 'retire' ? copy.disputeRetire : copy.disputeRewrite),
-      ]),
-      h('p', { key: 'reason', className: 'dshm-note' }, row.reason),
-      h('p', { key: 'before', className: 'dshm-body' }, `${copy.disputeBefore}: ${row.before}`),
-      row.after ? h('p', { key: 'after', className: 'dshm-body' }, `${copy.disputeAfter}: ${row.after}`) : null,
-      h('div', { key: 'actions', className: 'dshm-actions' }, [
-        h('button', {
-          key: 'accept',
-          type: 'button',
-          className: 'dshm-btn dshm-btn-primary',
-          disabled: busy,
-          onClick: () => onResolve(row, 'accept'),
-        }, copy.accept),
-        h('button', {
-          key: 'reject',
-          type: 'button',
-          className: 'dshm-btn',
-          disabled: busy,
-          onClick: () => onResolve(row, 'reject'),
-        }, copy.reject),
-      ]),
-    ]))
+    // Only the decisions a pass refused to make alone. Each row is one reading
+    // of the disputed text with the change marked in place, and a scope move is
+    // stated in the head rather than buried in the reason sentence.
+    const disputeRows = disputes.map((row) => {
+      const parsed = splitDisputeReason(row.reason)
+      return h('li', { key: `${row.action}:${row.id}`, className: 'dshm-entry' }, [
+        h('div', { key: 'head', className: 'dshm-entry-head' }, [
+          h('h4', { key: 'title', className: 'dshm-entry-title' }, row.title),
+          parsed.scope === null ? null : h('span', { key: 'scope', className: 'dshm-scope' }, [
+            h('span', { key: 'from' }, scopeText(copy, parsed.scope.from)),
+            h('span', { key: 'arrow', className: 'dshm-scope-arrow', 'aria-hidden': true }, '→'),
+            h('span', { key: 'to' }, scopeText(copy, parsed.scope.to)),
+          ]),
+          h('span', { key: 'action', className: 'dshm-badge dshm-badge-global' }, row.action === 'retire' ? copy.disputeRetire : copy.disputeRewrite),
+        ]),
+        parsed.reasons.length === 0 ? null : h('div', { key: 'reasons', className: 'dshm-reasons' }, parsed.reasons.map((text, at) =>
+          h('span', { key: `${at}:${text}`, className: 'dshm-badge' }, text))),
+        disputeBody(row),
+        h('div', { key: 'actions', className: 'dshm-actions' }, [
+          h('button', {
+            key: 'accept',
+            type: 'button',
+            className: 'dshm-btn dshm-btn-primary',
+            disabled: busy,
+            onClick: () => onResolve(row, 'accept'),
+          }, copy.accept),
+          h('button', {
+            key: 'reject',
+            type: 'button',
+            className: 'dshm-btn',
+            disabled: busy,
+            onClick: () => onResolve(row, 'reject'),
+          }, copy.reject),
+        ]),
+      ])
+    })
     const disputesPanel = h('div', { key: 'panel-disputes', role: 'tabpanel', className: 'dshm-panel' }, [
       h('h3', { key: 'title', className: 'dshm-section-title' }, copy.disputesTitle),
       h('p', { key: 'intro', className: 'dshm-note' }, copy.disputesIntro),

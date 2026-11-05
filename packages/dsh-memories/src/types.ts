@@ -11,6 +11,21 @@
  */
 import type { ContextFormed } from '@deepseek-ai/dsh-llm'
 
+/**
+ * Since 0.2.2-rc.1 `GenerateOptions.purpose` is `LlmRequestPurpose`, derived
+ * from `LlmRequestPurposeMap`, which the kernel ships empty for producer
+ * packages to augment (its own `dsh-compaction-basic` passes the runtime string
+ * from plain JS). Memory's auxiliary calls have been tagged `'compaction'`
+ * since 0.1.x — the DeepSeek adapter maps that to
+ * `x-deepseek-harness-compact: 1` — so declare the key here rather than drop
+ * the tag the requests have always carried.
+ */
+declare module '@deepseek-ai/dsh-llm' {
+  interface LlmRequestPurposeMap {
+    compaction: true
+  }
+}
+
 /** A memory scope: cross-project (`global`) or workspace-bound (`project`). */
 export type MemoryScope = 'global' | 'project'
 
@@ -113,6 +128,22 @@ export interface MemoryEntry {
    * rollout summary its read path can open.
    */
   readonly sourceSession?: string
+  /**
+   * Verbatim excerpt of the transcript message this memory was extracted from.
+   *
+   * `sourceSession` says which conversation a memory came from, but not what in
+   * that conversation supports it: a session note is the model's own summary, so
+   * a memory could paraphrase, misattribute or invent a detail and still point at
+   * a real note. `quote` is copied from the transcript and checked as a substring
+   * before the entry is written, so a memory whose wording the source does not
+   * actually support cannot claim one. Deliberately absent on entries a person
+   * wrote with the tool (there is no transcript to quote) and cleared when a
+   * rewrite changes the body, because the old excerpt no longer supports the new
+   * claim.
+   */
+  readonly quote?: string
+  /** Surface seq of the message `quote` was copied from; see {@link MemoryEntry.quote}. */
+  readonly evidenceSeq?: number
   /**
    * Ids of the memories this one was built from, when it was merged from others.
    *
@@ -276,6 +307,14 @@ export interface MemoryDraft {
   readonly supersedes?: string
   /** Session the draft came from, recorded as {@link MemoryEntry.sourceSession}. */
   readonly sourceSession?: string
+  /**
+   * Verbatim excerpt the extractor copied from the transcript, recorded as
+   * {@link MemoryEntry.quote}. Only the extraction path produces it; a rewrite
+   * that changes the body drops it.
+   */
+  readonly quote?: string
+  /** Surface seq of the message `quote` was copied from; filled by the extractor. */
+  readonly evidenceSeq?: number
   /** Entries this draft was merged from, recorded as {@link MemoryEntry.derivedFrom}. */
   readonly derivedFrom?: readonly string[]
   /** Extra search keys (aliases, keyphrases) that should also find this memory. */

@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { ROUTE_EVENTS, ROUTE_OPEN, ROUTE_STATUS } from '../lib/index.js'
+import { ROUTE_APPS, ROUTE_EVENTS, ROUTE_OPEN, ROUTE_OPEN_WITH, ROUTE_STATUS } from '../lib/index.js'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const read = (relative) => readFileSync(join(root, relative), 'utf8')
@@ -47,6 +47,17 @@ test('the launcher calls the route paths the host half exports', () => {
   assert.ok(clientSource.includes(ROUTE_EVENTS), `client/index.js does not follow ${ROUTE_EVENTS}`)
   assert.ok(clientBundle.includes(ROUTE_EVENTS), `lib/client.js is stale: rebuild with npm run build`)
   assert.ok(!launcher.includes(ROUTE_EVENTS), 'the launcher must not follow the stream')
+})
+
+test('the browser half carries the open-with routes the host half serves', () => {
+  // These two paths are hand-mirrored in client/index.js; the bundle is what
+  // actually ships, so both copies are checked.
+  for (const route of [ROUTE_OPEN_WITH, ROUTE_APPS]) {
+    assert.ok(clientSource.includes(route), `client/index.js does not call ${route}`)
+    assert.ok(clientBundle.includes(route), `lib/client.js is stale: rebuild with npm run build (missing ${route})`)
+  }
+  // The Explorer launcher opens folders in DSH; it has no business launching apps.
+  assert.ok(!launcher.includes(ROUTE_OPEN_WITH), 'the launcher must not call the open-with route')
 })
 
 test('every script agrees on which port the Desktop host listens on', () => {

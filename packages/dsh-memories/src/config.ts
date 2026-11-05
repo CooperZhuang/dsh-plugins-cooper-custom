@@ -34,11 +34,60 @@ export const ENTRY_ID = 'memories'
 /** Default child-name markers that identify a workspace root. */
 export const DEFAULT_PROJECT_ROOT_MARKERS = ['.git'] as const
 
+/** Default background sync interval, in minutes; used when no clock times are set. */
+export const DEFAULT_SYNC_INTERVAL_MINUTES = 10
+
+/** Default clock times: just after DeepSeek off-peak pricing starts (12:00 and 18:00 local). */
+export const DEFAULT_SYNC_CLOCK = '12:05,18:05'
+
+/** Default debounce before a burst of memory writes becomes one commit, in seconds. */
+export const DEFAULT_SYNC_DEBOUNCE_SECONDS = 2
+
 /** Default byte budget for the injected memory summary. */
 export const DEFAULT_MAX_SUMMARY_BYTES = 4096
 
 /** Default cap on entries listed in the injected summary per scope. */
 export const DEFAULT_MAX_SUMMARY_ENTRIES = 12
+
+/**
+ * Whether a conversation is told about memories written after its summary.
+ *
+ * The summary is a snapshot from the first step of the conversation, so a
+ * memory extracted or consolidated ten turns later would otherwise stay
+ * invisible until the model thought to search for it. The delta block is
+ * bounded (two per conversation, 800 bytes each) and only names entries whose
+ * `updated` stamp is newer than the last injection, so it costs one short
+ * paragraph rather than a second summary.
+ */
+export const DEFAULT_INJECT_DELTA = true
+
+/**
+ * How many additional memories one conversation lists by title only.
+ *
+ * The summary can only name a dozen entries and reserves at most a third of its
+ * slots for never-surfaced material; measured on a real store at baseline that
+ * left 58.6% of live entries never injected or read. Sixteen titles cost about
+ * 1.6 KB and are enough to make the whole store discoverable over a couple of
+ * dozen sessions: each conversation rotates through the entries the summary did
+ * not have room for, oldest-unseen first. The global scope takes three quarters
+ * of the block, so a global library of 600 entries moves about 12 a session.
+ * 0 disables the rotation block.
+ */
+export const DEFAULT_ROTATION_ENTRIES = 16
+
+/**
+ * User turns between rotation blocks inside one long conversation.
+ *
+ * Once per conversation is not enough for a session that runs for hours: the
+ * store keeps growing and the model keeps needing names it has not seen yet.
+ * Re-arming the block every this many USER turns keeps the cost bounded (one
+ * ~1.6 KB block per span) and lets coverage accumulate within a single long
+ * session. 0 keeps the old once-per-conversation behaviour.
+ */
+export const DEFAULT_ROTATION_EVERY_TURNS = 8
+
+/** Byte budget for the title-only rotation block. */
+export const DEFAULT_ROTATION_MAX_BYTES = 1600
 
 /**
  * Default cap on the GLOBAL section's bullets, below {@link DEFAULT_MAX_SUMMARY_ENTRIES}.
@@ -144,6 +193,22 @@ export const DEFAULT_RECALL_MAX_BYTES = 1_200
 
 /** Default minimum length of a user turn worth a recall decision. */
 export const DEFAULT_RECALL_MIN_QUERY_CHARS = 2
+
+/**
+ * Whether a recall block may also carry original conversation excerpts.
+ *
+ * Off by default: this injects prose from *other* sessions, which is a privacy
+ * step beyond recalling a memory summary, so it is opt-in. bench/real/joint.mjs
+ * measured the payoff: memory 26/33, raw 27/33, memory+raw 32/33, rag 33/33 on
+ * the same 33 real-session questions.
+ */
+export const DEFAULT_RAW_RECALL = false
+
+/** Byte budget for the raw excerpt half of one recall block. */
+export const DEFAULT_RAW_RECALL_BYTES = 2_400
+
+/** Most raw excerpts one recall block may carry. */
+export const DEFAULT_RAW_RECALL_EXCERPTS = 3
 
 /**
  * Default number of distinct strong-field terms a recall needs.
@@ -305,6 +370,16 @@ export const Config = z.object({
   projectRootMarkers: z.array(z.string()).default([...DEFAULT_PROJECT_ROOT_MARKERS]),
   /** Plugin log file; defaults to `<dshHome>/logs/dsh-memories.log`. Empty disables file logging. */
   logFile: z.string(),
+  /** Git remote the memory store syncs through; empty keeps the repository local-only. */
+  syncConflictProvider: z.string().default('').description('Provider used to merge two conflicting revisions of the same memory. Empty falls back to the extraction route; when neither is configured the newer revision wins and the older one stays in git history.').volatile(),
+  syncConflictModel: z.string().default('').description('Model used to merge two conflicting revisions of the same memory. Empty falls back to the extraction model.').volatile(),
+  syncRemote: z.string().default('').description('Git remote the memory store pushes to and pulls from. Empty leaves the store a local repository: writes are still committed, nothing leaves the machine. Point it at one private repository shared by every machine you use, e.g. git@github.com:<you>/dsh-cross-memory-store.git.').volatile(),
+  /** Local clock times to sync at, e.g. `12:05,18:05`; wins over the interval. */
+  syncClock: z.string().default(DEFAULT_SYNC_CLOCK).description('Local clock times (HH:MM, comma separated) at which the store syncs. Defaults to 12:05 and 18:05 — a few minutes after DeepSeek off-peak pricing starts, when a conflict merge is cheapest. Empty falls back to syncIntervalMinutes.').volatile(),
+  /** Background sync interval in minutes; 0 disables the timer. */
+  syncIntervalMinutes: z.number().default(DEFAULT_SYNC_INTERVAL_MINUTES).description('How often the store fetches, rebases and pushes in the background. 0 keeps the repository but stops the timer, so only a manual sync moves it.').volatile(),
+  /** Debounce before a memory write is committed locally. */
+  syncDebounceSeconds: z.number().default(DEFAULT_SYNC_DEBOUNCE_SECONDS).description('How long a burst of memory writes is folded into one commit. The commit is local and cheap; the network never runs on the write path.').volatile(),
   /** Byte budget for the injected summary. `0` disables injection. */
   maxSummaryBytes: z.number().default(DEFAULT_MAX_SUMMARY_BYTES).description('Byte budget for the memory summary injected once per conversation. 0 disables injection and leaves only the memory tool.').volatile(),
   /** Max entries listed per scope in the injected summary. */
@@ -323,10 +398,38 @@ export const Config = z.object({
   recallMaxPerConversation: z.number().default(DEFAULT_RECALL_MAX_PER_CONVERSATION).description('Maximum recall deltas injected into one conversation, counted per memory. 0 disables them.').volatile(),
   /** Byte budget for one recall delta block. */
   recallMaxBytes: z.number().default(DEFAULT_RECALL_MAX_BYTES).description('Byte budget for one on-demand recall block. 0 disables recall deltas.').volatile(),
+  rawRecall: z.boolean().default(DEFAULT_RAW_RECALL).description('Also put original conversation excerpts from the memory source sessions into the on-demand recall block. Off by default: it injects prose from earlier sessions, and it is read from the persisted session logs on this machine only.').volatile(),
+  rawRecallBytes: z.number().default(DEFAULT_RAW_RECALL_BYTES).description('Byte budget for the original-excerpt half of one recall block.').volatile(),
+  rawRecallExcerpts: z.number().default(DEFAULT_RAW_RECALL_EXCERPTS).description('Most original conversation excerpts one recall block may carry.').volatile(),
   /** Shortest user turn worth a recall decision. */
   recallMinQueryChars: z.number().default(DEFAULT_RECALL_MIN_QUERY_CHARS).description('Shortest user turn, in characters, that may trigger a recall delta. Short acknowledgements are skipped instead of scanning the store.').volatile(),
   /** Distinct strong-field terms a recall needs before it is credited. */
   recallMinTerms: z.number().default(DEFAULT_RECALL_MIN_TERMS).description('Distinct query terms that must land in the title, keys, tags, or appliesTo before a memory may be recalled on demand. This is what keeps a Chinese turn from recalling every memory that shares a common word like 插件 or 日志. 1 makes the relevance floor the only gate, which is noticeably noisier for Chinese; 0 disables the check.').volatile(),
+  /**
+   * Whether memories written after the summary was injected get a small delta.
+   *
+   * Off leaves the once-per-conversation summary as the only automatic block;
+   * the `memory` tool and the on-demand recall path still work.
+   */
+  injectDelta: z.boolean().default(DEFAULT_INJECT_DELTA).description('Inject a small block when memories are written after the summary was already shown (at most twice per conversation). Off keeps the summary as the only automatic block.').volatile(),
+  /**
+   * How many extra memories one conversation lists by title only.
+   *
+   * The summary names at most a dozen entries, so most of a large store is never
+   * seen. The rotation block spends about a kilobyte on titles the summary had
+   * no room for, oldest-unseen first, so the whole store becomes discoverable
+   * over a few dozen sessions. 0 disables it.
+   */
+  rotationEntries: z.number().default(DEFAULT_ROTATION_ENTRIES).description('List this many additional memory titles (not bodies) in each conversation, rotating through the entries the summary did not name, oldest-unseen first. 0 disables the rotation block.').volatile(),
+  /**
+   * User turns between rotation blocks inside one long conversation.
+   *
+   * A session that runs for hours outlives its first block: the store grows and
+   * the model needs names it has not seen. Re-arming every this many turns keeps
+   * the cost bounded (one block per span) and lets coverage accumulate within a
+   * single long session. 0 keeps once-per-conversation.
+   */
+  rotationEveryTurns: z.number().default(DEFAULT_ROTATION_EVERY_TURNS).description('Inside one conversation, emit a fresh rotation block every this many user turns (0 keeps the old once-per-conversation behaviour).').volatile(),
   /** Max stored entries per scope; the least-recently-updated are evicted. */
   maxEntriesPerScope: z.number().default(DEFAULT_MAX_ENTRIES_PER_SCOPE).description('Stored memories per scope; past this cap the least recently used are deleted.').volatile(),
   /** Days an unused memory survives before it is archived. `0` disables archival. */
@@ -382,7 +485,7 @@ export const Config = z.object({
    * where automation can be added safely, because the alternative to a decision is
    * not "safer", it is "nothing ever happens".
    */
-  autoDecide: z.boolean().default(true).description('Let an AI adjudicate the consolidation changes that would otherwise wait for you: it is asked only whether the change loses information, and answers accept or reject with a confidence. Permanent and user-written memories, and any scope move, still wait for you. Off sends everything to the 待裁决 panel.').volatile(),
+  autoDecide: z.boolean().default(true).description('Let an AI adjudicate the consolidation changes that would otherwise wait for you: it is asked only whether the change loses information, and answers accept or reject with a confidence. Permanent and user-written memories still wait for you. Off sends everything to the 待裁决 panel.').volatile(),
   /** Confidence floor under which an AI verdict is treated as "no answer". */
   autoDecideMinConfidence: z.number().default(0.7).description('Below this confidence an AI adjudication is ignored and the item stays in 待裁决. 0 accepts every verdict; 1 accepts none unless certain.').volatile(),
   /** Explicit consolidation provider route; empty falls back to the extraction route. */
@@ -397,14 +500,8 @@ export const Config = z.object({
   logLevel: z.string().default(DEFAULT_LOG_LEVEL).description('How much dsh-memories writes to its log file: off, error, warn, info, or debug. info keeps errors, warnings, and pass summaries; debug adds per-entry decisions.').volatile(),
   /** Whether maintenance decisions are logged at info, where a stock logLevel keeps them. */
   traceMaintenance: z.boolean().default(DEFAULT_TRACE_MAINTENANCE).description('Log every retention, recall, and selection decision at info instead of debug. Off keeps the file to one line per pass.').volatile(),
-  /** Whether the plugin may speak without being asked (pet bubble / OS notification). */
-  noticesEnabled: z.boolean().default(true).description('Let the plugin raise a notice on its own: a daily digest of what it maintained, a backlog warning when decisions have waited too long, and later open loops. Notices go to the desktop pet first and to a system notification as a fallback. Off means the plugin only ever answers.').volatile(),
-  /** Pet id to speak through; empty reads it from the pet's own config. */
-  petId: z.string().default('').description("Desktop pet id for notices, e.g. main. Empty reads the first pet from dsh-pet's own config. The pet's HTTP route needs the harness's authenticated URL, which is resolved in-process.").volatile(),
-  /** Pet route id baked into its registered prefix. */
-  petRouteId: z.string().default('7340').description('Route id in the pet HTTP prefix (/dsh-pet-<routeId>). Only change it if the pet package registers a different one.').volatile(),
-  /** How long one bubble stays up. */
-  petBubbleMs: z.number().default(8000).description('How long the pet keeps a notice bubble on screen, in milliseconds.').volatile(),
+  /** Whether the plugin may speak without being asked. */
+  noticesEnabled: z.boolean().default(true).description('Let the plugin raise a notice on its own: a daily digest of what it maintained, a backlog warning when decisions have waited too long, and open loops whose deadline passed. Delivered as an operating-system notification. Off means the plugin only ever answers.').volatile(),
   /** Windows during which nothing is delivered. */
   noticeQuietHours: z.string().default('').description('Local-time windows during which notices are held rather than delivered, for example "22:00-08:00". Empty means always allowed. Held notices fire when the window ends; they are not dropped.').volatile(),
   /** Whether the weekly reflection pass may run. */
@@ -440,8 +537,17 @@ export interface MemoriesSettings {
   recallMinScore: number
   recallMaxPerConversation: number
   recallMaxBytes: number
+  rawRecall: boolean
+  rawRecallBytes: number
+  rawRecallExcerpts: number
   recallMinQueryChars: number
   recallMinTerms: number
+  /** Whether memories written after the summary are announced as a delta. */
+  injectDelta: boolean
+  /** How many extra memories one conversation lists by title only (0 disables). */
+  rotationEntries: number
+  /** User turns between rotation blocks inside one long conversation (0 = once). */
+  rotationEveryTurns: number
   /** Retention: what the store keeps, and for how long. */
   maxEntriesPerScope: number
   maxUnusedDays: number
@@ -460,6 +566,18 @@ export interface MemoriesSettings {
   minIdleHours: number
   maxAgeDays: number
   maxSessionsPerPass: number
+  /** Git remote the store syncs through; empty keeps it local-only. */
+  syncRemote: string
+  /** Provider for AI conflict resolution; empty falls back to the extraction route. */
+  syncConflictProvider: string
+  /** Model for AI conflict resolution; empty falls back to the extraction route. */
+  syncConflictModel: string
+  /** Local clock times to sync at, comma separated `HH:MM`; wins over the interval. */
+  syncClock: string
+  /** Background sync interval in minutes; 0 disables the timer. */
+  syncIntervalMinutes: number
+  /** Debounce before a memory write becomes one commit, in seconds. */
+  syncDebounceSeconds: number
   /** Consolidation: the restricted sub-agent pass that merges new memories. */
   consolidate: boolean
   consolidateCooldownHours: number
@@ -481,12 +599,7 @@ export interface MemoriesSettings {
   reflectionEnabled: boolean
   /** Whether the plugin may speak without being asked. */
   noticesEnabled: boolean
-  /** Pet id, or empty to read it from the pet's config. */
-  petId: string
-  /** Route id in the pet's HTTP prefix. */
-  petRouteId: string
-  /** Bubble duration in ms. */
-  petBubbleMs: number
+
   /** Local-time windows during which notices are held. */
   noticeQuietHours: string
   /** Model routes for the plugin's own calls; empty reuses the session's route. */
@@ -522,8 +635,14 @@ export const MEMORIES_SETTINGS_DEFAULTS: MemoriesSettings = {
   recallMinScore: DEFAULT_RECALL_MIN_SCORE,
   recallMaxPerConversation: DEFAULT_RECALL_MAX_PER_CONVERSATION,
   recallMaxBytes: DEFAULT_RECALL_MAX_BYTES,
+  rawRecall: DEFAULT_RAW_RECALL,
+  rawRecallBytes: DEFAULT_RAW_RECALL_BYTES,
+  rawRecallExcerpts: DEFAULT_RAW_RECALL_EXCERPTS,
   recallMinQueryChars: DEFAULT_RECALL_MIN_QUERY_CHARS,
   recallMinTerms: DEFAULT_RECALL_MIN_TERMS,
+  injectDelta: DEFAULT_INJECT_DELTA,
+  rotationEntries: DEFAULT_ROTATION_ENTRIES,
+  rotationEveryTurns: DEFAULT_ROTATION_EVERY_TURNS,
   maxEntriesPerScope: DEFAULT_MAX_ENTRIES_PER_SCOPE,
   maxUnusedDays: DEFAULT_MAX_UNUSED_DAYS,
   snapshotMaxAgeDays: DEFAULT_SNAPSHOT_MAX_AGE_DAYS,
@@ -540,6 +659,12 @@ export const MEMORIES_SETTINGS_DEFAULTS: MemoriesSettings = {
   minIdleHours: DEFAULT_MIN_IDLE_HOURS,
   maxAgeDays: DEFAULT_MAX_AGE_DAYS,
   maxSessionsPerPass: DEFAULT_MAX_SESSIONS_PER_PASS,
+  syncRemote: '',
+  syncConflictProvider: '',
+  syncConflictModel: '',
+  syncClock: DEFAULT_SYNC_CLOCK,
+  syncIntervalMinutes: DEFAULT_SYNC_INTERVAL_MINUTES,
+  syncDebounceSeconds: DEFAULT_SYNC_DEBOUNCE_SECONDS,
   consolidate: true,
   consolidateCooldownHours: DEFAULT_CONSOLIDATE_COOLDOWN_HOURS,
   consolidateProposalMaxAgeHours: DEFAULT_CONSOLIDATE_PROPOSAL_MAX_AGE_HOURS,
@@ -551,9 +676,6 @@ export const MEMORIES_SETTINGS_DEFAULTS: MemoriesSettings = {
   noticeGate: true,
   reflectionEnabled: true,
   noticesEnabled: true,
-  petId: '',
-  petRouteId: '7340',
-  petBubbleMs: 8000,
   noticeQuietHours: '',
   pauseOnQuotaError: true,
   quotaCooldownMinutes: DEFAULT_QUOTA_COOLDOWN_MINUTES,
@@ -672,8 +794,14 @@ export function normalizeSettings(input: Partial<MemoriesSettings> | undefined):
     recallMinScore: positive(value.recallMinScore, DEFAULT_RECALL_MIN_SCORE, 0),
     recallMaxPerConversation: positive(value.recallMaxPerConversation, DEFAULT_RECALL_MAX_PER_CONVERSATION, 0),
     recallMaxBytes: positive(value.recallMaxBytes, DEFAULT_RECALL_MAX_BYTES, 0),
+    rawRecall: value.rawRecall ?? DEFAULT_RAW_RECALL,
+    rawRecallBytes: positive(value.rawRecallBytes, DEFAULT_RAW_RECALL_BYTES, 0),
+    rawRecallExcerpts: positive(value.rawRecallExcerpts, DEFAULT_RAW_RECALL_EXCERPTS, 0),
     recallMinQueryChars: positive(value.recallMinQueryChars, DEFAULT_RECALL_MIN_QUERY_CHARS, 0),
     recallMinTerms: positive(value.recallMinTerms, DEFAULT_RECALL_MIN_TERMS, 0),
+    injectDelta: value.injectDelta ?? DEFAULT_INJECT_DELTA,
+    rotationEntries: positive(value.rotationEntries, DEFAULT_ROTATION_ENTRIES, 0),
+    rotationEveryTurns: positive(value.rotationEveryTurns, DEFAULT_ROTATION_EVERY_TURNS, 0),
     maxEntriesPerScope: positive(value.maxEntriesPerScope, DEFAULT_MAX_ENTRIES_PER_SCOPE),
     maxUnusedDays: positive(value.maxUnusedDays, DEFAULT_MAX_UNUSED_DAYS, 0),
     snapshotMaxAgeDays: positive(value.snapshotMaxAgeDays, DEFAULT_SNAPSHOT_MAX_AGE_DAYS, 0),
@@ -690,6 +818,12 @@ export function normalizeSettings(input: Partial<MemoriesSettings> | undefined):
     minIdleHours: decimal(value.minIdleHours, DEFAULT_MIN_IDLE_HOURS),
     maxAgeDays: positive(value.maxAgeDays, DEFAULT_MAX_AGE_DAYS, 0),
     maxSessionsPerPass: positive(value.maxSessionsPerPass, DEFAULT_MAX_SESSIONS_PER_PASS),
+    syncRemote: value.syncRemote?.trim() ?? '',
+    syncConflictProvider: value.syncConflictProvider?.trim() ?? '',
+    syncConflictModel: value.syncConflictModel?.trim() ?? '',
+    syncClock: value.syncClock?.trim() ?? DEFAULT_SYNC_CLOCK,
+    syncIntervalMinutes: positive(value.syncIntervalMinutes, DEFAULT_SYNC_INTERVAL_MINUTES, 0),
+    syncDebounceSeconds: positive(value.syncDebounceSeconds, DEFAULT_SYNC_DEBOUNCE_SECONDS, 0),
     consolidate: value.consolidate ?? true,
     consolidateCooldownHours: decimal(value.consolidateCooldownHours, DEFAULT_CONSOLIDATE_COOLDOWN_HOURS),
     consolidateProposalMaxAgeHours: decimal(value.consolidateProposalMaxAgeHours, DEFAULT_CONSOLIDATE_PROPOSAL_MAX_AGE_HOURS, 0),
@@ -701,9 +835,6 @@ export function normalizeSettings(input: Partial<MemoriesSettings> | undefined):
     noticeGate: value.noticeGate ?? true,
     reflectionEnabled: value.reflectionEnabled ?? true,
     noticesEnabled: value.noticesEnabled ?? true,
-    petId: value.petId ?? '',
-    petRouteId: (value.petRouteId ?? '7340').trim() || '7340',
-    petBubbleMs: positive(value.petBubbleMs, 8000, 1000),
     noticeQuietHours: value.noticeQuietHours ?? '',
     pauseOnQuotaError: value.pauseOnQuotaError ?? true,
     quotaCooldownMinutes: positive(value.quotaCooldownMinutes, DEFAULT_QUOTA_COOLDOWN_MINUTES, 0),

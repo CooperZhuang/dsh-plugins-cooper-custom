@@ -27,6 +27,7 @@
  */
 
 import { statSync } from 'node:fs'
+import { realpath } from 'node:fs/promises'
 import {
   SESSION_RUNNING_STATUS,
   accountedSessionIds,
@@ -334,6 +335,7 @@ function createMover(ctx, config, log) {
       frames: plan.frameCount,
       sourcePath: plan.sourcePath,
       targetPath: plan.targetPath,
+      leaseFile: plan.leaseFile ?? null,
       leftInSourceDir: plan.otherFiles,
       otherGenerations: plan.otherGenerations,
     }
@@ -614,6 +616,233 @@ export function mountMove(ctx, config, log) {
     () => ctx.tools.register(buildTool(mover, config, log)),
     'dsh-session-move: session_move tool',
   )
+}
+
+// ---------------------------------------------------------------------------
+// fork 子会话成员自愈
+// ---------------------------------------------------------------------------
+
+/** 一次 `session/created` 里能拿到的会话事实。 */
+const FORK_CHILD_ORIGIN = 'subagent'
+
+/**
+ * 判断一条会话头是不是「普通 fork 子会话」——自愈只对这类会话动手。
+ *
+ * 依据是 Host 的 fork 实现（`session/fork` 里 `meta: { parentSession, isSeeded: true }`）
+ * 与子代理实现（`origin: 'subagent'`、`delegationDepth: 1`）这两个实测事实：
+ * 子代理会话的 cwd 同样指着工作区，但它们本来就不该入册，必须排除。
+ *
+ * @param header - 会话头（`session.header`）。
+ * @returns 普通 fork 子会话为 true。
+ */
+function isForkChild(header) {
+  if (header === null || typeof header !== 'object') return false
+  if (typeof header.parentSession !== 'string' || header.parentSession.length === 0) return false
+  if (header.origin === FORK_CHILD_ORIGIN) return false
+  const depth = Number(header.delegationDepth)
+  return !(Number.isFinite(depth) && depth > 0)
+}
+
+/**
+ * 构建一份「fork 子会话漏挂工作区」的补记账器（创建期监听与启动期扫描共用）。
+ *
+ * ## 背景（2026-10-31 实测，不是推测）
+ *
+ * Host 的 `session/fork` 本来会给自己找归属：`forkWorkspace(source.header)` 按
+ * 「哪个工作区的成员表里有源会话」挑一个，再 `workspace.attachSession(childId)`，
+ * 失败还会回 `session/workspace-attach-failed`。但当晚 dsh-easyrewrite 的两次
+ * 「编辑重发」（22:13:56 / 22:14:37）产生的子会话 `session-267986cf`、
+ * `session-4cf88d34` 最终都是 `ungrouped`（`session_admin` 里 `workspaceTitle: null`），
+ * 而第一次 fork 的父会话明明是 `/Users/example/.dsh` 工作区的成员——
+ * 结果是客户端只把它们记进「占位」列表，刷新/重启后侧栏里再也看不到，
+ * 就是「刚才那个会话怎么找不到了」。
+ *
+ * ## 规则刻意收窄（创建期与启动期同一套）
+ *
+ *   - 只处理普通 fork 子会话（见 {@link isForkChild}）；
+ *   - 父会话必须已经挂在某个工作区，子会话就挂到**同一个**工作区；父会话自己都没
+ *     归属就不猜，只记一行日志；
+ *   - 子会话 `header.cwd` 必须 realpath 后真的等于那个工作区的路径，否则不挂
+ *     （宁可留一条 ungrouped，也不把别处的会话塞进工作区）。
+ *
+ * 幂等：已记账直接返回；同一 id 的并发事件用 `inFlight` 去重；attach 失败只记日志，
+ * 绝不上抛——这条自愈路径失败不能影响 Host 创建会话本身。
+ *
+ * 不做全量扫描：343 条存量会话里 155 条是子代理、还有一批刻意 ungrouped 的迁移
+ * 会话，全量 attach 会改写用户既有的侧栏结构。启动期扫描只认 fork 子会话
+ * （见 {@link sweepForkChildrenOnBoot}），存量漂移仍可用 `session_move` 显式修。
+ *
+ * @param ctx - Host cordis 上下文（需要 `workspaceRegistry`）。
+ * @param log - `(level, message) => void`（入口传的是 move 那套行格式的文件日志）。
+ * @returns repairer（`{ repair, ownerOf }`），注册表不可用时 `undefined`。
+ */
+function createForkMembershipRepairer(ctx, log) {
+  const registry = ctx.workspaceRegistry
+  if (registry === undefined || typeof registry.list !== 'function') {
+    log('warn', 'membership repair skipped: workspaceRegistry is unavailable')
+    return undefined
+  }
+
+  /** 正在补记账的会话 id（并发重复事件去重）。 */
+  const inFlight = new Set()
+
+  /** realpath 不抛异常的版本：解析不出来就没法比较。 */
+  const canonical = async (path) => {
+    try {
+      return await realpath(path)
+    } catch {
+      return undefined
+    }
+  }
+
+  /** 一条会话当前登记在哪个工作区（按注册表的完整记账，不是过滤后的视图）。 */
+  const ownerOf = (sessionId) => {
+    try {
+      return workspaceOwningSession(registry.list(), sessionId)
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * 给一条 fork 子会话补记账。
+   * @param sessionId - 子会话 id。
+   * @param header - 子会话头。
+   * @param reason - 触发来源，只进日志。
+   * @returns 完成（含跳过）后 resolve。
+   */
+  async function repair(sessionId, header, reason) {
+    if (typeof sessionId !== 'string' || sessionId.length === 0) return
+    if (inFlight.has(sessionId)) return
+    if (!isForkChild(header)) return
+    if (ownerOf(sessionId) !== undefined) return
+    inFlight.add(sessionId)
+    try {
+      const parentSession = String(header.parentSession)
+      const owner = ownerOf(parentSession)
+      if (owner === undefined) {
+        log('info', `membership: fork child ${sessionId} stays ungrouped — parent ${parentSession} belongs to no workspace`)
+        return
+      }
+      if (typeof owner.attachSession !== 'function') {
+        log('warn', `membership: workspace ${owner.id} exposes no attachSession; cannot re-file ${sessionId}`)
+        return
+      }
+      const cwd = typeof header.cwd === 'string' ? header.cwd : ''
+      if (cwd.length === 0) {
+        log('warn', `membership: fork child ${sessionId} carries no header cwd; not attaching`)
+        return
+      }
+      const [sessionPath, workspacePath] = await Promise.all([canonical(cwd), canonical(String(owner.path))])
+      if (sessionPath === undefined || workspacePath === undefined || sessionPath !== workspacePath) {
+        log('warn', `membership: fork child ${sessionId} cwd '${cwd}' does not resolve to workspace '${String(owner.path)}'; not attaching`)
+        return
+      }
+      await owner.attachSession(sessionId)
+      log('info', `membership: attached fork child ${sessionId} to workspace ${owner.id} (${reason})`)
+    } catch (error) {
+      log('warn', `membership: attach failed for ${sessionId}: ${String(error?.message ?? error)}`)
+    } finally {
+      inFlight.delete(sessionId)
+    }
+  }
+
+  return { repair, ownerOf }
+}
+
+/**
+ * 启动期的成员自愈扫描：把**已经丢掉记账**的 fork 子会话补回去。
+ *
+ * ## 为什么创建期补挂不够（2026-10-31 事故的第二条证据链）
+ *
+ * `session/created` 那一刻补挂只挡住「Host fork 时就没挂」这一种。当晚的两次 fork
+ * 在 Host 侧确实走了 `workspace.attachSession(childId)`（RPC 返回成功、插件侧没有
+ * `fork 失败` 日志），但子会话最终仍不在任何工作区的 `sessionIds` 里——也就是说
+ * 记账**写进去之后又没了**。同一个时间窗里，父会话的归档也没落住（22:28 的取消失败
+ * 报告的是「本来就没归档」，随后又补归档了一次）。
+ *
+ * 能同时抹掉「新 attach」与「归档集合」的只有一件事：**另一个 Host 进程用自己内存里
+ * 的旧快照重写了 `$DSH_HOME/storages/workspace.json`**。存储层是整文件原子替换、
+ * 无跨进程锁（`dsh-storage-json` 的注释写的就是「一个 unit 文件只有一个写者，后写
+ * 覆盖先写是对的」），而本机同时跑着正式版与测试版两个 Host，共用同一个
+ * `~/.dsh`。这类丢失发生在 attach 之后，创建期的补挂拦不住。
+ *
+ * 所以这里补一道**启动期**的定向扫描：只处理 fork 子会话（`isForkChild`），且仍然
+ * 要求「父会话已被工作区记账 + 子会话 cwd 规范化后等于该工作区路径」；不碰子代理、
+ * 不碰没有父会话的普通会话，也不做全量 attach，避免改写用户刻意留着的 ungrouped。
+ *
+ * 幂等：已记账直接跳过；失败只记日志，绝不让插件挂载失败。
+ *
+ * @param ctx - Host cordis 上下文（需要 `workspaceRegistry` 与 `sessionPersistence`）。
+ * @param config - 活配置对象；`repairForkChildrenOnBoot === false` 时跳过整轮扫描。
+ * @param log - `(level, message) => void`。
+ * @param shared - 与创建期监听器共享的 repairer（`mountForkMembershipRepair` 内部用）。
+ * @returns 扫描结束（含跳过）后 resolve 的报告；永不 reject。
+ */
+export async function sweepForkChildrenOnBoot(ctx, config = {}, log = () => {}, shared) {
+  const report = { checked: 0, attached: 0, skipped: undefined }
+  if (config !== null && typeof config === 'object' && config.repairForkChildrenOnBoot === false) {
+    report.skipped = 'disabled'
+    return report
+  }
+  const repairer = shared ?? createForkMembershipRepairer(ctx, log)
+  if (repairer === undefined) {
+    report.skipped = 'registry-unavailable'
+    return report
+  }
+  const persistence = ctx?.sessionPersistence
+  if (persistence === undefined || typeof persistence.list !== 'function') {
+    report.skipped = 'persistence-unavailable'
+    return report
+  }
+  let snapshots
+  try {
+    snapshots = await persistence.list()
+  } catch (error) {
+    log('warn', `membership sweep: session listing failed: ${String(error?.message ?? error)}`)
+    report.skipped = 'listing-failed'
+    return report
+  }
+  for (const snapshot of Array.isArray(snapshots) ? snapshots : []) {
+    const header = snapshot?.header
+    const sessionId = String(header?.id ?? snapshot?.id ?? '')
+    if (sessionId.length === 0) continue
+    if (!isForkChild(header)) continue
+    report.checked += 1
+    try {
+      const wasAccounted = repairer.ownerOf(sessionId) !== undefined
+      await repairer.repair(sessionId, header, 'boot-sweep')
+      if (!wasAccounted && repairer.ownerOf(sessionId) !== undefined) report.attached += 1
+    } catch (error) {
+      log('warn', `membership sweep: ${sessionId} failed: ${String(error?.message ?? error)}`)
+    }
+  }
+  if (report.attached > 0) log('info', `membership sweep: re-attached ${report.attached} of ${report.checked} fork child(ren) that had lost workspace accounting`)
+  return report
+}
+
+/**
+ * 挂载 fork 子会话的成员自愈：创建期监听 + 启动期定向扫描。
+ *
+ * @param ctx - Host cordis 上下文。
+ * @param config - 活配置对象。
+ * @param log - `(level, message) => void`。
+ * @returns 启动期扫描的 Promise（Host/cordis 忽略；测试可 await 以确定性观察结果）。
+ */
+export function mountForkMembershipRepair(ctx, config, log) {
+  const repairer = createForkMembershipRepairer(ctx, log)
+  if (repairer === undefined) return undefined
+  // 返回值给测试留一个可 await 的口子：Host 与 cordis 都忽略监听器返回值。
+  ctx.on('session/created', (session) => {
+    try {
+      return repairer.repair(String(session?.id ?? ''), session?.header, 'session/created')
+    } catch (error) {
+      log('warn', `membership: session/created handler failed: ${String(error?.message ?? error)}`)
+      return undefined
+    }
+  })
+  log('info', 'membership repair mounted: fork children are re-attached on session/created and by the boot sweep')
+  return sweepForkChildrenOnBoot(ctx, config, log, repairer)
 }
 
 // 2026-09-25：本文件由 dsh-session-move/lib/index.js 逐字搬入 dsh-session-toolbox（合并包）。

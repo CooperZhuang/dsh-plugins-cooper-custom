@@ -58,7 +58,13 @@ import {
   isTrustedRequest as isTrustedAdminRequest,
   mountAdmin,
 } from './admin.js'
-import { MOVE_API_PREFIX, isTrustedRequest as isTrustedMoveRequest, mountMove } from './move.js'
+import {
+  MOVE_API_PREFIX,
+  isTrustedRequest as isTrustedMoveRequest,
+  mountForkMembershipRepair,
+  mountMove,
+  sweepForkChildrenOnBoot,
+} from './move.js'
 
 export {
   ADMIN_API_PREFIX,
@@ -68,7 +74,9 @@ export {
   isTrustedAdminRequest,
   isTrustedMoveRequest,
   mountAdmin,
+  mountForkMembershipRepair,
   mountMove,
+  sweepForkChildrenOnBoot,
 }
 
 /**
@@ -180,6 +188,19 @@ export const Config = z.object({
   memoryFollow: z.string().default('off')
     .description('项目记忆跟随：off 只给只读预览（默认 / 推荐）；copy 把本会话产出的条目复制到目标工作区；move 复制后从源移除（不可逆）。')
     .volatile(),
+  /**
+   * 启动时是否做一轮「fork 子会话漏挂工作区」的定向扫描。
+   *
+   * 创建期的 `session/created` 补挂只挡住「Host fork 时就没挂」。记账写进去之后
+   * 又被抹掉的那一类（同机两个 Host 共用 `$DSH_HOME` 时，另一个进程用旧内存快照
+   * 重写 `storages/workspace.json`）只有启动期扫描能补回来，所以默认开启。
+   *
+   * 扫描范围收得很窄：只认带 `parentSession` 的普通 fork 子会话（排除 `origin:
+   * subagent` 与 `delegationDepth > 0`），且父会话已被某个工作区记账、子会话
+   * `cwd` 规范化后等于该工作区路径。刻意 ungrouped 的普通会话/迁移会话不碰。
+   */
+  repairForkChildrenOnBoot: z.boolean().default(true)
+    .description('启动时补挂「fork 子会话漏挂工作区」：只处理父会话已入册、cwd 与工作区一致的普通 fork 子会话。默认开启；挂载期读取，改它需要重挂本行。'),
 })
 
 /**
@@ -242,6 +263,12 @@ export function apply(ctx, rawConfig) {
 
   mountAdmin(ctx, config, adminLog)
   mountMove(ctx, config, moveLog)
+  // fork 子会话漏挂工作区（2026-10-31 实测）：创建期监听 + 启动期定向扫描；只补记账，不改 Host 源码。
+  // 扫描是 fire-and-forget，但绝不留下未处理的 rejection——自愈路径不能影响插件其余部分。
+  const forkSweep = mountForkMembershipRepair(ctx, config, moveLog)
+  if (forkSweep !== undefined) {
+    forkSweep.catch((error) => moveLog('warn', `membership sweep failed: ${String(error?.message ?? error)}`))
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -167,6 +167,11 @@ The latest plugin supports **dsh 0.2** only — do not apply it to 0.1.x.
 
 Unmatched patches stay pending or skipped; nothing is rewritten blindly.
 
+> **Host patch library verified against 0.2.2-rc.1 (0.2.2.0 desktop, Windows PC).**
+> 82 rules: all 59 pending rules are covered by the full-apply simulation (50 files / 83 sites, the same counts as the 0.2.2-alpha.2 baseline), and a re-run after apply reports 0 pending; #17 gained a rc.1 anchor variant (old anchors kept).
+> Desktop-shell #45 / #46 / #83 / #84 match again because rc.1 restored electron-updater and the DesktopHostProcess close handling; #82's `DSH_PROFILE` fallback no longer exists in rc.1 (retiring it upstream is the honest fix); #40 is still a dead 0.1.5 compatibility anchor (rewrite or retire).
+> Full matrix and method: [docs/host-patch-audit-0.2.2-rc.1.md](docs/host-patch-audit-0.2.2-rc.1.md).
+
 ### The 0.2.1-rc.2 subagent convention (red-team mode)
 
 The kernel changed how subagents get their tools: a subagent's tool set comes **only from the Agent Preset it

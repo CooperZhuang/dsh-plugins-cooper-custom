@@ -24,6 +24,20 @@
  *     开关由 Host 的 `headerDeleteButton` 决定，默认开启，删除要两步确认）；
  *   - 数据面仍然只打各自的前缀：`/session-admin/api` 与 `/session-move/api`。
  *
+ * ## 统一右键菜单（DSH 0.2.2-rc.1 起）
+ *
+ * 会话行右键 / Shift+F10 的菜单里有两项本插件的动作，两半各注册一个 `target:'session'`
+ * 的贡献（各自用自己的 HTTP 客户端，互不依赖），合起来是两项：
+ *
+ *   - 「移动会话到工作区…」（搬迁半边，order 500）：菜单里只判断能不能搬并写出理由，
+ *     点下去时重新读一次 Host 状态，然后打开既有右栏「会话归位」面板并选中这条会话；
+ *   - 「删除会话…」（删除半边，order 620，`afterContent` 与原生「归档」同区）：与标题栏
+ *     垃圾桶**共用** `deleteSessionFlow`（预演 → 二次确认 → 删除），`run` 里会再预演
+ *     一次，所以菜单打开到点下去之间状态变了也不会绕过守卫。
+ *
+ * 两项的图标注册在 `contextMenu.icon` 的 keyed slot 上；没有 `contextMenus` 服务
+ * （0.2.1 及更早的外壳）时这两项整体缺席，其它注册照旧——服务是**可选**注入的。
+ *
  * ## 合并的那一处：配置卡片
  *
  * 合并前是两张卡片（`dsh-session-admin#session-admin` / `dsh-session-move#session-move`），
@@ -155,14 +169,20 @@
     return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
   }
 
-  /** Host 侧 API 客户端。 */
+  /**
+   * Host 侧 API 客户端。
+   *
+   * `signal` 是给右键菜单的 `resolve` 用的：菜单一关，Host 还没答完的那次查询就该
+   * 作废（否则除了 prepare 被丢弃，还会白扫一遍目录）。
+   */
   function createApi() {
-    async function call(method, payload) {
+    async function call(method, payload, signal) {
       const response = await fetch(`${API}/${method}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         credentials: 'same-origin',
         body: JSON.stringify(payload ?? {}),
+        ...(signal === undefined ? null : { signal }),
       })
       let body
       try {
@@ -230,6 +250,23 @@
     'caller-session': '是当前这个会话本身',
     'batch-limit': '超出单次批量上限',
     'outside-sessions-root': '目录不在 sessions 根下（已拒绝）',
+    'not-found': '已经不存在',
+  }
+
+  /**
+   * 同一批理由的**短句版**：右键菜单里一行字放不下上面那些完整解释。
+   *
+   * 菜单不是面板，没有第二行可以展开说；禁用项只给一句「现在为什么不行」，完整
+   * 解释仍留给面板里的预演结果。
+   */
+  const REASONS_SHORT = {
+    'running-session': '会话运行中，这一轮跑完才能删',
+    'workspace-session': '属于某个工作区，需要显式放行',
+    'archived-session': '已归档，需要显式放行',
+    'subagent-session': '子代理子会话，需要显式放行',
+    'caller-session': '不能删当前这个会话',
+    'batch-limit': '超出单次批量上限',
+    'outside-sessions-root': '目录不在 sessions 根下',
     'not-found': '已经不存在',
   }
 
@@ -507,6 +544,120 @@
     }
   }
 
+  /** 右键菜单里「删除会话」的图标 key（同时是 `contextMenu.icon` 槽的 key）。 */
+  const DELETE_MENU_ICON = 'session-toolbox.delete-session'
+
+  /**
+   * 垃圾桶字形，内联 SVG。
+   *
+   * 描边风格（Lucide 的 `trash-2`），不是实心填充：相邻的头部图标都是细描边，
+   * 实心字形在 16px 下会显得又黑又笨重。viewBox 用 24 是为了沿用 Lucide 的坐标，
+   * 实际渲染缩到 16。标题栏图标与右键菜单图标共用这一份字形。
+   *
+   * 刻意不 require `@deepseek-ai/dsh-client-ui-primitives`：那个模块表在版本间
+   * 漂过（本仓库踩过第三方 UI 插件因它整体不可用的坑），一个 16×16 的图形不值得
+   * 为它引一条跨版本依赖。
+   */
+  const TRASH_GLYPHS = [
+    'M3 6h18',
+    'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6',
+    'M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2',
+    'M10 11v6',
+    'M14 11v6',
+  ]
+
+  /**
+   * 垃圾桶图标组件（16×16），标题栏与右键菜单共用。
+   * @param React - 外壳预置的 React。
+   * @returns 图标组件。
+   */
+  function createTrashIcon(React) {
+    return function TrashIcon() {
+      return React.createElement(
+        'svg',
+        {
+          width: 16,
+          height: 16,
+          viewBox: '0 0 24 24',
+          fill: 'none',
+          stroke: 'currentColor',
+          strokeWidth: 1.7,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+          'aria-hidden': 'true',
+          focusable: 'false',
+        },
+        TRASH_GLYPHS.map((d, index) => React.createElement('path', { key: index, d })),
+      )
+    }
+  }
+
+  /** 当前选中的会话 id；拿不到（没有会话服务 / 老外壳）时为 undefined。 */
+  function currentSessionId(ctx) {
+    try {
+      return ctx.sessions.list.getSnapshot().current
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * 会话被真删掉之后离开它。
+   *
+   * 数据已经没了，界面不能停在它上面：继续在这个会话里发消息，Host 会往已删除的
+   * 目录重新写日志——那正是「无头日志」的由来，而删除守卫正是为了避免它。
+   */
+  function leaveDeletedSession(ctx) {
+    try {
+      ctx.sessions.create()
+      return
+    } catch {
+      /* 建不出新会话就退回整页刷新 */
+    }
+    try {
+      window.location.reload()
+    } catch {
+      /* 已经无可挽回，界面刷新失败也不影响数据层 */
+    }
+  }
+
+  /**
+   * 删除一个会话的整条流程：预演 → 二次确认 → 删除。
+   *
+   * 标题栏垃圾桶与右键菜单共用这一段：两处删的是同一个东西，只是入口不同，守卫与
+   * 确认必须逐字一致，否则「从菜单删」就等于绕开「从图标删」的那些检查。
+   *
+   * 预演不只是让用户先看一眼：删除守卫的逐条拒绝理由要扫过目录、过完所有守卫才拿
+   * 得到，所以它同时是「现在到底能不能删」的唯一权威答案。
+   *
+   * @param ctx - 插件上下文（删的是当前会话时需要它离开）。
+   * @param api - Host API 客户端。
+   * @param sessionId - 目标会话 id。
+   * @returns `{ ok: true }` 删掉了；`{ ok: false, note? }` 没删，note 是给用户看的一句话
+   *   （用户在确认框里取消时没有 note，不该冒出一条消息）。
+   */
+  async function deleteSessionFlow(ctx, api, sessionId) {
+    // 与标题栏同一个口径：显式入口即显式同意，放行工作区 / 归档 / 子代理三类。
+    const target = {
+      sessionIds: [sessionId],
+      includeWorkspace: true,
+      includeArchived: true,
+      includeSubagent: true,
+    }
+    const probe = await api.call('delete', { ...target, dryRun: true })
+    const entry = probe.results[0]
+    if (probe.removed === 0) {
+      return { ok: false, note: REASONS[entry?.reason] ?? entry?.reason ?? '无法删除' }
+    }
+    if (!confirmDeletion(`永久删除会话 ${sessionId}？`)) return { ok: false }
+    const value = await api.call('delete', target)
+    const outcome = value.results[0]
+    if (outcome?.status !== 'removed') {
+      return { ok: false, note: REASONS[outcome?.reason] ?? outcome?.reason ?? '删除失败' }
+    }
+    return { ok: true }
+  }
+
   /**
    * 会话标题栏的垃圾桶图标：删除当前会话。
    *
@@ -515,54 +666,14 @@
    */
   function createHeaderButton(React, ctx, api) {
     const h = React.createElement
-    /**
-     * 垃圾桶字形，内联 SVG。
-     *
-     * 描边风格（Lucide 的 `trash-2`），不是实心填充：相邻的头部图标都是细描边，
-     * 实心字形在 16px 下会显得又黑又笨重。viewBox 用 24 是为了沿用 Lucide 的坐标，
-     * 实际渲染缩到 16。
-     *
-     * 刻意不 require `@deepseek-ai/dsh-client-ui-primitives`：那个模块表在版本间
-     * 漂过（本仓库踩过第三方 UI 插件因它整体不可用的坑），一个 16×16 的图形不值得
-     * 为它引一条跨版本依赖。
-     */
-    const TRASH_GLYPHS = [
-      'M3 6h18',
-      'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6',
-      'M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2',
-      'M10 11v6',
-      'M14 11v6',
-    ]
+    const TrashIcon = createTrashIcon(React)
 
     return function SessionAdminHeaderButton() {
       const [busy, setBusy] = React.useState(false)
       const [note, setNote] = React.useState(undefined)
 
-      function currentSessionId() {
-        try {
-          return ctx.sessions.list.getSnapshot().current
-        } catch {
-          return undefined
-        }
-      }
-
-      /** 删成功后离开这个会话——理由见下面的注释。 */
-      function leaveDeletedSession() {
-        try {
-          ctx.sessions.create()
-          return
-        } catch {
-          /* 建不出新会话就退回整页刷新 */
-        }
-        try {
-          window.location.reload()
-        } catch {
-          /* 已经无可挽回，界面刷新失败也不影响数据层 */
-        }
-      }
-
       async function onClick() {
-        const id = currentSessionId()
+        const id = currentSessionId(ctx)
         if (id === undefined) {
           setNote('没有选中会话')
           return
@@ -570,35 +681,13 @@
         setBusy(true)
         setNote(undefined)
         try {
-          // 先预演：Host 会逐条给出「可删 / 为什么不能删」。只有真的可删才弹确认。
-          const probe = await api.call('delete', {
-            sessionIds: [id],
-            dryRun: true,
-            includeWorkspace: true,
-            includeArchived: true,
-            includeSubagent: true,
-          })
-          const entry = probe.results[0]
-          if (probe.removed === 0) {
-            setNote(REASONS[entry?.reason] ?? entry?.reason ?? '无法删除')
+          const result = await deleteSessionFlow(ctx, api, id)
+          if (result.ok === true) {
+            // 删掉的正是当前会话：先离开它，再让这条界面自然消失。
+            leaveDeletedSession(ctx)
             return
           }
-          if (!confirmDeletion(`永久删除当前会话 ${id}？`)) return
-          const value = await api.call('delete', {
-            sessionIds: [id],
-            includeWorkspace: true,
-            includeArchived: true,
-            includeSubagent: true,
-          })
-          const outcome = value.results[0]
-          if (outcome?.status === 'removed') {
-            // 数据已经没了，界面不能停在它上面：继续在这个会话里发消息，Host 会往
-            // 已删除的目录重新写日志——那正是「无头日志」的由来，而删除守卫正是为了
-            // 避免它。
-            leaveDeletedSession()
-            return
-          }
-          setNote(REASONS[outcome?.reason] ?? outcome?.reason ?? '删除失败')
+          setNote(result.note)
         } catch (error) {
           setNote(String(error?.message ?? error))
         } finally {
@@ -620,25 +709,84 @@
             'aria-busy': busy ? 'true' : undefined,
             onClick: () => void onClick(),
           },
-          h(
-            'svg',
-            {
-              width: 16,
-              height: 16,
-              viewBox: '0 0 24 24',
-              fill: 'none',
-              stroke: 'currentColor',
-              strokeWidth: 1.7,
-              strokeLinecap: 'round',
-              strokeLinejoin: 'round',
-              'aria-hidden': 'true',
-              focusable: 'false',
-            },
-            TRASH_GLYPHS.map((d, index) => h('path', { key: index, d })),
-          ),
+          h(TrashIcon, null),
         ),
         note !== undefined ? h('span', { style: { ...S.muted, maxWidth: 220 } }, note) : null,
       )
+    }
+  }
+
+  /**
+   * 构造右键菜单「删除会话…」的 resolve。
+   *
+   * 菜单打开时先预演一次：能删就给出可点的一项；不能删就把它标成 disabled，并把
+   * **一句人话理由**写进 label——菜单里没有第二行，理由只能跟在标题后面。
+   *
+   * 真正的删除在 `run` 里重跑 `deleteSessionFlow`（它自己会再预演一遍）：从菜单打开
+   * 到点下去之间，会话可能已经跑起来、被归档，或者被别人删掉，预演结果不能当作执行
+   * 许可。这就是「run 里重新校验」的那一步。
+   *
+   * @param ctx - 插件上下文（`ctx.sessions` 用来判断删的是不是当前会话）。
+   * @returns `(menus, target, signal) => Promise<MenuAction[]>`。
+   */
+  function createResolveDeleteSessionMenu(ctx) {
+    return async function resolveDeleteSessionMenu(menus, target, signal) {
+      const sessionId = target?.sessionId
+      if (typeof sessionId !== 'string' || sessionId.length === 0) return []
+      const api = createApi()
+      const base = {
+        id: 'delete-session',
+        icon: { key: DELETE_MENU_ICON },
+        danger: true,
+        // 与原生「归档」同区（footer）：两者都是对整条会话的收尾动作，排最后不易误点。
+        afterContent: true,
+        failureLabel: '删除失败，请稍后再试',
+      }
+      const run = async () => {
+        // 先记下删的是不是当前会话：删完再问就未必问得到（列表/索引可能已经更新）。
+        const wasCurrent = currentSessionId(ctx) === sessionId
+        try {
+          const result = await deleteSessionFlow(ctx, api, sessionId)
+          if (result.ok === true) {
+            if (wasCurrent) leaveDeletedSession(ctx)
+            menus.notify('已删除会话', true)
+            return
+          }
+          if (result.note !== undefined) menus.notify(result.note, false)
+        } catch (error) {
+          menus.notify(`删除失败：${String(error?.message ?? error)}`, false)
+        }
+      }
+      let probe
+      try {
+        probe = await api.call(
+          'delete',
+          {
+            sessionIds: [sessionId],
+            dryRun: true,
+            includeWorkspace: true,
+            includeArchived: true,
+            includeSubagent: true,
+          },
+          signal,
+        )
+      } catch (error) {
+        // 菜单在请求途中被关掉了：静默作废（registry 会丢弃这份结果）。
+        if (signal?.aborted === true) return []
+        return [
+          {
+            ...base,
+            label: `删除会话…（现在读不到 Host 状态：${String(error?.message ?? error)}）`,
+            disabled: true,
+          },
+        ]
+      }
+      const entry = probe?.results?.[0]
+      if (!(probe?.removed > 0)) {
+        const why = REASONS_SHORT[entry?.reason] ?? entry?.reason ?? '现在不能删'
+        return [{ ...base, label: `删除会话…（${why}）`, disabled: true }]
+      }
+      return [{ ...base, label: '删除会话…', run }]
     }
   }
 
@@ -1035,7 +1183,7 @@
         ctx.effect(
           () => () => {
             try {
-              headerButtonDispose?.dispose?.()
+              headerButtonDispose?.()
             } catch {
               /* 卸载失败不影响其它入口 */
             }
@@ -1100,8 +1248,8 @@
               )
               return () => {
                 try {
-                  disposeTitle?.dispose?.()
-                  disposeBody?.dispose?.()
+                  disposeTitle?.()
+                  disposeBody?.()
                   disposeDefinition?.()
                 } catch {
                   /* 卸载失败不影响其它入口 */
@@ -1211,6 +1359,49 @@
             createConfigCard(React),
           ),
         )
+
+        // 5) 统一右键菜单（0.2.2 起）：会话行右键 → 「删除会话…」。
+        //
+        // 与标题栏垃圾桶是**同一条流程**（`deleteSessionFlow`），只是入口不同。这里的
+        // `resolve` 只做「菜单打开时能不能删、为什么不能删」的预演，真正的删除在
+        // `run` 里重新预演一遍（见 `createResolveDeleteSessionMenu`）。
+        //
+        // 服务用可选注入而不是写进插件 inject：没有这个服务（0.2.1 及更早的外壳）时
+        // 只少一个菜单入口，右栏页签 / 标题栏 / 设置页照旧工作。
+        ctx.slots.inject('contextMenu.icon', () =>
+          ctx.slots.register({ name: 'contextMenu.icon', key: DELETE_MENU_ICON }, createTrashIcon(React)),
+        )
+        ctx.inject(['contextMenus'], (injected) => {
+          const menus = injected.get('contextMenus')
+          if (menus === undefined || typeof menus.register !== 'function') return undefined
+          const resolve = createResolveDeleteSessionMenu(ctx)
+          const dispose = ctx.effect(
+            () =>
+              menus.register({
+                id: 'session-toolbox.delete-session',
+                target: 'session',
+                // 排在原生「归档」（600）之后：两者都是对整条会话的收尾动作。
+                order: 620,
+                // 会话列表变了（跑起来 / 跑完 / 归档）就重算一次，禁用理由跟着变。
+                observe: () => {
+                  try {
+                    return ctx.sessions?.list === undefined ? [] : [ctx.sessions.list]
+                  } catch {
+                    return []
+                  }
+                },
+                resolve: (target, signal) => resolve(menus, target, signal),
+              }),
+            'dsh-session-toolbox: session delete menu',
+          )
+          return () => {
+            try {
+              dispose?.()
+            } catch {
+              /* 卸载失败不影响其它入口 */
+            }
+          }
+        })
       }
 
       // `configForms`：配置卡片挂的是插件页的 `plugins.bundle.config`，那个槽不传共享
@@ -1311,14 +1502,135 @@
     wsList: { maxHeight: 'none', flex: '1 1 45%' },
   }
 
-  /** Host 侧 API 客户端。 */
+  /** 右键菜单里「移动会话」的图标 key（同时是 `contextMenu.icon` 槽的 key）。 */
+  const MOVE_MENU_ICON = 'session-toolbox.move-session'
+
+  /**
+   * 搬迁箭头图标（Lucide `arrow-right` 的描边路径），菜单里表示「搬到别处」。
+   * 与垃圾桶图标一样刻意不引 primitives 包，理由见删除半边的 `createTrashIcon`。
+   * @param React - 外壳预置的 React。
+   * @returns 图标组件。
+   */
+  function createMoveIcon(React) {
+    const GLYPHS = ['M5 12h14', 'M12 5l7 7-7 7']
+    return function MoveIcon() {
+      return React.createElement(
+        'svg',
+        {
+          width: 16,
+          height: 16,
+          viewBox: '0 0 24 24',
+          fill: 'none',
+          stroke: 'currentColor',
+          strokeWidth: 1.7,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+          'aria-hidden': 'true',
+          focusable: 'false',
+        },
+        GLYPHS.map((d, index) => React.createElement('path', { key: index, d })),
+      )
+    }
+  }
+
+  /**
+   * 「右键菜单 → 右栏面板」的一次性交接：菜单选中的那个会话。
+   *
+   * 面板可能早就挂载了（页签一直开着），也可能这次才被打开，所以不能只在初始化时读
+   * 一次初值：挂一个最小订阅，把请求推给已经挂载的面板；没挂载时请求留在槽里，面板
+   * 首次挂载的 effect 会把它取走。
+   */
+  const moveRequest = { sessionId: undefined, version: 0, listeners: new Set() }
+
+  /** 请求面板把某个会话选中（目标工作区仍由用户在面板里挑）。 */
+  function requestMoveSession(sessionId) {
+    moveRequest.sessionId = sessionId
+    moveRequest.version += 1
+    for (const listener of moveRequest.listeners) {
+      try {
+        listener()
+      } catch {
+        /* 单个面板的监听失败不影响其它入口 */
+      }
+    }
+  }
+
+  /**
+   * 构造右键菜单「移动会话到工作区…」的 resolve。
+   *
+   * 菜单里只判断「现在能不能搬」并给出理由（运行中 / 没有 cwd / Host 拒绝），真正的
+   * 搬迁仍在既有面板里做——菜单只负责把面板打开并选中这一条。`run` 会重新读一次
+   * Host 状态再打开面板：从菜单打开到点下去之间，会话可能已经跑起来。
+   *
+   * @param openPanel - 打开搬迁面板并选中一条会话（见 apply 里）。
+   * @returns `(menus, target, signal) => Promise<MenuAction[]>`。
+   */
+  function createResolveMoveSessionMenu(openPanel) {
+    return async function resolveMoveSessionMenu(menus, target, signal) {
+      const sessionId = target?.sessionId
+      if (typeof sessionId !== 'string' || sessionId.length === 0) return []
+      const api = createApi()
+      const base = { id: 'move-session', icon: { key: MOVE_MENU_ICON }, failureLabel: '移动失败，请稍后再试' }
+      const blocked = (why) => [{ ...base, label: `移动会话到工作区…（${why}）`, disabled: true }]
+      const rowOf = (snapshot) => (snapshot?.sessions ?? []).find((entry) => entry.id === sessionId)
+      let snapshot
+      try {
+        snapshot = await api.call('list', {}, signal)
+      } catch (error) {
+        // 菜单在请求途中被关掉了：静默作废（registry 会丢弃这份结果）。
+        if (signal?.aborted === true) return []
+        return blocked(`现在读不到 Host 状态：${String(error?.message ?? error)}`)
+      }
+      const row = rowOf(snapshot)
+      if (row === undefined) return blocked('搬迁列表里没有这个会话（可能超过 maxSessions 上限）')
+      if (row.running === 'running') return blocked('会话正在运行中，这一轮跑完才能搬')
+      if (row.movable !== true) return blocked('没有 cwd，或 Host 的配置拒绝了搬迁')
+      return [
+        {
+          ...base,
+          label: '移动会话到工作区…',
+          run: async () => {
+            let fresh
+            try {
+              fresh = await api.call('list', {})
+            } catch (error) {
+              menus.notify(`搬迁前读取状态失败：${String(error?.message ?? error)}`, false)
+              return
+            }
+            const current = rowOf(fresh)
+            if (current === undefined) {
+              menus.notify('这个会话已经不在列表里（可能刚被删除，或超出列表上限）', false)
+              return
+            }
+            if (current.running === 'running') {
+              menus.notify('会话正在运行中，这一轮跑完才能搬', false)
+              return
+            }
+            if (current.movable !== true) {
+              menus.notify('没有 cwd，或 Host 的配置拒绝了搬迁', false)
+              return
+            }
+            if (!openPanel(sessionId)) menus.notify('右侧面板没能打开，无法继续搬迁', false)
+          },
+        },
+      ]
+    }
+  }
+
+  /**
+   * Host 侧 API 客户端。
+   *
+   * `signal` 是给右键菜单的 `resolve` 用的：菜单一关，Host 还没答完的那次查询就该
+   * 作废。
+   */
   function createApi() {
-    async function call(method, payload) {
+    async function call(method, payload, signal) {
       const response = await fetch(`${API}/${method}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         credentials: 'same-origin',
         body: JSON.stringify(payload ?? {}),
+        ...(signal === undefined ? null : { signal }),
       })
       let body
       try {
@@ -1380,6 +1692,22 @@
       const [hover, setHover] = React.useState('')
       const [outcome, setOutcome] = React.useState(null)
       const [token, setToken] = React.useState(0)
+      // 右键菜单的一次性交接：面板一直开着时靠订阅推过来；这次才挂载时，初始版本号
+      // 会让下面的 effect 在挂载后立刻把槽里的请求取走。
+      const [requestVersion, setRequestVersion] = React.useState(moveRequest.version)
+      React.useEffect(() => {
+        const listener = () => setRequestVersion(moveRequest.version)
+        moveRequest.listeners.add(listener)
+        return () => {
+          moveRequest.listeners.delete(listener)
+        }
+      }, [])
+      React.useEffect(() => {
+        if (moveRequest.sessionId === undefined) return
+        setSelected(moveRequest.sessionId)
+        setFilter('')
+        moveRequest.sessionId = undefined
+      }, [requestVersion])
 
       React.useEffect(() => {
         let alive = true
@@ -1645,6 +1973,36 @@
         const api = createApi()
         const Panel = createPanel(React, api)
 
+        // 右侧面板服务：右键菜单要借它把搬迁页签打开（与删除半边同一套可选注入）。
+        let sidebarRight
+        ctx.inject(['sidebarRight'], (injected) => {
+          sidebarRight = injected.get('sidebarRight')
+          return () => {
+            sidebarRight = undefined
+          }
+        })
+
+        /**
+         * 打开搬迁面板并选中这个会话（目标工作区由用户在面板里挑）。
+         * @returns 面板服务不在 / 两个 kind 都打不开时 false。
+         */
+        const openPanel = (sessionId) => {
+          if (sidebarRight === undefined || typeof sidebarRight.openTab !== 'function') return false
+          // 先登记请求再开页签：页签这次才创建时，面板挂载后会立刻把它取走。
+          requestMoveSession(sessionId)
+          for (const kind of [TAB_ID, BETTER_TAB_ID]) {
+            try {
+              sidebarRight.openTab(kind)
+              return true
+            } catch {
+              /* 换下一个 */
+            }
+          }
+          // 页签打不开就把交接撤掉，免得下次面板自己打开时莫名选中一条旧会话。
+          requestMoveSession(undefined)
+          return false
+        }
+
         // 右栏页签：优先 better-sidebar，回落到原生。
         // 左栏底部那个 ⇄ 入口已去掉（2026-10-26）：会话归位只挂侧边栏页签，不再往左栏
         // footer 塞按钮。
@@ -1674,8 +2032,8 @@
               )
               return () => {
                 try {
-                  disposeTitle?.dispose?.()
-                  disposeBody?.dispose?.()
+                  disposeTitle?.()
+                  disposeBody?.()
                   disposeDefinition?.()
                 } catch {
                   /* 卸载失败不影响其它入口 */
@@ -1736,6 +2094,40 @@
           },
           'dsh-session-move: pane tab teardown',
         )
+
+        // 右键菜单（0.2.2 起）：会话行右键 → 「移动会话到工作区…」。
+        //
+        // 菜单里不给「目标工作区」子菜单：搬迁要挑目标、能预演、会写日志和改
+        // header.cwd，这些面板里都有；菜单只负责把面板打开并选中这一条。
+        //
+        // 服务用可选注入（与删除半边一致）：没有这个服务时只少一个菜单入口，
+        // 右栏页签照旧工作。
+        ctx.slots.inject('contextMenu.icon', () =>
+          ctx.slots.register({ name: 'contextMenu.icon', key: MOVE_MENU_ICON }, createMoveIcon(React)),
+        )
+        ctx.inject(['contextMenus'], (injected) => {
+          const menus = injected.get('contextMenus')
+          if (menus === undefined || typeof menus.register !== 'function') return undefined
+          const resolve = createResolveMoveSessionMenu(openPanel)
+          const dispose = ctx.effect(
+            () =>
+              menus.register({
+                id: 'session-toolbox.move-session',
+                target: 'session',
+                // 排在原生「复制会话 id」（450）与「归档」（600）之间：会话级整理动作。
+                order: 500,
+                resolve: (target, signal) => resolve(menus, target, signal),
+              }),
+            'dsh-session-toolbox: session move menu',
+          )
+          return () => {
+            try {
+              dispose?.()
+            } catch {
+              /* 卸载失败不影响其它入口 */
+            }
+          }
+        })
       }
 
       return { inject: ['slots'], apply }

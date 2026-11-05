@@ -1,0 +1,20 @@
+{
+  "takenAt": "2026-11-01T17:26:15.731Z",
+  "global": {
+    "total": 600,
+    "seen": 265,
+    "coverage": 44.2
+  },
+  "project": {
+    "total": 1105,
+    "seen": 441
+  },
+  "whole": {
+    "total": 1705,
+    "seen": 706,
+    "coverage": 41.4,
+    "deadShare": 58.6
+  },
+  "persistedRotationLogs": 2,
+  "persistedRotationTitleLines": 24
+}

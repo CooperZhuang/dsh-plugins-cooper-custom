@@ -12,7 +12,7 @@
  * @module dsh-session-move/engine
  */
 
-import { mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync, openSync, writeSync, fsyncSync, closeSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync, openSync, writeSync, fsyncSync, closeSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   ZSTD_MAGIC,
@@ -82,6 +82,11 @@ export function planMove(options) {
     targetExists = false
   }
   if (targetExists) throw new Error(`target log already exists (refusing to overwrite): ${targetPath}`)
+  // 目标目录里已有租约文件 = 有人正持有该目录的写租约（或上一次搬迁没搬完）。
+  // 此时再搬会把「已持有的锁」和「日志」拆到两个目录，不如直接拒绝。
+  if (existsSync(join(targetDir, 'session.lock'))) {
+    throw new Error(`target session directory already holds a write lease (refusing to merge): ${join(targetDir, 'session.lock')}`)
+  }
   const frames = compressed ? scanZstdFrames(buffer) : { frames: [], incomplete: false }
   if (compressed && frames.incomplete) throw new Error(`source log has an incomplete trailing frame: ${frames.reason}`)
 
@@ -94,8 +99,10 @@ export function planMove(options) {
     fromKey,
     toKey,
     generation: found.selected,
-    /** 源目录里除 generation 之外的文件（租约文件等），搬迁时保留原样。 */
-    otherFiles: found.others,
+    /** 源目录里除 generation 与 `session.lock` 之外的文件（真正会留在原地的）。 */
+    otherFiles: found.others.filter((name) => name !== 'session.lock'),
+    /** 源目录里是否有写租约文件；有则由 {@link applyPlan} 随目录一起搬走。 */
+    leaseFile: found.others.includes('session.lock') ? 'session.lock' : null,
     otherGenerations: found.all.slice(1).map((entry) => entry.name),
     sourceDir,
     targetDir,
@@ -151,6 +158,28 @@ export function applyPlan(plan) {
   renameSync(plan.sourcePath, parkedPath)
   renameSync(tmpPath, plan.targetPath)
   rmSync(parkedPath, { force: true })
+
+  // 0.2.2 起每个会话目录里有 `session.lock`（POSIX flock，写入句柄整个生命周期持有；
+  // 内核约定这个文件永不删除、靠稳定 inode 判断归属）。搬迁必须把它一起搬过去：
+  // rename 保留 inode，本进程已持有的 flock 会跟着到新路径，仍能挡住第二个写入者；
+  // 留在源目录会得到「源目录有锁、新目录无锁」的半套租约。
+  const leaseName = 'session.lock'
+  const sourceLease = join(plan.sourceDir, leaseName)
+  const targetLease = join(plan.targetDir, leaseName)
+  let leaseMoved = false
+  if (existsSync(sourceLease)) {
+    if (existsSync(targetLease)) {
+      report.leaseConflict = targetLease
+    } else {
+      try {
+        renameSync(sourceLease, targetLease)
+        leaseMoved = true
+      } catch (error) {
+        report.leaseMoveError = String(error?.message ?? error)
+      }
+    }
+  }
+  report.leaseMoved = leaseMoved
 
   let removedSourceDir = false
   let leftover = []

@@ -1,10 +1,10 @@
 # dsh-folder-path
 
-A DeepSeek Harness (DSH) Web plugin: paste a **folder** you copied in Windows Explorer into the
-composer with `Ctrl+V` and get its **absolute path as text**, instead of the stock "upload failed"
-dead end.
+A DeepSeek Harness (DSH) Web plugin: paste a **folder** you just copied in Windows Explorer or macOS
+Finder into the composer (`Ctrl+V` / `Cmd+V`) and get its **absolute path as text**, instead of the
+stock "upload failed" dead end.
 
-- Copy one folder → `Ctrl+V` → the draft gets `D:\work\data\2026Q1`
+- Copy one folder → `Ctrl+V` (`Cmd+V` on macOS) → the draft gets `D:\work\data\2026Q1` or `/Users/me/work/data`
 - Copy several folders → one path per line
 - Ordinary text, images and real files paste exactly as before (the plugin only takes over when the
   paste payload actually contains a directory)
@@ -15,9 +15,9 @@ The browser is a sandbox: page JavaScript never sees a local file's disk path. P
 the page a `File` with `size: 0` and `type: ''` — its bytes cannot be read, so DSH's upload path must
 fail — and the path itself is not in the payload at all (`File.name` is just the basename).
 
-The clipboard, however, is process-wide: on the machine running `dsh web`, it holds exactly the file
-list you just copied. So the **host half** reads the Windows clipboard file list (CF_HDROP) and hands
-the real absolute paths back to the browser half.
+The clipboard, however, is process-wide: on the machine running the host, it holds exactly the file
+list you just copied. So the **host half** reads the platform clipboard's file list — CF_HDROP on
+Windows, NSPasteboard file URLs on macOS — and hands the real absolute paths back to the browser half.
 
 ## Install
 
@@ -52,8 +52,8 @@ and `test/client.test.js` pin the list above in the test suite.
 
 ## Use
 
-1. Select one or more folders in Explorer and press `Ctrl+C`
-2. Return to the DSH Web composer and press `Ctrl+V`
+1. Select one or more folders in Explorer / Finder and press `Ctrl+C` (`Cmd+C` on macOS)
+2. Return to the DSH Web composer and press `Ctrl+V` (`Cmd+V` on macOS)
 3. The paths appear in the draft; when the host cannot resolve them, a notice appears and the draft is
    left untouched
 
@@ -61,7 +61,7 @@ and `test/client.test.js` pin the list above in the test suite.
 
 | Half | Where | Job |
 |---|---|---|
-| Host `lib/index.js` | host process (`webServer`) | exact route `POST /dsh-folder-path/api/v1/clipboard-paths`: read the Windows clipboard file list, match the folder names the browser reported, answer with the real absolute paths |
+| Host `lib/index.js` | host process (`webServer`) | exact route `POST /dsh-folder-path/api/v1/clipboard-paths`: read the platform clipboard's file list (CF_HDROP on Windows, NSPasteboard on macOS), match the folder names the browser reported, answer with the real absolute paths |
 | Client `lib/client.js` | browser (`__ModuleLoader__` bundle) | capture-phase `paste` interception, only when the payload contains a directory; asks the host, then inserts the text through DSH's own paste path |
 
 Insertion does not poke the DOM: the client re-dispatches a synthetic `paste` carrying only
@@ -69,9 +69,12 @@ Insertion does not poke the DOM: the client re-dispatches a synthetic `paste` ca
 undo history and existing chips all stay intact). Engines that refuse to construct a `ClipboardEvent`
 with clipboard data fall back to `document.execCommand('insertText')`.
 
-The host reads the clipboard with PowerShell (`System.Windows.Forms.Clipboard`) and emits
-**base64(UTF-8 JSON)**, so paths with Chinese characters or spaces survive the redirected process's
-code page. Concurrent pastes share one probe.
+The host reads the clipboard per platform. Windows uses PowerShell
+(`System.Windows.Forms.Clipboard`) and emits **base64(UTF-8 JSON)**, so paths with Chinese characters
+or spaces survive the redirected process's code page. macOS uses `osascript -l JavaScript` to read the
+NSPasteboard's `public.file-url` entries and merges Finder's legacy `NSFilenamesPboardType` list, so a
+multi-selection cannot collapse into one item; directory versus file is decided by the host with
+`stat`. Concurrent pastes share one probe.
 
 ## Configuration
 
@@ -86,6 +89,7 @@ or this package's own `cordis.patch.yml`, which `dsh plugin add` wires in):
         enabled: true          # false mounts the host half inert (the client then stops taking over)
         timeoutMs: 5000        # per-probe budget
         powershell: powershell.exe   # also settable via DSH_FOLDER_PATH_POWERSHELL
+        osascript: /usr/bin/osascript # also settable via DSH_FOLDER_PATH_OSASCRIPT
         allowNonLoopback: false      # true = let a remote browser read this host's clipboard
 ```
 
@@ -101,15 +105,19 @@ or this package's own `cordis.patch.yml`, which `dsh plugin add` wires in):
 
 ## Known limitations
 
-- **Windows only.** Other platforms answer `unsupported-platform` and the client shows a notice.
+- **Windows and macOS only.** Other platforms answer `unsupported-platform` and the client shows a notice.
 - **Paste only, not drag-and-drop.** A drop payload carries no disk path either; this plugin does not
   guess, so dropping a folder keeps the stock behaviour.
 - **Remote access cannot reach your clipboard.** Over a LAN address, port forward or jump host the
   clipboard belongs to the machine running the host. That is rejected by default;
   `allowNonLoopback: true` reads the host's clipboard instead (only sensible when the browser and the
   host are the same machine reached through a LAN IP).
-- Requires Windows PowerShell 5.1 with `System.Windows.Forms`; if policy blocks it the route answers
+- Windows requires PowerShell 5.1 with `System.Windows.Forms`; if policy blocks it the route answers
   `clipboard-error` and the client explains.
+- macOS uses the system `osascript`; reading the pasteboard needs no TCC grant and raises no
+  "allow clipboard access" prompt. Only the standard copy flavours (`public.file-url`,
+  `NSFilenamesPboardType`) are recognised — an app that puts files on the pasteboard in a private
+  format will not be read.
 
 ## Development
 
@@ -131,8 +139,9 @@ needed**. `dsh-client-hmr` polls every client bundle every 500 ms, recomputes th
 rebuild and pushes it to the page. Only **adding** a client module needs a restart (the startup scan
 decides which client modules exist).
 
-After changing the **host half**: you must **restart `dsh web`** (the host goes through Node's ESM
-cache, so the running copy of the code does not change with it).
+After changing the **host half**: you must **restart the host process** (the host goes through Node's
+ESM cache, so the running copy of the code does not change with it). In the Desktop app, quit the app
+completely and reopen it — closing the window is not quitting.
 
 ## Credits
 

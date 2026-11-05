@@ -1,8 +1,8 @@
 /**
  * `dsh-folder-path` — host half.
  *
- * A folder copied in Windows Explorer cannot travel through the browser: the
- * paste event carries a `File` with `size: 0` whose bytes are unreadable, so
+ * A folder copied in the desktop file manager cannot travel through the
+ * browser: the paste event carries a `File` with no readable bytes, so
  * `dsh-client-file-upload` fails and the composer shows 上传失败. The browser
  * also never sees the folder's location — `File.name` is the basename and the
  * path is not part of the paste payload at all.
@@ -10,7 +10,12 @@
  * This half answers the one question the browser cannot: *which paths did the
  * user just copy?* The clipboard is process-wide on the machine running the
  * GUI, and at paste time it holds exactly the payload being pasted, so reading
- * the Windows clipboard file-drop list (CF_HDROP) recovers the real full paths.
+ * the platform clipboard's file list recovers the real full paths:
+ *
+ *   * Windows — the CF_HDROP file-drop list, through PowerShell's
+ *     `System.Windows.Forms.Clipboard`;
+ *   * macOS — the NSPasteboard file URLs (plus the legacy
+ *     `NSFilenamesPboardType` list), through `osascript -l JavaScript`.
  *
  * Scope is deliberately narrow:
  *
@@ -18,12 +23,14 @@
  *   * the route only *reads* the clipboard and matches directory basenames the
  *     browser claimed to be pasting — a mismatched clipboard yields no answer
  *     instead of a wrong path;
- *   * non-Windows hosts answer `unsupported-platform` and the browser half
+ *   * other hosts answer `unsupported-platform` and the browser half
  *     degrades to a notice.
  *
  * @module dsh-folder-path
  */
 import { execFile } from 'node:child_process'
+import { stat } from 'node:fs/promises'
+import { basename } from 'node:path'
 
 /** Cordis plugin name; the profile row's `id` is independent of it. */
 export const name = 'folder-path'
@@ -35,21 +42,24 @@ export const name = 'folder-path'
  */
 export const ROUTE_PATH = '/dsh-folder-path/api/v1/clipboard-paths'
 
-/** Clipboard probes are interactive: a wedged PowerShell must not hold a paste. */
+/** Clipboard probes are interactive: a wedged child process must not hold a paste. */
 const DEFAULT_TIMEOUT_MS = 5000
 
 /** A paste names a handful of folders; anything larger is not this request. */
 const MAX_REQUEST_BYTES = 64 * 1024
 
+/** Hosts whose clipboard can answer this route. */
+const DESKTOP_PLATFORMS = new Set(['win32', 'darwin'])
+
 /**
- * PowerShell probe. Emits base64(UTF-8 JSON) on stdout so a Chinese path can
- * never be mangled by the console code page of a redirected Windows PowerShell
- * process, which is what plain `ConvertTo-Json` output would hit.
+ * Windows PowerShell probe. Emits base64(UTF-8 JSON) on stdout so a Chinese path
+ * can never be mangled by the console code page of a redirected Windows
+ * PowerShell process, which is what plain `ConvertTo-Json` output would hit.
  *
  * `-InputObject` keeps a single-element result a JSON array (`items` is always
  * a list), and `[char]92`/`[char]47` avoid backslash quoting hazards.
  */
-const PROBE_SCRIPT = [
+const WINDOWS_PROBE_SCRIPT = [
   "$ErrorActionPreference = 'Stop'",
   'Add-Type -AssemblyName System.Windows.Forms',
   '$items = @()',
@@ -70,6 +80,48 @@ const PROBE_SCRIPT = [
 ].join('\n')
 
 /**
+ * macOS JXA probe. Emits a JSON array of absolute paths on stdout.
+ *
+ * Two sources are merged because Finder and other apps do not agree on one:
+ *
+ *   * `readObjectsForClassesOptions` returns every pasteboard item that carries
+ *     a `public.file-url` (the modern shape, one item per copied file);
+ *   * `NSFilenamesPboardType` is Finder's legacy path list, which still carries
+ *     a multi-selection that the modern representation may reduce to one item.
+ *
+ * Non-file URLs (a copied web link) are dropped, and duplicates keep first
+ * position, so the answer is the clipboard's own order. Directory versus file
+ * is decided by the host process, not here: AppleScript can stat, but a child
+ * process that reports the path list is the smaller surface.
+ */
+const DARWIN_PROBE_SCRIPT = [
+  "ObjC.import('AppKit')",
+  'var pasteboard = $.NSPasteboard.generalPasteboard',
+  'var paths = []',
+  'function remember(value) {',
+  "  if (typeof value !== 'string' || value.length === 0) return",
+  '  if (paths.indexOf(value) >= 0) return',
+  '  paths.push(value)',
+  '}',
+  'var urls = pasteboard.readObjectsForClassesOptions($.NSArray.arrayWithObject($.NSURL), $.NSDictionary.dictionary)',
+  'if (urls && urls.count > 0) {',
+  '  for (var index = 0; index < urls.count; index += 1) {',
+  '    var url = urls.objectAtIndex(index)',
+  '    if (url.isFileURL === true) remember(ObjC.unwrap(url.path))',
+  '  }',
+  '}',
+  'try {',
+  "  var legacy = pasteboard.propertyListForType('NSFilenamesPboardType')",
+  '  if (legacy && legacy.count > 0) {',
+  '    for (var other = 0; other < legacy.count; other += 1) remember(ObjC.unwrap(legacy.objectAtIndex(other)))',
+  '  }',
+  '} catch (error) {',
+  '  /* a pasteboard without the legacy flavour simply has nothing to add */',
+  '}',
+  'JSON.stringify(paths)',
+].join('\n')
+
+/**
  * Install the clipboard route.
  *
  * `webServer` is acquired through `ctx.inject` rather than read directly: the
@@ -79,16 +131,21 @@ const PROBE_SCRIPT = [
  * @param ctx - host plugin context.
  * @param config - the profile row's `config` block.
  * @param config.enabled - set `false` to mount the host half inert.
- * @param config.timeoutMs - PowerShell probe budget in milliseconds.
- * @param config.powershell - PowerShell executable used for the probe.
+ * @param config.timeoutMs - clipboard probe budget in milliseconds.
+ * @param config.powershell - PowerShell executable used for the Windows probe.
+ * @param config.osascript - `osascript` executable used for the macOS probe.
  * @param config.allowNonLoopback - allow a browser on another machine to read this host's clipboard.
  * @returns nothing; the route is registered once `webServer` appears.
  */
 export function apply(ctx, config = {}) {
   if (config?.enabled === false) return
-  const timeoutMs = Number(config?.timeoutMs) > 0 ? Number(config.timeoutMs) : DEFAULT_TIMEOUT_MS
-  const powershell =
-    firstString(config?.powershell) || firstString(process.env.DSH_FOLDER_PATH_POWERSHELL) || 'powershell.exe'
+  const probe = {
+    timeoutMs: Number(config?.timeoutMs) > 0 ? Number(config.timeoutMs) : DEFAULT_TIMEOUT_MS,
+    powershell:
+      firstString(config?.powershell) || firstString(process.env.DSH_FOLDER_PATH_POWERSHELL) || 'powershell.exe',
+    osascript:
+      firstString(config?.osascript) || firstString(process.env.DSH_FOLDER_PATH_OSASCRIPT) || '/usr/bin/osascript',
+  }
   const allowNonLoopback = config?.allowNonLoopback === true
 
   ctx.inject(['webServer'], (host) => {
@@ -97,7 +154,7 @@ export function apply(ctx, config = {}) {
         host.webServer.register({
           kind: 'exact',
           path: ROUTE_PATH,
-          handler: createHandler(ctx, timeoutMs, powershell, allowNonLoopback),
+          handler: createHandler(ctx, probe, allowNonLoopback),
         }),
       'dsh-folder-path: clipboard route',
     )
@@ -107,12 +164,11 @@ export function apply(ctx, config = {}) {
 /**
  * Build the request handler.
  * @param ctx - host plugin context, for warnings.
- * @param timeoutMs - PowerShell probe budget.
- * @param powershell - PowerShell executable used for the probe.
+ * @param probe - the probe's budget and executable overrides.
  * @param allowNonLoopback - whether a non-loopback peer may read the clipboard.
  * @returns the exact-route handler.
  */
-function createHandler(ctx, timeoutMs, powershell, allowNonLoopback) {
+function createHandler(ctx, probe, allowNonLoopback) {
   return async (request, response) => {
     if (request.method !== 'POST') {
       sendJson(response, 405, { ok: false, reason: 'method-not-allowed' }, { allow: 'POST' })
@@ -140,14 +196,14 @@ function createHandler(ctx, timeoutMs, powershell, allowNonLoopback) {
       return
     }
 
-    if (process.platform !== 'win32') {
-      sendJson(response, 200, { ok: false, reason: 'unsupported-platform', paths: [] })
+    if (!DESKTOP_PLATFORMS.has(process.platform)) {
+      sendJson(response, 200, { ok: false, reason: 'unsupported-platform', platform: process.platform, paths: [] })
       return
     }
 
     let entries
     try {
-      entries = await readClipboardEntries(timeoutMs, powershell)
+      entries = await readClipboardEntries(probe)
     } catch (error) {
       ctx.logger?.warn?.('dsh-folder-path: clipboard probe failed: %o', error)
       sendJson(response, 200, { ok: false, reason: 'clipboard-error', message: messageOf(error), paths: [] })
@@ -191,57 +247,118 @@ export function matchDirectories(directories, names) {
   return directories.filter((entry) => wanted.has(entry.name.toLowerCase()))
 }
 
-/** The probe in flight, if any: several pastes must not fork PowerShell each. */
+/**
+ * Parse the macOS probe's stdout into absolute paths.
+ * @param stdout - the probe's stdout.
+ * @returns the paths it reported, in clipboard order.
+ * @remarks Exported for the host test suite; the probe is its only runtime caller.
+ */
+export function parseProbePaths(stdout) {
+  const text = String(stdout ?? '').trim()
+  if (text === '') return []
+  let value
+  try {
+    value = JSON.parse(text)
+  } catch (cause) {
+    throw new Error('clipboard probe returned unreadable output', { cause })
+  }
+  if (!Array.isArray(value)) throw new Error('clipboard probe returned an unexpected shape')
+  return value.filter((entry) => typeof entry === 'string' && entry.length > 0)
+}
+
+/** The probe in flight, if any: several pastes must not fork a child process each. */
 let inflight = null
 let inflightKey = null
 
 /**
- * Read the Windows clipboard file-drop list.
- * @param timeoutMs - how long PowerShell may take.
- * @param powershell - PowerShell executable used for the probe.
- * @returns the parsed probe payload's `items` array.
+ * Read the platform clipboard's file list.
+ * @param probe - the probe's budget and executable overrides.
+ * @returns the clipboard items, each `{ path, name, isDirectory }`.
  */
-function readClipboardEntries(timeoutMs, powershell) {
-  const key = `${powershell}\u0000${String(timeoutMs)}`
+function readClipboardEntries(probe) {
+  const executable = process.platform === 'darwin' ? probe.osascript : probe.powershell
+  const key = `${process.platform}\u0000${executable}\u0000${String(probe.timeoutMs)}`
   if (inflight !== null && inflightKey === key) return inflight
 
-  const probe = probeClipboard(timeoutMs, powershell).finally(() => {
-    if (inflight === probe) {
+  const run = process.platform === 'darwin' ? probeMacClipboard(probe) : probeWindowsClipboard(probe)
+  const pending = run.finally(() => {
+    if (inflight === pending) {
       inflight = null
       inflightKey = null
     }
   })
-  inflight = probe
+  inflight = pending
   inflightKey = key
-  return probe
+  return pending
 }
 
 /**
- * Run the PowerShell probe once.
- * @param timeoutMs - how long PowerShell may take.
- * @param powershell - PowerShell executable used for the probe.
- * @returns the clipboard items, each `{ path, name, isDirectory }`.
+ * Run one probe executable and return its stdout.
+ * @param executable - the executable to spawn.
+ * @param args - its arguments.
+ * @param timeoutMs - how long it may take.
+ * @returns its stdout.
  */
-function probeClipboard(timeoutMs, powershell) {
+function runProbe(executable, args, timeoutMs) {
   return new Promise((resolve, reject) => {
     execFile(
-      powershell,
-      ['-NoProfile', '-NonInteractive', '-Command', PROBE_SCRIPT],
+      executable,
+      args,
       { windowsHide: true, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 },
       (error, stdout, stderr) => {
         if (error) {
           reject(new Error(`clipboard probe failed: ${firstLine(stderr) || messageOf(error)}`, { cause: error }))
           return
         }
-        try {
-          const payload = JSON.parse(Buffer.from(String(stdout).trim(), 'base64').toString('utf8'))
-          resolve(Array.isArray(payload?.items) ? payload.items : [])
-        } catch (cause) {
-          reject(new Error('clipboard probe returned unreadable output', { cause }))
-        }
+        resolve(String(stdout))
       },
     )
   })
+}
+
+/**
+ * Read the Windows clipboard file-drop list.
+ * @param probe - the probe's budget and executable overrides.
+ * @returns the clipboard items, each `{ path, name, isDirectory }`.
+ */
+async function probeWindowsClipboard(probe) {
+  const stdout = await runProbe(
+    probe.powershell,
+    ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_PROBE_SCRIPT],
+    probe.timeoutMs,
+  )
+  let payload
+  try {
+    payload = JSON.parse(Buffer.from(stdout.trim(), 'base64').toString('utf8'))
+  } catch (cause) {
+    throw new Error('clipboard probe returned unreadable output', { cause })
+  }
+  return Array.isArray(payload?.items) ? payload.items : []
+}
+
+/**
+ * Read the macOS clipboard's file URLs and describe them on disk.
+ *
+ * Directory versus file is decided here with `stat`: the probe reports paths,
+ * and a path that no longer exists is simply not a directory.
+ *
+ * @param probe - the probe's budget and executable overrides.
+ * @returns the clipboard items, each `{ path, name, isDirectory }`.
+ */
+async function probeMacClipboard(probe) {
+  const stdout = await runProbe(probe.osascript, ['-l', 'JavaScript', '-e', DARWIN_PROBE_SCRIPT], probe.timeoutMs)
+  const paths = parseProbePaths(stdout)
+  const entries = []
+  for (const path of paths) {
+    let isDirectory = false
+    try {
+      isDirectory = (await stat(path)).isDirectory()
+    } catch {
+      isDirectory = false
+    }
+    entries.push({ path, name: basename(path), isDirectory })
+  }
+  return entries
 }
 
 /**

@@ -161,6 +161,34 @@ export function parseReflection(text: string, knownIds: ReadonlySet<string>): Re
   return insights
 }
 
+/**
+ * Count what a reply contained, before validation dropped it.
+ *
+ * @param text - the raw reply.
+ * @param knownIds - ids the model was shown.
+ * @returns raw and evidence-bearing counts, or `undefined` when the reply is not JSON.
+ */
+export function replyStats(text: string, knownIds: ReadonlySet<string>): { raw: number; cited: number } | undefined {
+  const trimmed = text.trim().replace(/^```(?:json)?\s*/iu, '').replace(/```$/u, '').trim()
+  const start = trimmed.indexOf('{')
+  const end = trimmed.lastIndexOf('}')
+  if (start < 0 || end <= start) return undefined
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(trimmed.slice(start, end + 1))
+  } catch {
+    return undefined
+  }
+  const row = parsed as { insights?: unknown }
+  if (!Array.isArray(row.insights)) return { raw: 0, cited: 0 }
+  const cited = row.insights.filter((item) => {
+    if (typeof item !== 'object' || item === null) return false
+    const evidence = (item as { evidence?: unknown }).evidence
+    return Array.isArray(evidence) && evidence.some((id) => typeof id === 'string' && knownIds.has(id))
+  }).length
+  return { raw: row.insights.length, cited }
+}
+
 /** Everything one reflection call needs. */
 export interface ReflectionRequest {
   readonly llm: LlmRuntime | undefined
@@ -218,7 +246,17 @@ export async function runReflection(request: ReflectionRequest): Promise<Reflect
   }
   const known = new Set(request.entries.map((entry) => entry.id))
   const insights = parseReflection(text, known)
-  return { insights, reason: insights.length === 0 ? 'the reply had no observation that could cite its evidence' : `${insights.length} observation(s)` }
+  // A zero result has two very different causes — the model wrote no observations,
+  // or it wrote them without citing what they rest on — and for five days the log
+  // said only "produced nothing", which is why it stayed unfixed. Count both.
+  const stats = replyStats(text, known)
+  const detail = stats === undefined
+    ? ''
+    : ` (reply: ${stats.raw} observation(s), ${stats.cited} citing a known id)`
+  return {
+    insights,
+    reason: insights.length === 0 ? `the reply had no observation that could cite its evidence${detail}` : `${insights.length} observation(s)`,
+  }
 }
 
 /** Render one reflection as the markdown written to disk. */

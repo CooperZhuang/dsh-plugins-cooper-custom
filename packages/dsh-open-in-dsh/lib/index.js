@@ -6,8 +6,18 @@
  * the meeting point. It owns one small HTTP surface on the `dsh web` server
  * that is already running:
  *
- *   POST /dsh-open-in-dsh/api/v1/open     a launcher hands over one folder path
- *   GET  /dsh-open-in-dsh/api/v1/events   the page follows requests over SSE
+ *   POST /dsh-open-in-dsh/api/v1/open        a launcher hands over one folder path
+ *   GET  /dsh-open-in-dsh/api/v1/events      the page follows requests over SSE
+ *   POST /dsh-open-in-dsh/api/v1/open-with   a right-click action opens a file or directory in a whitelisted app
+ *   POST /dsh-open-in-dsh/api/v1/open-session a Session-scoped entry opens that Session's cwd (resolved from its header)
+ *   GET  /dsh-open-in-dsh/api/v1/apps        which whitelisted apps this platform can actually launch
+ *
+ * On macOS the same open route is also served on a Unix domain socket
+ * (`DEFAULT_SOCKET_PATH`). Nothing outside the Electron renderer can reach the
+ * Desktop shell's web server, and 2.0.19 removed the `--dsh-desktop-workspace`
+ * launch argument that used to carry a folder into the app, so the Finder Quick
+ * Action needs a channel of its own. The socket file is mode 0600: the same
+ * "this user, this machine" boundary as loopback — see `startHandoffSocket`.
  *
  * The verb only *announces* a path. What a folder means — register-or-switch
  * Workspace, then a blank Session — is decided by the browser half, because
@@ -27,12 +37,26 @@
  *
  * @module dsh-open-in-dsh
  */
-import { statSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { execFile } from 'node:child_process'
+import { chmodSync, existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'node:fs'
+import { createServer } from 'node:http'
+import { homedir } from 'node:os'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import z from '@deepseek-ai/schemastery'
+import { dshHome, encodeSegment, readSessionHeader } from 'dsh-session-store'
 
 /** Cordis plugin name; the profile row's `id` is independent of it. */
 export const name = 'open-in-dsh'
+
+/**
+ * macOS 交接套接字。**手抄**进 `scripts/macos/open-in-dsh`（`SOCKET_PATH_DEFAULT`），
+ * `test/macos.test.mjs` 保证两份一致；`DSH_OPEN_SOCKET`（脚本）与 config `socketPath`
+ * （宿主）都能覆盖。
+ *
+ * 放 `~/.dsh/run/` 而不是 `$TMPDIR`：Quick Action 由 Finder 拉起，它的 TMPDIR 与终端
+ * 是不是同一个目录不值得赌。
+ */
+export const DEFAULT_SOCKET_PATH = join(homedir(), '.dsh', 'run', 'dsh-open-in-dsh.sock')
 
 /**
  * 部署层配置。
@@ -69,6 +93,14 @@ export const Config = z.object({
   allowNonLoopback: z.boolean().default(false),
   /** 冷启动补收的时间窗：页面没开着时，请求在这段时间内仍可被补收。 */
   backlogTtlMs: z.number().default(60000),
+  /**
+   * macOS 交接套接字路径；空串表示不监听。
+   *
+   * 桌面外壳 2.0.19 起不再接受 `--dsh-desktop-workspace`（Chromium 的选项解析会以
+   * `bad option` 直接退出），也不再转发 second-instance 的 argv，所以快速操作改由本插件
+   * 自己在套接字上收路径，与 Windows 那条 HTTP 路由共用同一个 handler。
+   */
+  socketPath: z.string().default(DEFAULT_SOCKET_PATH),
 })
 
 /** The endpoint the Explorer verb's launcher calls. Mirrored in `scripts/`. */
@@ -85,6 +117,33 @@ export const ROUTE_EVENTS = '/dsh-open-in-dsh/api/v1/events'
  * send the user a browser window they did not ask for.
  */
 export const ROUTE_STATUS = '/dsh-open-in-dsh/api/v1/status'
+
+/**
+ * The right-click menu's "open with <app>" action posts `{ path, app }` here.
+ *
+ * `app` is an id from `OPEN_WITH_APPS`, never a command, a binary path or an
+ * app name: the Host owns the whole argv, so the browser can only ask for one
+ * of the allowlisted launches.
+ */
+export const ROUTE_OPEN_WITH = '/dsh-open-in-dsh/api/v1/open-with'
+
+/**
+ * The menu asks this before it shows anything, so an app that is not installed
+ * on this machine never becomes an action that fails on click.
+ */
+export const ROUTE_APPS = '/dsh-open-in-dsh/api/v1/apps'
+
+/**
+ * The Session-scoped entry (the sidebar row menu) knows a session id, never a
+ * directory: the browser half has the Session projection, not the stored
+ * header. This route is where the Host turns "session X" into "directory D"
+ * and launches D.
+ *
+ * The browser still only names an allowlisted app id plus a session id; the
+ * path never crosses the wire, so a forged request cannot open an arbitrary
+ * directory through this route.
+ */
+export const ROUTE_OPEN_SESSION = '/dsh-open-in-dsh/api/v1/open-session'
 
 /** How long an unanswered request stays replayable for a page that was closed. */
 const DEFAULT_BACKLOG_TTL_MS = 60_000
@@ -105,6 +164,93 @@ const RECENT_CLIENT_MS = 15_000
 
 /** One folder path; anything larger is not this request. */
 const MAX_REQUEST_BYTES = 16 * 1024
+
+/**
+ * The open-with allowlist: the only commands this plugin will ever spawn.
+ *
+ * A menu action sends an id from this table; the Host resolves that id to a
+ * fixed argv here. Nothing the browser sends is ever spliced into a command,
+ * so a forged pair can at worst name one of these launches with a path the
+ * Host itself validated.
+ *
+ * - darwin: Finder reveals with 'open -R'; every other app launches with
+ *   'open -a <name> <path>'. Terminal-like apps land on a file's directory,
+ *   because 'open -a Terminal <file>' would make Terminal run that file.
+ * - win32: Explorer opens a directory and selects a file.
+ */
+export const OPEN_WITH_APPS = Object.freeze({
+  darwin: Object.freeze([
+    Object.freeze({ id: 'qspace', app: 'QSpace Pro', bundle: 'QSpace Pro.app' }),
+    Object.freeze({ id: 'finder', always: true }),
+    Object.freeze({ id: 'vscode', app: 'Visual Studio Code', bundle: 'Visual Studio Code.app' }),
+    Object.freeze({ id: 'warp', app: 'Warp', bundle: 'Warp.app' }),
+    Object.freeze({ id: 'terminal', app: 'Terminal', always: true }),
+  ]),
+  win32: Object.freeze([Object.freeze({ id: 'explorer', always: true })]),
+})
+
+/** Where a macOS app bundle is probed for; the per-user folder comes second. */
+const DARWIN_APP_DIRS = Object.freeze(['/Applications', join(homedir(), 'Applications')])
+
+/** One path longer than this did not come from a right-click. */
+const MAX_PATH_LENGTH = 4096
+
+/** A Session id is one store-key segment; longer than this is not one. */
+const MAX_SESSION_ID_LENGTH = 256
+
+/** How long one launch may take before it is reported as failed. */
+const LAUNCH_TIMEOUT_MS = 10_000
+
+/**
+ * The allowlist entry for one id on one platform.
+ * @param platform - process.platform spelling.
+ * @param id - the id a menu action sent.
+ * @returns the entry, or undefined when the id is not allowlisted here.
+ */
+export function findOpenWithApp(platform, id) {
+  return (OPEN_WITH_APPS[platform] ?? []).find((entry) => entry.id === id)
+}
+
+/**
+ * Ids of the allowlisted apps this platform can actually launch.
+ *
+ * macOS bundles are probed by path in the two Applications folders; the
+ * system apps (Finder, Terminal) are always there. Windows contributes
+ * Explorer. An unknown platform contributes nothing, so the menu simply does
+ * not appear instead of offering launches that cannot work.
+ *
+ * @param platform - process.platform spelling.
+ * @param exists - file probe, for tests.
+ * @param appDirs - bundle search folders, for tests.
+ * @returns allowlisted ids, in registry order.
+ */
+export function availableApps(platform = process.platform, exists = existsSync, appDirs = DARWIN_APP_DIRS) {
+  return (OPEN_WITH_APPS[platform] ?? [])
+    .filter((entry) => entry.always === true || appDirs.some((dir) => exists(join(dir, entry.bundle))))
+    .map((entry) => entry.id)
+}
+
+/**
+ * The exact argv for one allowlisted launch.
+ * @param platform - process.platform spelling.
+ * @param appId - an allowlisted id.
+ * @param target - canonical path plus the directory flag.
+ * @returns the command to spawn, or null when the id is not allowlisted here.
+ */
+export function openWithCommand(platform, appId, target) {
+  const entry = findOpenWithApp(platform, appId)
+  if (entry === undefined) return null
+  if (platform === 'darwin') {
+    if (entry.id === 'finder') return { file: 'open', args: ['-R', target.path] }
+    const terminal = entry.id === 'terminal' || entry.id === 'warp'
+    const path = terminal && target.directory === false ? dirname(target.path) : target.path
+    return { file: 'open', args: ['-a', entry.app, path] }
+  }
+  if (platform === 'win32') {
+    return { file: 'explorer.exe', args: [target.directory ? target.path : '/select,' + target.path] }
+  }
+  return null
+}
 
 /**
  * Install the three routes.
@@ -159,6 +305,41 @@ export function apply(ctx, rawConfig = {}) {
           handler: createStatusHandler(hub, allowNonLoopback),
         }),
       'dsh-open-in-dsh: status route',
+    )
+    host.effect(
+      () =>
+        host.webServer.register({
+          kind: 'exact',
+          path: ROUTE_APPS,
+          handler: createAppsHandler(allowNonLoopback),
+        }),
+      'dsh-open-in-dsh: apps route',
+    )
+    host.effect(
+      () =>
+        host.webServer.register({
+          kind: 'exact',
+          path: ROUTE_OPEN_WITH,
+          handler: createOpenWithHandler(ctx, allowNonLoopback),
+        }),
+      'dsh-open-in-dsh: open-with route',
+    )
+    host.effect(
+      () =>
+        host.webServer.register({
+          kind: 'exact',
+          path: ROUTE_OPEN_SESSION,
+          handler: createOpenSessionHandler(ctx, allowNonLoopback, {
+            resolveCwd: (sessionId) =>
+              resolveSessionCwd(sessionId, { live: createLiveCwdReader(ctx) }),
+          }),
+        }),
+      'dsh-open-in-dsh: open-session route',
+    )
+    // macOS 的交接通道：同一个 open handler，第二个传输层。
+    host.effect(
+      () => startHandoffSocket(ctx, hub, allowNonLoopback, config.socketPath),
+      'dsh-open-in-dsh: handoff socket',
     )
     // Streams outlive the route registration only by accident; close them when
     // the plugin unloads so a reload never leaves the old page holding a socket.
@@ -285,13 +466,113 @@ export function expectsPage(hub, now = Date.now()) {
 }
 
 /**
+ * Serve the launcher's open route on a Unix domain socket.
+ *
+ * Why a second transport: on macOS nothing outside the Electron renderer can
+ * reach the Desktop shell's web server (it rejects those requests before route
+ * matching), and 2.0.19 removed the `--dsh-desktop-workspace` launch argument
+ * that used to carry a folder into the app — passing it now makes Chromium's own
+ * option parser exit with "bad option". A socket owned by this user, mode 0600,
+ * is the one channel the Finder Quick Action shares with the running app.
+ *
+ * The request shape is the HTTP route's on purpose: one handler, two transports,
+ * so the launcher reuses its JSON body and the page never learns which one
+ * delivered the path. A request that arrives after a cold start is still
+ * replayable through the hub's backlog, exactly like the port version.
+ *
+ * @param ctx - host plugin context, for logs.
+ * @param hub - the shared request hub.
+ * @param allowNonLoopback - kept for symmetry; a socket peer is always local.
+ * @param socketPath - absolute socket path; empty disables the transport.
+ * @returns disposer that closes the server and removes the socket file.
+ */
+function startHandoffSocket(ctx, hub, allowNonLoopback, socketPath) {
+  const path = typeof socketPath === 'string' ? socketPath.trim() : ''
+  if (path === '') return () => {}
+  if (!isAbsolute(path)) {
+    ctx.logger?.warn?.('dsh-open-in-dsh: socketPath is not absolute, handoff socket disabled: %s', path)
+    return () => {}
+  }
+
+  const openHandler = createOpenHandler(ctx, hub, allowNonLoopback, true)
+  const statusHandler = createStatusHandler(hub, allowNonLoopback, true)
+  const server = createServer((request, response) => {
+    let pathname = '/'
+    try {
+      pathname = new URL(request.url ?? '/', 'http://localhost').pathname
+    } catch {
+      sendJson(response, 400, { ok: false, reason: 'bad-request' })
+      return
+    }
+    if (pathname === ROUTE_OPEN) {
+      openHandler(request, response).catch((error) => {
+        ctx.logger?.warn?.('dsh-open-in-dsh: socket open failed: %s', messageOf(error))
+        if (!response.headersSent) sendJson(response, 500, { ok: false, reason: 'handler-failed' })
+      })
+      return
+    }
+    if (pathname === ROUTE_STATUS) {
+      statusHandler(request, response)
+      return
+    }
+    sendJson(response, 404, { ok: false, reason: 'not-found' })
+  })
+
+  let closed = false
+  let replaced = false
+  server.on('error', (error) => {
+    if (closed) return
+    // A crashed host leaves the file behind. A live one never lets us bind, so
+    // the stale file is safe to replace exactly once.
+    if (error?.code === 'EADDRINUSE' && !replaced) {
+      replaced = true
+      try {
+        unlinkSync(path)
+      } catch {}
+      server.listen(path)
+      return
+    }
+    ctx.logger?.warn?.('dsh-open-in-dsh: handoff socket failed (%s): %s', path, messageOf(error))
+  })
+  server.on('listening', () => {
+    try {
+      // The file mode is the access policy: only this user may hand paths over.
+      chmodSync(path, 0o600)
+    } catch (error) {
+      ctx.logger?.warn?.('dsh-open-in-dsh: could not tighten socket mode: %s', messageOf(error))
+    }
+    ctx.logger?.info?.('dsh-open-in-dsh: handoff socket listening at %s', path)
+  })
+
+  try {
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+  } catch (error) {
+    ctx.logger?.warn?.('dsh-open-in-dsh: cannot create %s: %s', dirname(path), messageOf(error))
+  }
+  server.listen(path)
+
+  return () => {
+    closed = true
+    try {
+      server.close()
+    } catch {}
+    try {
+      unlinkSync(path)
+    } catch {}
+  }
+}
+
+/**
  * Build the request handler that the Explorer launcher posts to.
  * @param ctx - host plugin context, for the log line.
  * @param hub - the shared request hub.
  * @param allowNonLoopback - whether a non-loopback peer may announce a path.
+ * @param peerIsTrusted - true when the transport already proved a local peer (the
+ *   Unix socket, whose file mode admits only this user); a socket has no
+ *   `remoteAddress`, so the loopback test cannot speak for it.
  * @returns the exact-route handler.
  */
-function createOpenHandler(ctx, hub, allowNonLoopback) {
+function createOpenHandler(ctx, hub, allowNonLoopback, peerIsTrusted = false) {
   return async (request, response) => {
     if (request.method !== 'POST') {
       sendJson(response, 405, { ok: false, reason: 'method-not-allowed' }, { allow: 'POST' })
@@ -301,7 +582,7 @@ function createOpenHandler(ctx, hub, allowNonLoopback) {
       sendJson(response, 403, { ok: false, reason: 'cross-origin' })
       return
     }
-    if (!allowNonLoopback && !isLoopback(request)) {
+    if (!allowNonLoopback && peerIsTrusted !== true && !isLoopback(request)) {
       // Opening a folder is opening a Workspace: shell commands run there.
       sendJson(response, 403, { ok: false, reason: 'remote-not-supported' })
       return
@@ -392,9 +673,47 @@ function createEventsHandler(ctx, hub, allowNonLoopback) {
  * Build the side-effect-free follower count the launcher polls.
  * @param hub - the shared request hub.
  * @param allowNonLoopback - whether a non-loopback peer may ask.
+ * @param peerIsTrusted - true for the Unix socket transport (see createOpenHandler).
  * @returns the exact-route handler.
  */
-function createStatusHandler(hub, allowNonLoopback) {
+function createStatusHandler(hub, allowNonLoopback, peerIsTrusted = false) {
+  return (request, response) => {
+    if (request.method !== 'GET') {
+      sendJson(response, 405, { ok: false, reason: 'method-not-allowed' }, { allow: 'GET' })
+      return
+    }
+    if (!sameOrigin(request)) {
+      sendJson(response, 403, { ok: false, reason: 'cross-origin' })
+      return
+    }
+    if (!allowNonLoopback && peerIsTrusted !== true && !isLoopback(request)) {
+      sendJson(response, 403, { ok: false, reason: 'remote-not-supported' })
+      return
+    }
+    sendJson(response, 200, {
+      ok: true,
+      clients: hub.clients(),
+      seq: hub.seq,
+      recent: expectsPage(hub),
+    })
+  }
+}
+
+/**
+ * Build the menu's availability route.
+ *
+ * The answer is probed once per plugin life and then cached: an app installed
+ * while the host runs shows up after a restart, the same rule the kernel's own
+ * open-in-app feature uses.
+ *
+ * @param allowNonLoopback - whether a non-loopback peer may ask.
+ * @param deps - platform/exists overrides, for tests.
+ * @returns the exact-route handler.
+ */
+export function createAppsHandler(allowNonLoopback = false, deps = {}) {
+  const platform = deps.platform ?? process.platform
+  const exists = deps.exists ?? existsSync
+  let cached = null
   return (request, response) => {
     if (request.method !== 'GET') {
       sendJson(response, 405, { ok: false, reason: 'method-not-allowed' }, { allow: 'GET' })
@@ -408,13 +727,330 @@ function createStatusHandler(hub, allowNonLoopback) {
       sendJson(response, 403, { ok: false, reason: 'remote-not-supported' })
       return
     }
-    sendJson(response, 200, {
-      ok: true,
-      clients: hub.clients(),
-      seq: hub.seq,
-      recent: expectsPage(hub),
-    })
+    cached ??= availableApps(platform, exists)
+    sendJson(response, 200, { ok: true, platform, apps: cached })
   }
+}
+
+/**
+ * Build the right-click action: validate a whitelisted app and an existing
+ * path, then spawn the one argv the allowlist names.
+ *
+ * The app id is checked against the allowlist before the path is touched, so
+ * a forged id is refused even by a caller that never had a valid path.
+ *
+ * @param ctx - host plugin context, for logs.
+ * @param allowNonLoopback - whether a non-loopback peer may launch.
+ * @param deps - platform/stat/exec overrides, for tests.
+ * @returns the exact-route handler.
+ */
+export function createOpenWithHandler(ctx, allowNonLoopback = false, deps = {}) {
+  const platform = deps.platform ?? process.platform
+  const stat = deps.stat ?? statSync
+  const exec = deps.exec ?? execFile
+  return async (request, response) => {
+    if (request.method !== 'POST') {
+      sendJson(response, 405, { ok: false, reason: 'method-not-allowed' }, { allow: 'POST' })
+      return
+    }
+    if (!sameOrigin(request)) {
+      sendJson(response, 403, { ok: false, reason: 'cross-origin' })
+      return
+    }
+    if (!allowNonLoopback && !isLoopback(request)) {
+      sendJson(response, 403, { ok: false, reason: 'remote-not-supported' })
+      return
+    }
+
+    let body
+    try {
+      body = await readJsonBody(request)
+    } catch (error) {
+      sendJson(response, 400, { ok: false, reason: 'bad-request', message: messageOf(error) })
+      return
+    }
+
+    const app = typeof body?.app === 'string' ? body.app.trim() : ''
+    if (findOpenWithApp(platform, app) === undefined) {
+      // The whole security story: no id, no command. A caller cannot smuggle
+      // a binary path or an app name in here.
+      sendJson(response, 400, { ok: false, reason: 'unknown-app', app, platform })
+      return
+    }
+
+    const claimed = typeof body?.path === 'string' ? body.path.trim().replace(/^"|"$/g, '') : ''
+    if (claimed === '' || !isAbsolute(claimed)) {
+      sendJson(response, 400, { ok: false, reason: 'path-not-absolute', path: String(body?.path ?? '') })
+      return
+    }
+    // Existing, canonical, regular file or directory. A path that cannot be
+    // opened far enough to prove it exists is refused before any spawn.
+    const target = existingPath(claimed, stat)
+    if (target === null) {
+      sendJson(response, 400, { ok: false, reason: 'path-not-found', path: claimed })
+      return
+    }
+
+    const command = openWithCommand(platform, app, target)
+    if (command === null) {
+      sendJson(response, 400, { ok: false, reason: 'unknown-app', app, platform })
+      return
+    }
+    try {
+      await runCommand(command, exec)
+    } catch (error) {
+      ctx.logger?.warn?.('dsh-open-in-dsh: open-with %s failed on %s: %s', app, target.path, messageOf(error))
+      sendJson(response, 500, { ok: false, reason: 'launch-failed', app, path: target.path, message: messageOf(error) })
+      return
+    }
+    ctx.logger?.info?.('dsh-open-in-dsh: opened %s with %s', target.path, app)
+    sendJson(response, 200, { ok: true, app, path: target.path, directory: target.directory })
+  }
+}
+
+/**
+ * Read a Session's cwd from the Host's in-memory projections, when one is live.
+ *
+ * Two in-memory sources, both authoritative while the Host runs:
+ *   - `workspaceRegistry.headers` — the header cache behind the sidebar's
+ *     Workspace membership;
+ *   - the resident Session object — the same header tools and the UI parse a
+ *     cwd from.
+ *
+ * Everything here is best-effort: a missing service, a service that throws, or
+ * a composition without either simply falls through to the stored header
+ * ({@link resolveSessionCwd}), which is the disk truth anyway.
+ *
+ * @param ctx - host plugin context.
+ * @returns a reader: session id -> cwd, or undefined when nothing is cached.
+ */
+export function createLiveCwdReader(ctx) {
+  const serviceOf = (key) => {
+    try {
+      return typeof ctx?.get === 'function' ? ctx.get(key) : undefined
+    } catch {
+      return undefined
+    }
+  }
+  const clean = (value) => (typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined)
+  return (sessionId) => {
+    try {
+      const cached = serviceOf('workspaceRegistry')?.headers?.get?.(sessionId)
+      const cwd = clean(cached?.cwd)
+      if (cwd !== undefined) return cwd
+    } catch {}
+    try {
+      const sessions = serviceOf('sessions')
+      const entity = typeof sessions?.get === 'function' ? sessions.get(sessionId) : undefined
+      const fromEntity = clean(entity?.header?.cwd)
+      if (fromEntity !== undefined) return fromEntity
+      const rows = typeof sessions?.list === 'function' ? sessions.list() : []
+      const row = Array.isArray(rows) ? rows.find((entry) => entry?.id === sessionId) : undefined
+      return clean(row?.cwd)
+    } catch {
+      return undefined
+    }
+  }
+}
+
+/**
+ * Read a Session's cwd out of the session store on disk.
+ *
+ * The store is keyed by project directory, so an id alone does not name a
+ * path: every project key is probed for `<root>/<projectKey>/<encodeSegment(id)>`
+ * and the first header carrying a cwd wins. `encodeSegment` and
+ * `readSessionHeader` come from `dsh-session-store`, the same header/frame
+ * reader `dsh-session-toolbox` uses, so a storage-format change cannot make
+ * the two plugins disagree.
+ *
+ * @param sessionId - the Session id the browser sent.
+ * @param deps - root/readdir/reader overrides, for tests.
+ * @returns the stored cwd, or undefined when no header carries one.
+ */
+export function findSessionCwdOnDisk(sessionId, deps = {}) {
+  const root = deps.sessionsRoot ?? join(deps.home ?? dshHome(), 'sessions')
+  const readdir = deps.readdir ?? readdirSync
+  const readHeader = deps.readSessionHeader ?? readSessionHeader
+  let segment
+  try {
+    segment = encodeSegment(sessionId)
+  } catch {
+    return undefined
+  }
+  let projects
+  try {
+    projects = readdir(root, { withFileTypes: true })
+  } catch {
+    return undefined
+  }
+  for (const project of projects) {
+    if (project?.isDirectory?.() !== true) continue
+    let header
+    try {
+      header = readHeader(join(root, project.name, segment))
+    } catch {
+      continue
+    }
+    const cwd = typeof header?.cwd === 'string' ? header.cwd.trim() : ''
+    if (cwd !== '') return cwd
+  }
+  return undefined
+}
+
+/**
+ * Resolve one Session id to its project directory: live projections first,
+ * stored header second.
+ * @param sessionId - the Session id.
+ * @param deps - `{live}` plus {@link findSessionCwdOnDisk}'s overrides.
+ * @returns the cwd, or undefined when this Host cannot name one.
+ */
+export function resolveSessionCwd(sessionId, deps = {}) {
+  if (typeof deps.live === 'function') {
+    let live
+    try {
+      live = deps.live(sessionId)
+    } catch {
+      live = undefined
+    }
+    if (typeof live === 'string' && live.trim() !== '') return live.trim()
+  }
+  return findSessionCwdOnDisk(sessionId, deps)
+}
+
+/**
+ * Build the Session-scoped launch route: resolve a session id to its cwd, then
+ * spawn the same allowlisted argv the open-with route uses.
+ *
+ * The request names an app id and a session id only. The directory never
+ * crosses the wire, so a forged request cannot turn this route into "open any
+ * path" — the worst it can do is open a directory the Host itself resolved.
+ *
+ * @param ctx - host plugin context, for logs.
+ * @param allowNonLoopback - whether a non-loopback peer may launch.
+ * @param deps - platform/stat/exec/resolver overrides, for tests.
+ * @returns the exact-route handler.
+ */
+export function createOpenSessionHandler(ctx, allowNonLoopback = false, deps = {}) {
+  const platform = deps.platform ?? process.platform
+  const stat = deps.stat ?? statSync
+  const exec = deps.exec ?? execFile
+  const resolveCwd =
+    typeof deps.resolveCwd === 'function' ? deps.resolveCwd : (sessionId) => resolveSessionCwd(sessionId)
+  return async (request, response) => {
+    if (request.method !== 'POST') {
+      sendJson(response, 405, { ok: false, reason: 'method-not-allowed' }, { allow: 'POST' })
+      return
+    }
+    if (!sameOrigin(request)) {
+      sendJson(response, 403, { ok: false, reason: 'cross-origin' })
+      return
+    }
+    if (!allowNonLoopback && !isLoopback(request)) {
+      sendJson(response, 403, { ok: false, reason: 'remote-not-supported' })
+      return
+    }
+
+    let body
+    try {
+      body = await readJsonBody(request)
+    } catch (error) {
+      sendJson(response, 400, { ok: false, reason: 'bad-request', message: messageOf(error) })
+      return
+    }
+
+    const app = typeof body?.app === 'string' ? body.app.trim() : ''
+    if (findOpenWithApp(platform, app) === undefined) {
+      sendJson(response, 400, { ok: false, reason: 'unknown-app', app, platform })
+      return
+    }
+
+    const claimed = typeof body?.sessionId === 'string' ? body.sessionId.trim() : ''
+    if (claimed === '') {
+      sendJson(response, 400, { ok: false, reason: 'missing-session-id' })
+      return
+    }
+    // A session id is a single path segment; these bounds keep a forged one
+    // from turning the store probe into a directory walk.
+    if (claimed.length > MAX_SESSION_ID_LENGTH || claimed.includes(String.fromCharCode(0)) || claimed.includes('/') || claimed.includes('\\')) {
+      sendJson(response, 400, { ok: false, reason: 'invalid-session-id' })
+      return
+    }
+
+    let cwd
+    try {
+      cwd = resolveCwd(claimed)
+    } catch (error) {
+      ctx.logger?.warn?.('dsh-open-in-dsh: session cwd lookup failed for %s: %s', claimed, messageOf(error))
+      sendJson(response, 500, { ok: false, reason: 'session-lookup-failed', message: messageOf(error) })
+      return
+    }
+    if (typeof cwd !== 'string' || cwd.trim() === '') {
+      sendJson(response, 404, { ok: false, reason: 'session-cwd-not-found', sessionId: claimed })
+      return
+    }
+
+    const target = existingPath(cwd, stat)
+    // A stored header can outlive its directory (a folder renamed behind DSH's
+    // back). That is still "this Session's cwd cannot be opened", not a bad
+    // request: the caller sent a perfectly valid session id.
+    if (target === null || target.directory !== true) {
+      sendJson(response, 404, { ok: false, reason: 'session-cwd-not-found', sessionId: claimed, cwd: cwd.trim() })
+      return
+    }
+
+    const command = openWithCommand(platform, app, { path: target.path, directory: true })
+    if (command === null) {
+      sendJson(response, 400, { ok: false, reason: 'unknown-app', app, platform })
+      return
+    }
+    try {
+      await runCommand(command, exec)
+    } catch (error) {
+      ctx.logger?.warn?.(
+        'dsh-open-in-dsh: open-session %s failed on %s: %s',
+        app,
+        target.path,
+        messageOf(error),
+      )
+      sendJson(response, 500, {
+        ok: false,
+        reason: 'launch-failed',
+        app,
+        sessionId: claimed,
+        path: target.path,
+        message: messageOf(error),
+      })
+      return
+    }
+    ctx.logger?.info?.('dsh-open-in-dsh: opened session %s cwd %s with %s', claimed, target.path, app)
+    sendJson(response, 200, { ok: true, app, sessionId: claimed, path: target.path, directory: true })
+  }
+}
+
+/**
+ * Spawn one allowlisted command. execFile takes an argv array, so no shell
+ * ever parses the path or the app name.
+ *
+ * @param command - the exact command.
+ * @param exec - execFile, for tests.
+ * @returns completion; rejects with the spawn error.
+ */
+function runCommand(command, exec = execFile) {
+  return new Promise((settle, fail) => {
+    exec(command.file, command.args, { timeout: LAUNCH_TIMEOUT_MS, windowsHide: true }, (error) => {
+      if (error === null) {
+        settle()
+        return
+      }
+      // Explorer returns 1 even when it opened the folder; only a missing or
+      // unexecutable binary means the launch did not happen.
+      if (command.file === 'explorer.exe' && error.code !== 'ENOENT' && error.code !== 'EACCES') {
+        settle()
+        return
+      }
+      fail(error)
+    })
+  })
 }
 
 /** Render one SSE frame. */
@@ -452,6 +1088,29 @@ export function directoryPath(value) {
     return null
   }
   return resolve(text)
+}
+
+/**
+ * Canonicalize a claimed file or directory path.
+ *
+ * The path is not trusted because the browser sent it: it must be absolute,
+ * short enough to be a path, and resolve to a regular file or directory.
+ *
+ * @param value - the claimed path.
+ * @param stat - stat probe, for tests.
+ * @returns canonical path plus the directory flag, or null when it is not one.
+ */
+export function existingPath(value, stat = statSync) {
+  if (typeof value !== 'string') return null
+  const text = value.trim().replace(/^"|"$/g, '')
+  if (text === '' || text.length > MAX_PATH_LENGTH || text.includes(String.fromCharCode(0))) return null
+  if (!isAbsolute(text)) return null
+  try {
+    const info = stat(text)
+    if (info.isDirectory()) return { path: resolve(text), directory: true }
+    if (info.isFile()) return { path: resolve(text), directory: false }
+  } catch {}
+  return null
 }
 
 /**

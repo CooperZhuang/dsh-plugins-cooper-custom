@@ -19,7 +19,16 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
-import { apply, Config, ROUTE_EVENTS, ROUTE_OPEN, ROUTE_STATUS } from '../lib/index.js'
+import {
+  apply,
+  Config,
+  ROUTE_APPS,
+  ROUTE_EVENTS,
+  ROUTE_OPEN,
+  ROUTE_OPEN_SESSION,
+  ROUTE_OPEN_WITH,
+  ROUTE_STATUS,
+} from '../lib/index.js'
 
 /**
  * Mount the plugin the way the Host does, and serve its routes for real.
@@ -53,7 +62,10 @@ async function mount(config = {}) {
   }
   routes.disposers = []
 
-  apply(ctx, config)
+  // No handoff socket by default: a test must not bind the path the real
+  // desktop host owns (~/.dsh/run/dsh-open-in-dsh.sock). A test that wants the
+  // socket transport passes its own socketPath.
+  apply(ctx, { socketPath: '', ...config })
 
   const server = createServer((request, response) => {
     const pathname = new URL(request.url ?? '/', 'http://localhost').pathname
@@ -94,11 +106,11 @@ async function postOpen(base, body, headers = {}) {
   return { status: response.status, body: await response.json() }
 }
 
-test('apply registers the open, events and status routes', async () => {
+test('apply registers the open, open-with, open-session, apps, events and status routes', async () => {
   const mounted = await mount()
   try {
     const paths = mounted.routes.map((route) => route.path).sort()
-    assert.deepEqual(paths, [ROUTE_EVENTS, ROUTE_OPEN, ROUTE_STATUS].sort())
+    assert.deepEqual(paths, [ROUTE_APPS, ROUTE_EVENTS, ROUTE_OPEN, ROUTE_OPEN_SESSION, ROUTE_OPEN_WITH, ROUTE_STATUS].sort())
     for (const route of mounted.routes) assert.equal(route.kind, 'exact')
   } finally {
     await mounted.close()

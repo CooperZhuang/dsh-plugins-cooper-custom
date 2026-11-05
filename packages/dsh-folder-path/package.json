@@ -1,7 +1,7 @@
 {
   "name": "dsh-folder-path",
   "version": "0.1.0",
-  "description": "DSH 插件：粘贴（复制来的）文件夹时不再尝试上传，而是把它的完整路径作为文本插入输入框。Paste a copied folder and get its full path as text instead of a failed upload.",
+  "description": "DSH 插件：粘贴（复制来的）文件夹时不再尝试上传，而是把它的完整路径作为文本插入输入框（Windows / macOS）。Paste a copied folder and get its full path as text instead of a failed upload (Windows and macOS).",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -28,7 +28,10 @@
     "scripts",
     "cordis.patch.yml",
     "README.md",
-    "README_EN.md"
+    "README_EN.md",
+    "icon.svg",
+    "locale/*.json",
+    "docs"
   ],
   "scripts": {
     "build": "node scripts/build-client.mjs",
@@ -45,7 +48,10 @@
     "client-plugin",
     "paste",
     "folder",
-    "clipboard"
+    "clipboard",
+    "macos",
+    "windows"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "icon": "./icon.svg"
 }

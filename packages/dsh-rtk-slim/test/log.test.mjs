@@ -24,7 +24,7 @@ test('defaultLogPath：尊重 DSH_HOME，缺失时回落 ~/.dsh', () => {
     assert.equal(defaultLogPath(), join(home, 'logs', 'dsh-rtk-slim.log'))
     const saved = process.env.DSH_HOME
     delete process.env.DSH_HOME
-    assert.ok(defaultLogPath().endsWith('/.dsh/logs/dsh-rtk-slim.log'))
+    assert.ok(defaultLogPath().endsWith(join('.dsh', 'logs', 'dsh-rtk-slim.log')))
     process.env.DSH_HOME = saved
   })
 })

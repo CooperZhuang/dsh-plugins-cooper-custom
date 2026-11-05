@@ -1,0 +1,300 @@
+#!/bin/sh
+#
+# open-in-dsh — hand Finder folders to DSH Desktop (macOS).
+#
+# On Windows the verb does this over the plugin's loopback route: a launcher
+# POSTs the folder, the page opens it. That route is not reachable from outside
+# the app on macOS: the Desktop shell's WebServer rejects every request that did
+# not come from its own renderer ("403 forbidden", decided before route
+# matching), and the "ordinary browser access" escape hatch only exists in
+# compatibility mode.
+#
+# So the folder goes over the plugin's own Unix domain socket instead
+# (~/.dsh/run/dsh-open-in-dsh.sock, mode 0600, the same open route as the port):
+#
+#     printf '{"path":"…"}' | curl --unix-socket <socket> -X POST http://localhost<ROUTE_OPEN>
+#
+# That replaced the old `--dsh-desktop-workspace` launch argument, which the
+# shell dropped in 2.0.19: passing it to the packaged executable now fails in
+# Chromium's option parser ("bad option", exit 9), so the second instance never
+# started and nothing was delivered. Warm start still raises the window by
+# launching the executable with no argument at all: that process loses the
+# single-instance lock, the running app gets "second-instance", focuses, and it
+# exits 0.
+#
+# Cold start: `open -a` the app, then wait for the socket the plugin binds while
+# the host boots; a request that lands before the page is following is replayed
+# from the hub's backlog.
+#
+# What a folder means — register-or-reuse the Workspace, then reuse-or-create a
+# blank Session — is not decided here. The Desktop shell calls the very same
+# workspaces.create({ path }) + uiWorkspace.openWorkspace(id) the plugin's
+# browser half uses, so this file only chooses *which* app and *which* folder.
+#
+# Without a Desktop app the launcher falls back to the plugin route on a
+# `dsh web` host. The route path below is mirrored in `lib/index.js`; a copy
+# that drifts fails silently, so `test/macos.test.mjs` asserts they still match.
+#
+# Environment: DSH_OPEN_APP, DSH_OPEN_PORT, DSH_OPEN_LOG (log file),
+# DSH_OPEN_SOCKET (handoff socket), DSH_OPEN_WAIT (cold-start wait seconds),
+# DSH_OPEN_DRY_RUN=1 (same as --print).
+set -u
+
+# Mirrored from lib/index.js by hand; test/macos.test.mjs keeps the copies honest.
+ROUTE_OPEN='/dsh-open-in-dsh/api/v1/open'
+DEFAULT_WEB_PORT=3080
+SOCKET_PATH_DEFAULT="$HOME/.dsh/run/dsh-open-in-dsh.sock"
+
+log_file=${DSH_OPEN_LOG:-$HOME/Library/Logs/dsh-open-in-dsh.log}
+print_only=0
+app_override=${DSH_OPEN_APP:-}
+port_override=${DSH_OPEN_PORT:-}
+socket_path=${DSH_OPEN_SOCKET:-$SOCKET_PATH_DEFAULT}
+socket_wait=${DSH_OPEN_WAIT:-30}
+[ "${DSH_OPEN_DRY_RUN:-0}" = "1" ] && print_only=1
+
+log() {
+  [ -n "$log_file" ] || return 0
+  printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*" >>"$log_file" 2>/dev/null || true
+}
+
+say_error() {
+  printf 'open-in-dsh: %s\n' "$*" >&2
+  log "error: $*"
+}
+
+usage() {
+  cat <<'EOF'
+Usage: open-in-dsh [options] [folder ...]
+
+Hand each folder to DSH Desktop as a Workspace (register it if new, reuse it
+if it is already registered) and land in a blank Session. Raises the DSH
+window when it is already running; starts the app when it is not.
+
+Options:
+  --print           resolve and report what would happen; change nothing
+  --app <bundle>    target this app bundle
+  --port <n>        use the dsh web route on port n instead of the app
+  -h, --help        display this help
+
+No folder means the current directory.
+EOF
+}
+
+while [ $# -gt 0 ]; do
+  case $1 in
+    --print|--dry-run) print_only=1 ;;
+    --app) [ $# -ge 2 ] || { say_error '--app needs a bundle path'; exit 64; }; app_override=$2; shift ;;
+    --app=*) app_override=${1#*=} ;;
+    --port) [ $# -ge 2 ] || { say_error '--port needs a number'; exit 64; }; port_override=$2; shift ;;
+    --port=*) port_override=${1#*=} ;;
+    -h|--help) usage; exit 0 ;;
+    --) shift; break ;;
+    -*) say_error "unknown option: $1"; usage >&2; exit 64 ;;
+    *) break ;;
+  esac
+  shift
+done
+
+# One folder, as a real path. Canonicalising through the directory itself
+# resolves symlinks, "." and trailing separators; exit 2 separates "this is not
+# a folder" from "this does not exist" because the two need different words.
+canonical_dir() {
+  [ -e "$1" ] || return 1
+  [ -d "$1" ] || return 2
+  (CDPATH='' cd -- "$1" 2>/dev/null && pwd -P)
+}
+
+# The executable inside a .app bundle, empty when the bundle is not one.
+bundle_executable() {
+  _bundle=$1
+  [ -d "$_bundle" ] || return 1
+  _exe=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$_bundle/Contents/Info.plist" 2>/dev/null) || _exe=''
+  [ -n "$_exe" ] || _exe=$(basename "$_bundle" .app)
+  [ -x "$_bundle/Contents/MacOS/$_exe" ] || return 1
+  printf '%s' "$_bundle/Contents/MacOS/$_exe"
+}
+
+# Whether the app's own executable is running.
+#
+# `pgrep -f` is not used here on purpose: measured on macOS 27.2 with DSH
+# Desktop Beta 2.0.18-beta.1, pgrep -f sees every helper and crash-reporting
+# process of the app but *not* the packaged main process, so a running app read
+# as "closed" and every click would take the cold-start path. `ps -ww` prints
+# the untruncated command line, and an exact match keeps helpers (which carry
+# extra arguments) out.
+is_running() {
+  [ -n "$1" ] || return 1
+  ps -ww -Ao command= 2>/dev/null | grep -Fx -- "$1" >/dev/null 2>&1
+}
+
+# A running instance always wins: the click is meant for the DSH the user is
+# looking at, not for another install that happens to be checked first. Then an
+# installed bundle, then Spotlight, so a non-standard location still resolves.
+# The stable app precedes the beta because a machine with both runs the stable
+# one for real work.
+resolve_app() {
+  if [ -n "$app_override" ]; then
+    if [ -d "$app_override" ]; then
+      printf '%s' "$app_override"
+      return 0
+    fi
+    log "warning: not an app bundle: $app_override (falling back to detection)"
+  fi
+  for _app in \
+    '/Applications/DSH Desktop.app' \
+    '/Applications/DSH Desktop Beta.app' \
+    "$HOME/Applications/DSH Desktop.app" \
+    "$HOME/Applications/DSH Desktop Beta.app"; do
+    _exe=$(bundle_executable "$_app") || _exe=''
+    [ -n "$_exe" ] || continue
+    if is_running "$_exe"; then
+      printf '%s' "$_app"
+      return 0
+    fi
+  done
+  for _app in \
+    '/Applications/DSH Desktop.app' \
+    '/Applications/DSH Desktop Beta.app' \
+    "$HOME/Applications/DSH Desktop.app" \
+    "$HOME/Applications/DSH Desktop Beta.app"; do
+    if [ -d "$_app" ]; then
+      printf '%s' "$_app"
+      return 0
+    fi
+  done
+  for _bundle_id in ai.deepseek.dsh.desktop ai.deepseek.dsh.desktop.beta; do
+    _hit=$(mdfind "kMDItemCFBundleIdentifier == '$_bundle_id'" 2>/dev/null | head -n 1)
+    if [ -n "$_hit" ] && [ -d "$_hit" ]; then
+      printf '%s' "$_hit"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# JSON body for the plugin route. Paths can contain quotes and backslashes;
+# escaping both is everything JSON needs here.
+json_path() {
+  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
+
+hand_off_web() {
+  _port=$1
+  _dir=$2
+  _payload=$(printf '{"path":"%s"}' "$(json_path "$_dir")")
+  _url="http://127.0.0.1:$_port$ROUTE_OPEN"
+  if curl -fsS -m 5 -X POST -H 'content-type: application/json' --data "$_payload" "$_url" >/dev/null 2>&1; then
+    return 0
+  fi
+  say_error "no DSH host answered POST $_url — start dsh web first, or install DSH Desktop"
+  return 3
+}
+
+# Is the host's handoff socket there yet? A socket file outlives a crashed host,
+# so connectability is the real question; curl's failure is the answer.
+socket_ready() {
+  curl -fsS -m 2 --unix-socket "$socket_path" "http://localhost$ROUTE_STATUS" >/dev/null 2>&1
+}
+
+# Hand one folder over the plugin's Unix socket and report the host's JSON.
+# Same route, same body as the Windows verb: one handler on the host side.
+hand_off_socket() {
+  _dir=$1
+  _payload=$(printf '{"path":"%s"}' "$(json_path "$_dir")")
+  curl -fsS -m 5 --unix-socket "$socket_path" -X POST \
+    -H 'content-type: application/json' --data "$_payload" \
+    "http://localhost$ROUTE_OPEN" 2>/dev/null
+}
+
+# Wait for a just-started app's host to bind the socket (plugin load + host boot).
+wait_for_socket() {
+  _deadline=$(($(date +%s) + socket_wait))
+  while [ "$(date +%s)" -lt "$_deadline" ]; do
+    if socket_ready; then
+      return 0
+    fi
+    sleep 0.2
+  done
+  return 1
+}
+
+# Raise the running app: a second instance loses the single-instance lock, the
+# running app receives "second-instance" and focuses, and this one exits 0.
+raise_window() {
+  [ -n "$exe" ] || return 0
+  "$exe" >/dev/null 2>&1 || true
+}
+
+app=$(resolve_app) || app=''
+mode='web'
+port=${port_override:-$DEFAULT_WEB_PORT}
+exe=''
+running=0
+if [ -z "$port_override" ] && [ -n "$app" ]; then
+  exe=$(bundle_executable "$app") || exe=''
+  if [ -n "$exe" ]; then
+    mode='desktop'
+    is_running "$exe" && running=1
+  fi
+fi
+
+status=0
+[ $# -gt 0 ] || set -- .
+for target in "$@"; do
+  dir=$(canonical_dir "$target")
+  rc=$?
+  if [ "$rc" -eq 2 ]; then
+    say_error "not a folder: $target"
+    status=2
+    continue
+  fi
+  if [ "$rc" -ne 0 ]; then
+    say_error "no such folder: $target"
+    status=2
+    continue
+  fi
+  if [ "$mode" = 'desktop' ]; then
+    if [ "$print_only" = 1 ]; then
+      printf 'mode=desktop app=%s exe=%s running=%s socket=%s path=%s\n' "$app" "$exe" "$running" "$socket_path" "$dir"
+      continue
+    fi
+    if [ "$running" != 1 ]; then
+      # Cold start: start the app first, then wait for its host to bind the
+      # handoff socket (the plugin is what listens; the shell knows nothing
+      # about folders any more). A request that arrives before the page is
+      # following is replayed from the hub's backlog.
+      if ! open -a "$app"; then
+        say_error "starting $app failed"
+        status=3
+        continue
+      fi
+      if ! wait_for_socket; then
+        say_error "started $app but no handoff socket at $socket_path after ${socket_wait}s — is dsh-open-in-dsh loaded in its profile?"
+        status=3
+        continue
+      fi
+    fi
+    if ! hand_off_socket "$dir" >/dev/null; then
+      say_error "no handoff socket at $socket_path — restart DSH (or reload dsh-open-in-dsh) so it can listen"
+      status=3
+      continue
+    fi
+    if [ "$running" = 1 ]; then
+      raise_window
+    fi
+    log "opened $dir (desktop, app=$app, running=$running)"
+  else
+    if [ "$print_only" = 1 ]; then
+      printf 'mode=web port=%s path=%s\n' "$port" "$dir"
+      continue
+    fi
+    if ! hand_off_web "$port" "$dir"; then
+      status=3
+      continue
+    fi
+    log "opened $dir (web, port=$port)"
+  fi
+done
+exit $status
+

@@ -7,7 +7,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import zlib from 'node:zlib'
@@ -119,6 +119,8 @@ function fixture() {
   const dir = sessionDir(root, fromCwd, sessionId)
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, 'session.v3.jsonl.zstd'), syntheticLog(fromCwd, [{ seq: 0, type: 'turn/start' }]))
+  // 0.2.2 起内核在会话目录里放 session.lock（flock 的载体，永不删除）。
+  writeFileSync(join(dir, 'session.lock'), '')
   // 目标工作区的 project 目录（其他会话已在那儿）也建出来，模拟真实布局。
   mkdirSync(sessionDir(root, toCwd, 'session-other'), { recursive: true })
   return { root, fromCwd, toCwd, sessionId, dir }
@@ -130,6 +132,8 @@ test('planMove + applyPlan 完成搬迁且不残留源目录', () => {
     const plan = planMove({ root: f.root, sessionId: f.sessionId, fromCwd: f.fromCwd, toCwd: f.toCwd, compression: 'zstd' })
     assert.equal(plan.generation.name, 'session.v3.jsonl.zstd')
     assert.equal(plan.frameCount, 2)
+    assert.equal(plan.leaseFile, 'session.lock')
+    assert.deepEqual(plan.otherFiles, [])
     const report = applyPlan(plan)
     assert.equal(report.ok, true)
     assert.equal(report.verifiedHeader.cwd, f.toCwd)
@@ -137,13 +141,48 @@ test('planMove + applyPlan 完成搬迁且不残留源目录', () => {
     assert.equal(existsSync(plan.sourcePath), false)
     assert.equal(existsSync(plan.targetPath), true)
     assert.equal(existsSync(f.dir), false)
-    // 目标目录里没有临时名残留。
-    const names = readdirSync(plan.targetDir)
-    assert.deepEqual(names, ['session.v3.jsonl.zstd'])
+    // 目标目录里没有临时名残留；租约文件随会话一起搬过来。
+    const names = readdirSync(plan.targetDir).sort()
+    assert.deepEqual(names, ['session.lock', 'session.v3.jsonl.zstd'])
+    assert.equal(report.leaseMoved, true)
+    assert.deepEqual(report.leftInSourceDir, [])
     // 用只读校验再确认一次。
     const verified = verifyStoredLog({ root: f.root, sessionId: f.sessionId, cwd: f.toCwd, compression: 'zstd' })
     assert.equal(verified.ok, true)
     assert.equal(verified.magic, 'zstd')
+  } finally {
+    rmSync(f.root, { recursive: true, force: true })
+  }
+})
+
+test('applyPlan 把 session.lock 一起搬走（inode 不变，已持有的 flock 跟着走）', () => {
+  const f = fixture()
+  try {
+    const plan = planMove({ root: f.root, sessionId: f.sessionId, fromCwd: f.fromCwd, toCwd: f.toCwd, compression: 'zstd' })
+    const before = statSync(join(f.dir, 'session.lock')).ino
+    const report = applyPlan(plan)
+    const after = statSync(join(plan.targetDir, 'session.lock')).ino
+    assert.equal(after, before)
+    assert.equal(report.leaseMoved, true)
+    assert.equal(report.removedSourceDir, true)
+    assert.equal(existsSync(f.dir), false)
+  } finally {
+    rmSync(f.root, { recursive: true, force: true })
+  }
+})
+
+test('目标目录已有 session.lock 时 planMove 直接拒绝（不制造半套租约）', () => {
+  const f = fixture()
+  try {
+    const targetDir = sessionDir(f.root, f.toCwd, f.sessionId)
+    mkdirSync(targetDir, { recursive: true })
+    writeFileSync(join(targetDir, 'session.lock'), 'held-by-someone-else')
+    assert.throws(
+      () => planMove({ root: f.root, sessionId: f.sessionId, fromCwd: f.fromCwd, toCwd: f.toCwd, compression: 'zstd' }),
+      /already holds a write lease/,
+    )
+    // 源目录原样没动。
+    assert.deepEqual(readdirSync(f.dir).sort(), ['session.lock', 'session.v3.jsonl.zstd'])
   } finally {
     rmSync(f.root, { recursive: true, force: true })
   }

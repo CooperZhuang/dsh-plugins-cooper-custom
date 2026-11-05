@@ -3,11 +3,18 @@
 在 Windows 资源管理器里**右键一个文件夹**（或文件夹里的**空白处**）→「**通过 DSH 打开**」，
 DSH 就把这个目录作为工作区切入，并进到里面的一个空白会话。
 
+反方向也有入口：DSH 里的**文件/目录右键菜单**提供「用 QSpace Pro / Finder / VS Code /
+Warp / Terminal 打开」（Windows 是资源管理器），见下文「DSH 右键菜单里的『打开方式』」。
+
 - 已经登记过的工作区 → 直接切过去
 - 没登记过 → 自动新建对应工作区
 - **复用**该工作区已有的空白会话（不会每点一次就堆一个空会话）
 - **不会闪任何窗口**——没有控制台窗口，也不会多开浏览器
 - **桌面版**：DSH 没开就把它启动起来，开着却被挡住或缩在托盘里就把它提到最前
+
+macOS 上没有资源管理器动词，等价物是 Finder 的**快速操作** + 终端命令 `dsh-open`；
+而且 mac 桌面版会拒掉外部 HTTP 请求，所以那边**不走这条路由**，改用外壳自带的启动参数
+交接——见「安装（macOS）」。
 
 ## 装在哪个 DSH 上
 
@@ -37,6 +44,10 @@ authenticated URL；直接开 `http://127.0.0.1:19387/` 得到的是
 所以桌面版模式下的冷启动只能是**启动应用本身**，不能是打开一个 URL。
 
 显式钉住端口就按端口走：`-Port 3080` 即使在装了桌面版的机器上也保持 `dsh web` 的行为。
+
+macOS 两样都不一样：桌面版端口不固定（默认 43120，被占用自动 +1），而且外壳在进路由之前
+就把非 Electron renderer 的请求拒成 `403 forbidden`，所以上面这条 HTTP 链路在 mac 上
+从外部**根本打不通**——那边改用启动参数交接（见「安装（macOS）」）。
 
 ## 内核版本（DSH 0.2.1-rc.2）
 
@@ -103,6 +114,94 @@ pwsh -File scripts\install-menu.ps1 -Action install
 菜单本身**就在 Windows 11 的顶层菜单里**（实测 build 26200，和 PowerShell 7、通过 Code 打开并列），
 不用点「显示更多选项」。
 
+## 安装（macOS）
+
+mac 上那条 HTTP 端口**从外部打不进来**：桌面外壳在进路由之前就把非 Electron renderer 的请求
+拒成 403，而「允许在浏览器中打开」只在兼容模式下才存在。所以 mac 走**同一个路由的第二个传输层**：
+插件在宿主里监听一个 Unix 域套接字（`~/.dsh/run/dsh-open-in-dsh.sock`，权限 0600），启动器把
+同样的 JSON 打到那个套接字上。
+
+> 2.0.19 之前这里用的是外壳的 `--dsh-desktop-workspace` 启动参数。外壳在新版把它删了，而且不是
+> 「忽略」——把它传给打包后的可执行文件会在 Chromium 的选项解析里直接崩：
+> `bad option: --dsh-desktop-workspace=…`、退出码 9。于是 warm 交接（第二实例转 argv）和冷启动
+> （`open -a --args`）两条路一起失效，右键点了像没反应。套接字方案是插件的自有通道，不依赖外壳契约。
+
+```sh
+packages/dsh-open-in-dsh/scripts/macos/install-macos.sh install
+# 卸载：… uninstall     查看当前状态与「点一下会发生什么」：… status
+```
+
+workflow 里烘焙的是启动器的**绝对路径**（Automator 跑的 shell 不一定有用户的 PATH）。把本仓库
+挪走之后菜单项还在、点一下只会弹 Automator 的
+`操作“运行Shell脚本”遇到了错误 -: line N: <旧路径>: No such file or directory`——2026-11-05 把仓库
+迁进 `Code/Dsh/` 时就是这样坏的。换路径后重跑一次 `install`；`status` 会打印
+`launcher … STALE: … re-run install-macos.sh install` 并以非 0 退出，可以拿它当「服务是否还指向
+当前 checkout」的探针。
+
+装完这些：
+
+| 位置 | 是什么 |
+|---|---|
+| `~/Library/Services/通过 DSH 打开.workflow` | Automator 快速操作，只收文件夹。Finder 里右键文件夹 → **快速操作** → 通过 DSH 打开；可以多选，也可以给它配快捷键 |
+| `~/Library/Services/通过 DSH 打开 (QSpace).workflow` | 同一个标签、同一个脚本，作用域是 QSpace Pro（`com.jinghaoshe.qspace.pro`）。QSpace 右键 → **服务** → 通过 DSH 打开 |
+| `~/bin/dsh-open` | 终端命令；不带参数就是当前目录 |
+
+启动器（`scripts/macos/open-in-dsh`）只做三件事：把路径规范化（软链、相对路径、结尾斜杠、
+空格与引号）→ 找 app（先看正在跑的那个，再看 `/Applications`，最后按 bundle id 走 Spotlight）→
+
+- **已经开着**：`curl --unix-socket <socket> -X POST http://localhost/dsh-open-in-dsh/api/v1/open`
+  投路径，然后不带参数再执行一次 app 可执行文件把窗口提到最前（第二实例拿不到单实例锁、
+  主实例收到 `second-instance` 后聚焦，这个进程 0.1 秒内以 0 退出）；
+- **没开**：`open -a "<app>"` 起应用，等宿主把套接字绑上（默认最多 30 s，`DSH_OPEN_WAIT` 可改）
+  再投递——页面还没连上时请求落在 hub 的 backlog 里，页面一连上来就补收；
+- **没装桌面版**：回落到同一条路由的 TCP 版（`dsh web`，默认 3080；`--port` 或 `DSH_OPEN_PORT` 可改）。
+
+「这个文件夹算什么」不由启动器决定，也不由外壳决定：mac 和 Windows 一样，宿主只负责把路径
+publish 到 hub，页面（浏览器半边）再走 `workspaces.create({ path })` + `uiWorkspace.openWorkspace(id)`
+——已登记的直接切、没有就新建，空白会话能复用就复用。
+
+实测（本机，DSH Desktop Beta 2.0.20-beta.1 / 内核 0.2.1-rc.3）：
+
+```
+$ open-in-dsh --print /tmp/x
+mode=desktop app=/Applications/DSH Desktop Beta.app exe=… running=1 socket=/Users/example/.dsh/run/dsh-open-in-dsh.sock path=/tmp/x
+
+$ time open-in-dsh --app "/Applications/DSH Desktop Beta.app" /tmp/x   # warm
+opened /tmp/x (desktop, app=/Applications/DSH Desktop Beta.app, running=1)    0.16 s
+```
+
+套接字文件权限实测 `srw-------`（0600）：只有本用户能投递，和端口版的「只收 loopback」是同一条边界。
+
+### 为什么 QSpace 要单独一个 workflow
+
+macOS 的「服务」按 `NSRequiredContext` 过滤：一个服务只有在声明允许某个 app 时，才会出现在
+那个 app 的「服务」菜单里。Finder 快速操作声明的是 `com.apple.finder`，所以它在 QSpace 里
+**永远不会出现**——这不是 QSpace 的毛病，是服务机制本身。于是安装器写第二个 bundle，换个
+作用域但共用同一个标签和脚本。
+
+QSpace 的右键菜单本身就是一份可排序清单（`~/Library/Application Support/com.jinghaoshe.qspace.pro/context_menu/conf.json`），
+清单里已经有内建的「服务」子菜单（`com.jinghaoshe.qspace.services`），所以装上就能在
+**服务 → 通过 DSH 打开** 里点到。想要**顶层条目**：QSpace 设置 → 右键菜单，把左侧「服务」
+列表里的这一项拖到上面即可（用它自己的 UI 拖，别手改 conf.json——QSpace 运行时会覆盖）。
+
+`--qspace` 可以改这个行为：
+
+```sh
+… install --qspace off    # 不装 QSpace 那个 bundle
+… install --qspace any    # 去掉作用域，任何 app 都看得到（QSpace 若不认 app 作用域时的退路）
+```
+
+限制：
+
+- 快速操作在**子菜单**里（「快速操作」/「服务」）。要 Windows 那种**顶层**右键条目只有
+  Finder Sync 扩展一条路——要 Xcode 工程和签名，桌面版每次升级还得重签，所以没做。
+- 右键**文件夹空白处**在 macOS 上没有对应入口：服务总要有选中项。
+- mac 的交接依赖**插件自己监听的套接字**：改了插件代码要重启桌面端（宿主半边在插件初始化时绑定）。
+  套接字不在时启动器会明确报错并写日志，不会假装成功。路径可用 config `socketPath`（宿主）与
+  `DSH_OPEN_SOCKET`（启动器）一起改到别处。
+- 首次安装后如果菜单不出现：`killall Finder`，或注销重登；开关/快捷键在
+  系统设置 → 键盘 → 键盘快捷键 → 服务。
+
 ## 桌面版怎么把窗口提到最前
 
 页面里的 `window.focus()` 对 Electron 窗口基本无效：它只动页面自己的焦点，不动 OS 层的
@@ -162,7 +261,9 @@ dsh://open
 路径则通过**进程环境变量**传（`DSH_OPEN_PATH` / `DSH_OPEN_PORT` / `DSH_OPEN_APP`），
 一个引号都不用转义——单引号目录名、`D:\` 这类边界情况于是自然消失。
 
-## 它怎么工作
+## 它怎么工作（Windows 链路）
+
+macOS 不经过这里：那边是启动参数交接，见「安装（macOS）」。
 
 右键动词是个独立进程，浏览器拿不到「用户刚才右键了哪个目录」，中间必须有碰头点，
 而 DSH 宿主本来就在跑，就用它：
@@ -184,13 +285,34 @@ await ctx.uiWorkspace.openWorkspace(ws.workspaceId)       // 连接并打开它�
 `openWorkspace` 内部就是 `reuseOrCreateBlank`：**有空白会话就复用，没有才建**——
 这正是「不要堆多余的窗口」想要的行为。
 
-### 三条路由
+### 五条路由
 
 | 路由 | 用途 |
 |---|---|
 | `POST /open` | 启动器提交目录；返回 `{seq, clients, recent}` |
 | `GET /events` | 页面跟随请求（SSE，带 `hello` 与回放） |
 | `GET /status` | 只报「有几个页面在跟」，无副作用 |
+| `GET /apps` | 菜单先问本平台有哪些白名单 app 真的装了；返回 `{platform, apps}` |
+| `POST /open-with` | 菜单把已存在的文件/目录交给白名单 app；返回 `{ok, app, path, directory}` |
+
+### DSH 右键菜单里的「打开方式」
+
+文件/目录的右键菜单通过 DSH 0.2.2 的 `@deepseek-ai/dsh-client-ui-context-menu` 注册
+（客户端 `dsh.client.inject` 声明依赖），点开后按宿主报告的可用 app 列动作：
+
+| 平台 | 动作 |
+|---|---|
+| macOS | QSpace Pro、Finder、VS Code、Warp、Terminal（装了才出现） |
+| Windows | 资源管理器（目录直接打开，文件用 `/select,` 定位） |
+
+安全边界在宿主：客户端只发 `{ path, app }`，`app` 必须是白名单 id，路径必须是**已存在**
+的绝对路径；命令由 `OPEN_WITH_APPS` 表拼成 argv、用 `execFile` 直接执行，不经过 shell。
+macOS 的 Finder 用 `open -R` 揭示，其余 app 用 `open -a <名字> <路径>`；Terminal/Warp
+拿到文件时落在它所在目录，而不是把文件当脚本跑。
+
+菜单化之后**不再需要给 `app.asar` 打 QSpace 补丁**：早期用
+`scripts/patch-open-in-app-qspace.mjs` 补过的机器把补丁撤掉即可（撤补丁由维护者统一做，
+本包不含该脚本）。
 
 `clients` 与 `recent` 一起决定**冷启动**：没人跟随、而且最近也没人跟随过，才是真的
 「DSH 没开」。页面只是**正在重连**（插件重挂载、刷新页面）时 `recent` 为真，`dsh web`
@@ -275,11 +397,14 @@ bundle 自带的 `cordis.patch.yml` 是默认值；profile 的 `cordis.patch.yml
 - 桌面版**登录页（welcome 窗口）**出现时页面还没跑起来：请求会待在回放窗口里，
   等你登录进去、页面加载后才落地；超过 `backlogTtlMs` 就过期了，需要重按一次。
 - 宿主半边改代码要重启宿主才生效（见上，模块缓存）；桌面版必须整个退出再打开。
+- macOS：快速操作在子菜单里，不是顶层条目；右键文件夹空白处没有入口；`--dsh-desktop-workspace`
+  是桌面外壳的内部契约，外壳改名时启动器要跟着改。
 
 ## 验证
 
 ```powershell
-npm test        # 24 个测试
+npm test        # 82 个测试
+node --test test/macos.test.mjs   # macOS：17 个测试（不需要装 node_modules）
 ```
 
 - `test/host.test.mjs`：序号/回放/宿主重启回退 + `%V` 的各种形态。

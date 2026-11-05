@@ -3,7 +3,7 @@
  *
  * 背景：`dsh-memories` 的项目作用域是**工作区级**的 —— 存到
  * `$DSH_HOME/memories/projects/<slug>/entries/<id>.md`，slug 由工作区根目录派生
- * （`slugify(basename)` + `sha1(resolve(root)).slice(0,8)`，见其 storage.js）。
+ * （`slugify(basename)`，只取项目名、与机器路径无关，见其 storage.js）。
  * 所以搬会话**不需要**搬记忆：会话换了 cwd，作用域自然跟到目标工作区。
  * 但"这条会话在源工作区下写下的条目"留在源工作区，如果这次搬迁属于**纠正错放**
  * （会话本来就该在目标工作区），那些条目也该一起过去。本模块只负责这一件事。
@@ -19,7 +19,6 @@
  */
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
-import { createHash } from 'node:crypto'
 import { basename, join, resolve } from 'node:path'
 
 /** 与 dsh-memories/lib/storage.js 的 slugify 逐字一致。 */
@@ -34,11 +33,14 @@ export function slugify(value) {
   return slug.length > 0 ? slug : 'memory'
 }
 
-/** 与 dsh-memories/lib/storage.js 的 projectSlug 逐字一致。 */
+/**
+ * 与 dsh-memories/lib/storage.js 的 projectSlug 逐字一致：**只取项目名**，
+ * 不再拼 `sha1(resolve(root))` 后缀。dsh-memories 已把项目 slug 改成
+ * 「一台机器上算出来、另一台也对得上」的名字派生（旧的后缀方案会把同一个
+ * 项目按机器拆成多个目录，迁移逻辑见其 storage.ts 的 LEGACY_PROJECT_SLUG）。
+ */
 export function projectSlug(root) {
-  const name = slugify(resolve(root).replace(/[\\/]+$/u, '').split(/[\\/]/u).pop() ?? 'workspace')
-  const digest = createHash('sha1').update(resolve(root)).digest('hex').slice(0, 8)
-  return `${name}-${digest}`
+  return slugify(root.replace(/[\\/]+$/u, '').split(/[\\/]/u).pop() ?? 'workspace')
 }
 
 /** `$DSH_HOME/memories/projects`。 */

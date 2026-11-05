@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Session store library",
+    "description": "Shared session-storage primitives: project-dir keys, jsonl.zstd frames, header rewrite and the workspace registry.",
+    "detail": "docs/DETAIL.md"
+  }
+}

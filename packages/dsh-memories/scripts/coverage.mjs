@@ -65,6 +65,10 @@ const SUMMARY_CLOSE = '</memory-context>'
 const RECALL_OPEN = '<memory-recall>'
 /** Closing frame of the on-demand recall block. */
 const RECALL_CLOSE = '</memory-recall>'
+/** Opening frame of the title-only rotation block (mirrors src/render.ts). */
+const INDEX_OPEN = '<memory-index>'
+/** Closing frame of the title-only rotation block. */
+const INDEX_CLOSE = '</memory-index>'
 /** Pin marker the summary renderer prefixes to a pinned entry's bullet. */
 const PIN = '📌 '
 /**
@@ -286,28 +290,31 @@ async function readUsageKeys(storeDir, warn) {
  * walk, so that stays as the fallback.
  */
 function decodeLog(buffer) {
-  try {
-    return zstdDecompressSync(buffer).toString('utf8')
-  } catch {
-    // Fall through to the per-frame walk.
-  }
+  // Walk the frames FIRST. `zstdDecompressSync(buffer)` on a multi-frame buffer
+  // succeeds while decoding only the first frame, and a session log's first
+  // frame is the session header — so a single-shot decode made every coverage
+  // number read 0 while looking healthy. The frame walk is the only shape that
+  // sees the messages.
   const offsets = []
   let index = buffer.indexOf(ZSTD_MAGIC)
   while (index >= 0) {
     offsets.push(index)
     index = buffer.indexOf(ZSTD_MAGIC, index + 4)
   }
-  const parts = []
-  for (let frame = 0; frame < offsets.length; frame += 1) {
-    const start = offsets[frame]
-    const end = frame + 1 < offsets.length ? offsets[frame + 1] : buffer.length
-    try {
-      parts.push(zstdDecompressSync(buffer.subarray(start, end)).toString('utf8'))
-    } catch {
-      // Not a standalone frame boundary; skip.
+  if (offsets.length > 0) {
+    const parts = []
+    for (let frame = 0; frame < offsets.length; frame += 1) {
+      const start = offsets[frame]
+      const end = offsets[frame + 1] ?? buffer.length
+      try {
+        parts.push(zstdDecompressSync(buffer.subarray(start, end)).toString('utf8'))
+      } catch {
+        // Not a standalone frame boundary; skip.
+      }
     }
+    if (parts.length > 0) return parts.join('')
   }
-  return parts.join('')
+  return zstdDecompressSync(buffer).toString('utf8')
 }
 
 /** Every session log under `<home>/sessions`, recursively. */
@@ -424,6 +431,29 @@ function recallTitles(block) {
 }
 
 /**
+ * Titles listed by the title-only rotation block.
+ *
+ * Its bullets are `- [kind] Title` or `- [project] [kind] Title` — no date, no
+ * body. This block is exposure too: an entry whose title entered a conversation
+ * is discoverable, which is exactly what `exposureCoverage` promises.
+ */
+function indexTitles(block) {
+  const titles = []
+  let lines = 0
+  for (const raw of block.split('\n')) {
+    if (!raw.startsWith('- ')) continue
+    lines += 1
+    let line = raw.slice(2).trim()
+    if (line.startsWith('[project] ')) line = line.slice('[project] '.length)
+    const match = /^\[[a-z]+\] (.+)$/u.exec(line)
+    if (match === null) continue
+    const title = (match[1] ?? '').trim()
+    if (title.length > 0) titles.push(title)
+  }
+  return { titles, lines }
+}
+
+/**
  * Read every session log and collect what was ever injected and recalled.
  *
  * Primary source: real injections (plugin messages). When no log yields one —
@@ -445,6 +475,7 @@ async function scanSessionLogs(sessionsDir, warn) {
     summaryUntagged: 0,
     recallLines: 0,
     recallParsed: 0,
+    indexBlocks: 0,
     fallback: false,
   }
   for (const path of logs) {
@@ -461,7 +492,7 @@ async function scanSessionLogs(sessionsDir, warn) {
       continue
     }
     for (const line of text.split('\n')) {
-      if (!line.includes(SUMMARY_OPEN) && !line.includes(RECALL_OPEN)) continue
+      if (!line.includes(SUMMARY_OPEN) && !line.includes(RECALL_OPEN) && !line.includes(INDEX_OPEN)) continue
       let event
       try {
         event = JSON.parse(line)
@@ -470,7 +501,7 @@ async function scanSessionLogs(sessionsDir, warn) {
       }
       if (!isMemoryInjection(event)) continue
       const body = contentText(event)
-      if (!body.includes(SUMMARY_OPEN) && !body.includes(RECALL_OPEN)) continue
+      if (!body.includes(SUMMARY_OPEN) && !body.includes(RECALL_OPEN) && !body.includes(INDEX_OPEN)) continue
       for (const block of matchBlocks(body, SUMMARY_OPEN, SUMMARY_CLOSE)) {
         stats.injectedBlocks += 1
         const parsed = summaryTitles(block)
@@ -491,6 +522,16 @@ async function scanSessionLogs(sessionsDir, warn) {
         stats.recallLines += parsed.lines
         stats.recallParsed += parsed.titles.length
         for (const title of parsed.titles) recalled.add(titleKey(title))
+      }
+      for (const block of matchBlocks(body, INDEX_OPEN, INDEX_CLOSE)) {
+        stats.indexBlocks += 1
+        const parsed = indexTitles(block)
+        for (const title of parsed.titles) {
+          const key = titleKey(title)
+          const record = injected.get(key)
+          if (record === undefined) injected.set(key, { title, count: 1 })
+          else record.count += 1
+        }
       }
     }
   }
@@ -526,6 +567,16 @@ async function scanSessionLogs(sessionsDir, warn) {
         stats.recallLines += parsed.lines
         stats.recallParsed += parsed.titles.length
         for (const title of parsed.titles) recalled.add(titleKey(title))
+      }
+      for (const block of matchBlocks(text, INDEX_OPEN, INDEX_CLOSE)) {
+        stats.indexBlocks += 1
+        const parsed = indexTitles(block)
+        for (const title of parsed.titles) {
+          const key = titleKey(title)
+          const record = injected.get(key)
+          if (record === undefined) injected.set(key, { title, count: 1 })
+          else record.count += 1
+        }
       }
     }
   }

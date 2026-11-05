@@ -34,7 +34,7 @@ const FIELDS = [
   {
     field: 'maxSummaryBytes', kind: 'number', min: 0, step: 256,
     label: { zh: '摘要字节上限', en: 'Summary byte budget' },
-    hint: { zh: '一次会话注入的记忆摘要最大字节数，0 表示关闭注入。', en: 'Bytes of memory summary injected once per conversation. 0 disables injection.' },
+    hint: { zh: '一次会话注入的记忆摘要最大字节数，默认 4096；0 表示关闭注入。', en: 'Bytes of memory summary injected once per conversation, default 4096. 0 disables injection.' },
   },
   {
     field: 'maxSummaryEntries', kind: 'number', min: 1, step: 1,
@@ -82,6 +82,21 @@ const FIELDS = [
     hint: { zh: '单次按需补注块的字节上限，0 表示关闭按需补注。', en: 'Byte budget for one on-demand recall block. 0 disables recall deltas.' },
   },
   {
+    field: 'rawRecall', kind: 'boolean',
+    label: { zh: '补注带原始会话片段', en: 'Recall with original excerpts' },
+    hint: { zh: '开启后，按需补注块除了记忆摘要，还会附上这条记忆来源会话里的原始对话片段（已做凭据擦除、只读本机 session 日志、最多两条来源会话）。实测真实会话答题从 26/33 提到 32/33；默认关闭，因为它会把别的会话的原文注入当前上下文。', en: 'Adds original conversation excerpts from the memories\' source sessions to the recall block. Credential-scrubbed, local session logs only, at most two source sessions. Measured 26/33 -> 32/33 on real sessions; off by default because it injects another session\'s prose.' },
+  },
+  {
+    field: 'rawRecallBytes', kind: 'number', min: 0, step: 100,
+    label: { zh: '原始片段字节上限', en: 'Original excerpt byte budget' },
+    hint: { zh: '一次补注里原始会话片段的总字节上限；0 等于关闭原始片段（即使总开关打开）。', en: 'Byte budget for the raw-excerpt half of one recall block. 0 disables excerpts even when the master switch is on.' },
+  },
+  {
+    field: 'rawRecallExcerpts', kind: 'number', min: 0, step: 1,
+    label: { zh: '原始片段条数上限', en: 'Original excerpts per recall' },
+    hint: { zh: '一次补注最多带几条原始片段；0 等于关闭。', en: 'Most original excerpts one recall block may carry. 0 disables them.' },
+  },
+  {
     field: 'recallMinQueryChars', kind: 'number', min: 0, step: 1,
     label: { zh: '触发补注的最短发问长度', en: 'Shortest turn worth recalling' },
     hint: { zh: '用户消息短于该字符数时不判定补注（例如「好」「继续」），避免为无意义的回合扫描整个记忆库。', en: 'A user turn shorter than this is skipped instead of scanning the store, so bare acknowledgements cost nothing.' },
@@ -90,6 +105,21 @@ const FIELDS = [
     field: 'recallMinTerms', kind: 'number', min: 1, step: 1,
     label: { zh: '补注所需命中词数', en: 'Strong terms required to recall' },
     hint: { zh: '一条记忆要被按需补注，除了达到相关度下限，还必须在标题、别名、标签或「何时有用」里命中这么多个不同的提问词。中文提问尤其需要：只共用「插件」「日志」这类常见词不算证据，共享两个词才算。设为 1 就只按相关度打分判断（会明显更容易误补）。', en: 'Distinct query terms that must land in the title, keys, tags, or appliesTo before a memory may be recalled. This is what stops a Chinese turn from recalling everything that shares a common word; set it to 1 to gate on relevance alone.' },
+  },
+  {
+    field: 'injectDelta', kind: 'boolean',
+    label: { zh: '会后补注新记忆', en: 'Announce late memories' },
+    hint: { zh: '摘要注入之后才写入的记忆（例如后台抽取、合并的结果）在下一步用一个很小的块补一次：每个会话最多两次、每次 800 字节，只列新增或更新的条目。', en: 'Memories written after the summary was shown (background extraction, consolidation) get one small block on the next step: at most twice per conversation, 800 bytes each, new or updated entries only.' },
+  },
+  {
+    field: 'rotationEntries', kind: 'number', min: 0, step: 1,
+    label: { zh: '每会话轮转标题数', en: 'Rotation titles per conversation' },
+    hint: { zh: '摘要装不下的记忆，用一份只列标题的小块轮转：从未曝光的最先，其次是最久没出现过的，默认 16 条（12 全局 / 4 项目，硬分配）、约 1.6KB。0 关闭。它让整库在几十个会话里都能被看见，而不会永远只注入同一小批。', en: 'Memories the summary had no room for are rotated in as a title-only block: never-surfaced first, then the longest-unseen, default 16 per conversation (12 global / 4 project, hard split), about 1.6KB. 0 disables it.' },
+  },
+  {
+    field: 'rotationEveryTurns', kind: 'number', min: 0, step: 1,
+    label: { zh: '轮转间隔（用户轮次）', en: 'Rotation cadence (user turns)' },
+    hint: { zh: '长会话里每隔这么多轮用户发言再补一次轮转块；0 表示整个会话只补一次。默认 8：一个几小时的会话会分批看到新标题，而不是首轮之后再也不更新。', en: 'Inside one long conversation, emit a fresh rotation block every this many user turns; 0 emits only once. The default 8 lets a multi-hour session meet new titles in batches instead of freezing after its first turn.' },
   },
   {
     field: 'reflectionEnabled', kind: 'boolean',
@@ -104,22 +134,7 @@ const FIELDS = [
   {
     field: 'noticesEnabled', kind: 'boolean',
     label: { zh: '允许它主动开口', en: 'Let it speak first' },
-    hint: { zh: '每天一条整理简报、待裁决积压超时提醒。先走桌宠气泡，桌宠不在时退回系统通知。关掉则只在你问的时候回答。', en: 'A daily digest of maintenance and a warning when decisions have waited too long. Desktop pet bubble first, system notification as fallback. Off means it only answers.' },
-  },
-  {
-    field: 'petId', kind: 'text',
-    label: { zh: '桌宠 id', en: 'Desktop pet id' },
-    hint: { zh: '留空则从 dsh-pet 的配置里读第一个宠物的 id（本机是 main / 蓝毛小女仆）。', en: 'Empty reads the first pet from the pet plugin\'s own config (main on this machine).' },
-  },
-  {
-    field: 'petRouteId', kind: 'text',
-    label: { zh: '桌宠路由 id', en: 'Pet route id' },
-    hint: { zh: '桌宠注册的 HTTP 前缀里的那一段（/dsh-pet-<id>）。只有换桌宠版本时才需要改。', en: 'Route segment in the pet HTTP prefix (/dsh-pet-<id>). Only change it if the pet changes it.' },
-  },
-  {
-    field: 'petBubbleMs', kind: 'number', min: 1000, step: 1000,
-    label: { zh: '气泡停留时长', en: 'Bubble duration' },
-    hint: { zh: '一条通知在桌宠上停留多久（毫秒）。', en: 'How long one notice stays on screen, in milliseconds.' },
+    hint: { zh: '每天一条整理简报、待裁决积压超时提醒、到期承诺提醒，以系统通知的形式送达。关掉则只在你问的时候回答。', en: 'A daily digest, a backlog warning, and overdue-promise reminders, delivered as system notifications. Off means it only answers.' },
   },
   {
     field: 'noticeQuietHours', kind: 'text',
@@ -134,7 +149,7 @@ const FIELDS = [
   {
     field: 'autoDecide', kind: 'boolean',
     label: { zh: '合并争议交给 AI 裁决', en: 'Let an AI adjudicate merge disputes' },
-    hint: { zh: '合并里那些「只是判断、不是承诺」的变更（例如这条被读过 2 次就想退役、改写后正文变短）改由一次受限子代理裁决：它只回答"有没有丢信息"，答 accept 或 reject 并给置信度。永久保留、人手写、跨作用域搬移三类仍然等你。关掉则全部进「待裁决」。', en: 'Changes blocked only because they are a judgement rather than a promise are adjudicated by one tool-free child that answers accept or reject with a confidence. Permanent, user-written and scope-moving items still wait for you. Off sends everything to the panel.' },
+    hint: { zh: '合并里那些「只是判断、不是承诺」的变更（例如这条被读过 2 次就想退役、改写后正文变短）改由一次受限子代理裁决：它只回答"有没有丢信息"，答 accept 或 reject 并给置信度。永久保留、人手写两类仍然等你（作用域不归合并改，已有记忆钉在原作用域）。关掉则全部进「待裁决」。', en: 'Changes blocked only because they are a judgement rather than a promise are adjudicated by one tool-free child that answers accept or reject with a confidence. Permanent and user-written items still wait for you; a merge never moves a memory between scopes. Off sends everything to the panel.' },
   },
   {
     field: 'autoDecideMinConfidence', kind: 'number', min: 0, max: 1, step: 0.05,
@@ -307,6 +322,36 @@ const FIELDS = [
     ],
     label: { zh: '日志等级', en: 'Log level' },
     hint: { zh: '本插件日志文件的详细程度。默认 info：错误、警告，以及每轮抽取/合并摘要。debug 还会记录每条归档、补注、复审决策。文件路径见 /memories stats。', en: 'How much this plugin writes to its own log file. info keeps errors, warnings, and one line per pass; debug adds every retention, recall, and review decision. /memories stats prints the path.' },
+  },
+  {
+    field: 'syncRemote', kind: 'text',
+    label: { zh: '记忆库同步远端（Git）', en: 'Memory store remote (Git)' },
+    hint: { zh: '记忆库本身就是一个 git 仓库，这里填一台私有仓库的地址（如 git@github.com:you/dsh-cross-memory-store.git），多台机器就会共用同一份记忆。留空则只在本机提交历史、不联网。写入路径只做本地提交，拉取与推送在后台按间隔进行。', en: 'The store is a git repository; point this at one private repository and every machine shares the same memories. Empty keeps local history only. Writes commit locally; fetch and push happen in the background.' },
+  },
+  {
+    field: 'syncClock', kind: 'text',
+    label: { zh: '定时同步时刻（本地时间）', en: 'Scheduled sync times (local)' },
+    hint: { zh: '逗号分隔的 HH:MM，例如 12:05,18:05——默认在 DeepSeek 谷时开始后几分钟，冲突合并的模型调用最便宜。留空则改按下面的间隔同步。', en: 'Comma separated HH:MM, e.g. 12:05,18:05 — a few minutes after DeepSeek off-peak pricing starts, when a conflict merge costs least. Empty falls back to the interval below.' },
+  },
+  {
+    field: 'syncIntervalMinutes', kind: 'number', min: 0, step: 5,
+    label: { zh: '后台同步间隔（分钟）', en: 'Background sync interval (minutes)' },
+    hint: { zh: '每隔这么久拉取、变基并推送一次。0 停止定时同步，只保留本地提交。', en: 'How often to fetch, rebase and push in the background. 0 stops the timer and keeps local commits only.' },
+  },
+  {
+    field: 'syncDebounceSeconds', kind: 'number', min: 0, step: 1,
+    label: { zh: '写入合并窗口（秒）', en: 'Write debounce (seconds)' },
+    hint: { zh: '一串连续写入会在这么长时间内合并成一次提交，避免每条记忆一个 commit。真实网络动作永远不在写入路径上。', en: 'A burst of writes is folded into one commit within this window. Network work never runs on the write path.' },
+  },
+  {
+    field: 'syncConflictProvider', kind: 'text',
+    label: { zh: '冲突解析 Provider', en: 'Conflict resolver provider' },
+    hint: { zh: '两台机器改了同一条记忆时，用来合并两次改动的模型提供方。留空回落到抽取路由；两者都没有时按 updated 取新版本，旧版本留在 git 历史里。', en: 'Provider used to merge two revisions of the same memory. Empty falls back to the extraction route; with neither, the newer updated wins and the older revision stays in git history.' },
+  },
+  {
+    field: 'syncConflictModel', kind: 'text',
+    label: { zh: '冲突解析 Model', en: 'Conflict resolver model' },
+    hint: { zh: '合并冲突时使用的模型。留空回落到抽取模型。', en: 'Model used to merge a conflicting memory. Empty falls back to the extraction model.' },
   },
   {
     field: 'traceMaintenance', kind: 'boolean',

@@ -26,7 +26,7 @@ test('a profile round-trips through the store directory', async (t) => {
   const path = await writePersona(dir, '他要求先确认再改代码。')
   assert.match(path, /persona[\\/]human\.md$/u)
   assert.equal(await readPersona(dir), '他要求先确认再改代码。')
-  assert.match(await readFile(personaPath(dir, 'human'), 'utf8'), /先确认再改代码/u)
+  assert.match(await readFile(personaPath(dir), 'utf8'), /先确认再改代码/u)
 })
 
 test('the block is framed, dated, and explicitly not an instruction set', () => {
@@ -78,5 +78,4 @@ test('a legacy single-file profile is still read as the human block', async (t) 
   t.after(() => rm(dir, { recursive: true, force: true }))
   await writeFile(join(dir, 'persona.md'), '旧的单文件画像\n', 'utf8')
   assert.equal(await readPersona(dir), '旧的单文件画像', 'upgrading does not lose the profile')
-  assert.equal(await readPersona(dir, 'assistant'), undefined, 'but it is not reused as the pet persona')
 })

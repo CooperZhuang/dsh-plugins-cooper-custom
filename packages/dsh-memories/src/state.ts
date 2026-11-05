@@ -120,6 +120,8 @@ export class StateStore {
   private readonly meta = new Map<string, string>()
   /** Per-session memory switches, when the SQL driver is unavailable. */
   private readonly sessionModes = new Map<string, 'on' | 'off'>()
+  /** Last injection per conversation, when the SQL driver is unavailable. */
+  private readonly injections = new Map<string, { at: number; ids: readonly string[] }>()
   private readonly limits = new Map<string, LimitState>()
   /** Why the SQL driver is absent, for one diagnostic line. */
   readonly degradedReason: string | undefined
@@ -180,6 +182,15 @@ export class StateStore {
         CREATE TABLE IF NOT EXISTS meta (
           key TEXT PRIMARY KEY,
           value TEXT NOT NULL
+        );
+        -- What each conversation was already shown, so a later delta injection
+        -- can name only what is new. Durable because the conversation (and the
+        -- block it carries) survives a restart: an in-memory marker would
+        -- re-inject the whole delta on the first step after every restart.
+        CREATE TABLE IF NOT EXISTS injections (
+          session TEXT PRIMARY KEY,
+          at INTEGER NOT NULL,
+          ids TEXT NOT NULL
         );
       `)
       this.migrate()
@@ -308,6 +319,45 @@ export class StateStore {
         activityAt: Number(row.activity_at),
       },
     }))
+  }
+
+  /**
+   * What one conversation was already shown, and when.
+   *
+   * The ids are the entries the model has already seen in this conversation;
+   * `at` is the moment of the last injection. A delta pass compares entry
+   * `updated` stamps against `at`, so both are needed.
+   *
+   * @param id - session id.
+   * @returns the record, or `undefined` when the conversation was never injected.
+   */
+  getInjection(id: string): { at: number; ids: readonly string[] } | undefined {
+    if (this.db === undefined) return this.injections.get(id)
+    const row = this.db.prepare('SELECT at, ids FROM injections WHERE session = ?').get(id) as { at: number; ids: string } | undefined
+    if (row === undefined) return undefined
+    try {
+      const parsed = JSON.parse(row.ids) as unknown
+      return {
+        at: Number(row.at),
+        ids: Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === 'string') : [],
+      }
+    } catch {
+      // A corrupt id list is not a reason to re-inject everything: keep the
+      // timestamp and treat the conversation as having been shown nothing.
+      return { at: Number(row.at), ids: [] }
+    }
+  }
+
+  /** Record that a conversation was shown these entries at `at`. */
+  putInjection(id: string, record: { at: number; ids: readonly string[] }): void {
+    if (this.db === undefined) {
+      this.injections.set(id, { at: record.at, ids: [...record.ids] })
+      return
+    }
+    this.db.prepare(`
+      INSERT INTO injections (session, at, ids) VALUES (?, ?, ?)
+      ON CONFLICT(session) DO UPDATE SET at = excluded.at, ids = excluded.ids
+    `).run(id, Math.trunc(record.at), JSON.stringify(record.ids))
   }
 
   /**
@@ -458,17 +508,30 @@ export class StateStore {
     return row === undefined ? { uses: 0, lastUsedAt: 0 } : { uses: Number(row.uses), lastUsedAt: Number(row.last_used_at) }
   }
 
-  /** Every usage row, for the summary ranking pass. */
-  listUsage(): { scope: string; id: string; uses: number; lastUsedAt: number }[] {
+  /**
+   * Every usage row, for the summary ranking pass.
+   *
+   * `surfacedAt` is the authoritative "was this ever listed in an injected
+   * block" clock. The entry file mirrors it for human readers, but the mirror
+   * can be stale (it is refreshed at most hourly, and entries written before
+   * this table existed never got a row): selection decisions read THIS.
+   */
+  listUsage(): { scope: string; id: string; uses: number; lastUsedAt: number; surfacedAt: number }[] {
     if (this.db === undefined) {
       return [...this.usage.entries()].map(([key, value]) => {
         const [scope, id] = key.split('\u0000')
-        return { scope: scope ?? '', id: id ?? '', uses: value.uses, lastUsedAt: value.lastUsedAt }
+        return { scope: scope ?? '', id: id ?? '', uses: value.uses, lastUsedAt: value.lastUsedAt, surfacedAt: value.surfacedAt }
       })
     }
-    const rows = this.db.prepare('SELECT scope, id, uses, last_used_at FROM usage').all() as
-      { scope: string; id: string; uses: number; last_used_at: number }[]
-    return rows.map((row) => ({ scope: row.scope, id: row.id, uses: Number(row.uses), lastUsedAt: Number(row.last_used_at) }))
+    const rows = this.db.prepare('SELECT scope, id, uses, last_used_at, surfaced_at FROM usage').all() as
+      { scope: string; id: string; uses: number; last_used_at: number; surfaced_at: number }[]
+    return rows.map((row) => ({
+      scope: row.scope,
+      id: row.id,
+      uses: Number(row.uses),
+      lastUsedAt: Number(row.last_used_at),
+      surfacedAt: Number(row.surfaced_at),
+    }))
   }
 
   /**

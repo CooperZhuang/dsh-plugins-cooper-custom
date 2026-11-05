@@ -88,4 +88,11 @@ test('extraction keeps a real deadline and drops an invented one', () => {
   assert.equal(parsed.loops.length, 2)
   assert.equal(parsed.loops[0]?.dueAt, Date.parse('2026-10-30T00:00:00Z'))
   assert.equal(parsed.loops[1]?.dueAt, undefined, 'an unparseable deadline is dropped, never defaulted')
+  // A model that reads "things the user would do" and answers with bare strings
+  // must not lose the promises: that exact reply shape appeared in the e2e run.
+  const absurd = parseExtraction(JSON.stringify({ memories: [], summary: 's', loops: [{ text: '把下周的评审材料准备好', dueAt: '1999-01-01' }] }), 10, 'session-1')
+  assert.equal(absurd.loops[0]?.text, '把下周的评审材料准备好')
+  assert.equal(absurd.loops[0]?.dueAt, undefined, 'a deadline years outside the clock is a guess, not a date')
+  const bare = parseExtraction(JSON.stringify({ memories: [], summary: 's', loops: ['把登录页的截图补齐', '发截图前先过一遍文案', ''] }), 10, 'session-1')
+  assert.deepEqual(bare.loops.map((loop) => loop.text), ['把登录页的截图补齐', '发截图前先过一遍文案'])
 })

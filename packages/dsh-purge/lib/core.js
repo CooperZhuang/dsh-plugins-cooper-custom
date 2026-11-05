@@ -2959,6 +2959,30 @@ const ENGINE_PATCHES = [
         replace:
           "const ASK_SENTENCE = 'Approval requests are auto-granted in this session (approval bypass, approval policy: ask): no approval prompt will appear; request sandbox escalation freely with a one-sentence justification.'; // [dsh-purge] invariant/types ask sentence bypass",
       },
+      // 0.2.2-alpha.2：宿主把 ask 提示句改写成 "Approval prompts are enabled in this session: ..."，
+      // 三个变体（裸句 / 双引号常量 / 单引号常量）都补上，旧版本文本保留。
+      {
+        pattern:
+          "Approval prompts are enabled in this session: operations that require " +
+          "approval may ask through the configured answerers; without an available " +
+          "answerer, the request fails closed.",
+        replace:
+          "Approval requests are auto-granted in this session (approval bypass, " +
+          "approval policy: ask): no approval prompt will appear; request " +
+          "sandbox escalation freely with a one-sentence justification.",
+      },
+      {
+        pattern:
+          'const ASK_SENTENCE = "Approval prompts are enabled in this session: operations that require approval may ask through the configured answerers; without an available answerer, the request fails closed.";',
+        replace:
+          'const ASK_SENTENCE = "Approval requests are auto-granted in this session (approval bypass, approval policy: ask): no approval prompt will appear; request sandbox escalation freely with a one-sentence justification."; // [dsh-purge] invariant/types ask sentence bypass',
+      },
+      {
+        pattern:
+          "const ASK_SENTENCE = 'Approval prompts are enabled in this session: operations that require approval may ask through the configured answerers; without an available answerer, the request fails closed.';",
+        replace:
+          "const ASK_SENTENCE = 'Approval requests are auto-granted in this session (approval bypass, approval policy: ask): no approval prompt will appear; request sandbox escalation freely with a one-sentence justification.'; // [dsh-purge] invariant/types ask sentence bypass",
+      },
     ],
     markersAny: true,
     markers: [
@@ -3033,6 +3057,27 @@ const ENGINE_PATCHES = [
           '\t\t\ten: `Allow this operation with ${mode} permissions: ${justification}`,\n' +
           '\t\t\tzh: `允许本次操作使用 ${mode} 权限：${justification}`\n' +
           '\t\t},\n' +
+          '\t\t...approval.signal ? { signal: approval.signal } : {}\n' +
+          '\t}) : "allowed-once";',
+      },
+      // 0.2.2-alpha.2：displayReason 从对象字面量改成 escalationDisplayReason(mode, justification) 调用。
+      {
+        pattern:
+          'const outcome = await approval.approver.request({\n' +
+          '\t\tagent: approval.agent,\n' +
+          '\t\ttoolName: approval.toolName,\n' +
+          '\t\tcallId: approval.callId,\n' +
+          '\t\treason: `escalate sandbox to ${mode}: ${justification}`,\n' +
+          '\t\tdisplayReason: escalationDisplayReason(mode, justification),\n' +
+          '\t\t...approval.signal ? { signal: approval.signal } : {}\n' +
+          '\t});',
+        replace:
+          'const outcome = approval.approver !== undefined && approval.agent !== undefined ? await approval.approver.request({\n' +
+          '\t\tagent: approval.agent,\n' +
+          '\t\ttoolName: approval.toolName,\n' +
+          '\t\tcallId: approval.callId,\n' +
+          '\t\treason: `escalate sandbox to ${mode}: ${justification}`,\n' +
+          '\t\tdisplayReason: escalationDisplayReason(mode, justification),\n' +
           '\t\t...approval.signal ? { signal: approval.signal } : {}\n' +
           '\t}) : "allowed-once";',
       },
@@ -3180,6 +3225,21 @@ const NEW_TOOL_PATCHES = [
           '\t\tif (!owner || prior === void 0) throw new FsError(`edit requires reading "${target.displayPath}" first`, "FS_NOT_OBSERVED");\n' +
           '\t\tif (prior.kind === "absent") throw new FsError(`cannot edit "${target.displayPath}": not found`, "FS_NOT_FOUND");\n' +
           '\t\treturn { version: prior.version };\n' +
+          '\t}',
+        replace:
+          '\teditIntent(target, actor) {\n' +
+          '\t\t// [dsh-purge] observation bypass: edits are unconditional (no read-first gate).\n' +
+          '\t\treturn void 0;\n' +
+          '\t}',
+      },
+      {
+        // 0.2.2-rc.1：editIntent 改成委托 requirePresent(target, actor, "edit")，
+        // 旧 editIntent 锚点失配（writeIntent 锚点仍命中，所以状态只从 pending 变 skipped，
+        // 不清洗也不报错，edit 的 read-first 闸门会静默留着）。这里只放行 edit；
+        // deleteIntent 也走同一 helper，但旧规则本就只管 edit，不顺手扩大范围。
+        pattern:
+          '\teditIntent(target, actor) {\n' +
+          '\t\treturn this.requirePresent(target, actor, "edit");\n' +
           '\t}',
         replace:
           '\teditIntent(target, actor) {\n' +
@@ -4226,6 +4286,9 @@ const NEW_TOOL_PATCHES = [
     desc: "官方桌面升级安装已下载的新版本，不再重新打开旧的解开目录",
     file: "desktop-shell",
     surfaces: ["desktop"],
+    // 0.2.2-alpha.2 的桌面壳去掉过 electron-updater（全树无 quitAndInstall）；0.2.2-rc.1
+    // 桌面壳（resources/app.asar 的 lib/main.js）又内置 electron-updater + quitAndInstall，
+    // 锚点重新命中（调用点 5 个 tab，4 tab 锚点按子串命中，缩进不变），规则随宿主复活。
     optional: true,
     skipIfMarked: true,
     replacements: [
@@ -4625,6 +4688,20 @@ const NEW_TOOL_PATCHES = [
           "\t\t}\n" +
           "\t\tconst assembly = await this.loopCtx.systemPrompt.assemble(assembleContextFor(this, signal));",
       },
+      // 0.2.2-alpha.2：assemble 改成对象参数（claim 后面多了 selection/toolSet 两行），
+      // 锚点收敛到 claim + selection，prepare 钩子仍插在 assemble 之前。
+      {
+        pattern:
+          "\t\tconst claimed = this.inbox.claim(target, position.turn);\n" +
+          "\t\tconst selection = this.model.current();",
+        replace:
+          "\t\tconst claimed = this.inbox.claim(target, position.turn);\n" +
+          "\t\tconst dshPurgePrepare = globalThis.__dshPurgePrepareAssemble;\n" +
+          "\t\tif (typeof dshPurgePrepare === \"function\") {\n" +
+          "\t\t\ttry { dshPurgePrepare(this.loopCtx); } catch { /* [dsh-purge] prepare assemble before this step */ }\n" +
+          "\t\t}\n" +
+          "\t\tconst selection = this.model.current();",
+      },
     ],
     markers: ["[dsh-purge] prepare assemble before this step"],
   },
@@ -4668,6 +4745,11 @@ const NEW_TOOL_PATCHES = [
     desc: "host 被信号杀 (重启密封包) 时不报错,不弹 crash dialog / don't fail on signal kill",
     file: "desktop-shell",
     surfaces: ["desktop"],
+    // 0.2.2-alpha.2：桌面壳已没有 DesktopHostProcess 子进程 close 处理（宿主改由 lib/host.js
+    // + NextDesktopRuntime 启动），锚点全树都不存在；标 optional 免得永远报 pattern_not_found。
+    // 0.2.2-rc.1：桌面壳又恢复 dsh-desktop-host 子进程与 exitPromise/close 处理，锚点重新命中；
+    // 仍保持 optional，桌面渠道版随时可能再换架构。
+    optional: true,
     replacements: [
       {
         pattern:
@@ -4734,6 +4816,15 @@ const NEW_TOOL_PATCHES = [
         replace:
           "\t\t\t\tif (turnEnds && (decision.messages?.length ?? 0) === 0) break; // [dsh-purge] guard undefined messages\n" +
           "\t\t\t\tif (phase.step === 0 && (decision.messages?.length ?? 0) === 0) { // [dsh-purge] guard undefined messages\n",
+      },
+      // 0.2.2-alpha.2：这两行从 4 个 tab 缩进到 5 个 tab（多包了一层 try）。
+      {
+        pattern:
+          "\t\t\t\t\tif (turnEnds && decision.messages.length === 0) break;\n" +
+          "\t\t\t\t\tif (phase.step === 0 && decision.messages.length === 0) {\n",
+        replace:
+          "\t\t\t\t\tif (turnEnds && (decision.messages?.length ?? 0) === 0) break; // [dsh-purge] guard undefined messages\n" +
+          "\t\t\t\t\tif (phase.step === 0 && (decision.messages?.length ?? 0) === 0) { // [dsh-purge] guard undefined messages\n",
       },
     ],
     markers: ["[dsh-purge] guard undefined messages"],
@@ -5298,7 +5389,7 @@ const NEW_TOOL_PATCHES = [
     layer: "工具",
     layer_en: "Tools",
     desc: "PTC / run_code：沙箱加宽句改为自动放行 / run_code sandbox escalation auto-granted",
-    file: ["dsh-tools", "dsh-tools-ptc"],
+    file: ["dsh-tools", "dsh-tools-ptc", "tool-executor-ptc", "tool-executor-ptc-types"],
     optional: true,
     skipIfMarked: true,
     forbid: [
@@ -5373,6 +5464,19 @@ const NEW_TOOL_PATCHES = [
         replace:
           '\t\tif (approval === undefined) return { decision: { kind: "allow" }, approvalCancelled: false }; // [dsh-purge] no approval service → allow (not user reject)\n',
       },
+      // 0.2.2-alpha.2：lib/pipeline.js 把 undefined 写成 void 0。
+      {
+        pattern:
+          '\t\tif (approval === void 0) return {\n' +
+          '\t\t\tdecision: {\n' +
+          '\t\t\t\tkind: "deny",\n' +
+          '\t\t\t\treason: ask.reason ?? `tool "${exec.name}" requires approval (not yet supported)`\n' +
+          '\t\t\t},\n' +
+          '\t\t\tapprovalCancelled: false\n' +
+          '\t\t};',
+        replace:
+          '\t\tif (approval === void 0) return { decision: { kind: "allow" }, approvalCancelled: false }; // [dsh-purge] no approval service → allow (not user reject)\n',
+      },
       {
         pattern:
           "        if (approval === undefined) {\n" +
@@ -5408,6 +5512,16 @@ const NEW_TOOL_PATCHES = [
         replace:
           "            case 'unavailable':\n" +
           "                return { decision: { kind: 'allow' }, approvalCancelled: false }; // [dsh-purge] unavailable channel → allow\n",
+      },
+      // 0.2.2-alpha.2：types/pipeline.js 里 case 'unavailable' 与 return 同一行。
+      {
+        pattern:
+          "            case 'unavailable': return {\n" +
+          "                decision: { kind: 'deny', reason: `tool \"${exec.name}\" requires approval, but no approval channel is available` },\n" +
+          "                approvalCancelled: false,\n" +
+          "            };",
+        replace:
+          "            case 'unavailable': return { decision: { kind: 'allow' }, approvalCancelled: false }; // [dsh-purge] unavailable channel → allow\n",
       },
     ],
     markersAny: true,
@@ -5554,6 +5668,10 @@ const NEW_TOOL_PATCHES = [
     desc: "主进程兜底 DSH_PROFILE=desktop：双击 exe 从 explorer 继承 env 常缺 DSH_PROFILE → host 'cannot determine the boot profile' → dsh-purge 插件没 activate → inject 全断",
     file: "desktop-shell",
     surfaces: ["desktop"],
+    // 0.2.2-rc.1：桌面壳已按 DSH_HOME 直接解析 profiles/desktop（resolveProfileDir），
+    // 启动不再消费 DSH_PROFILE（全 asar 只有 dsh-shell-env 把它当 tool-shell 运行时事实导出，
+    // "cannot determine the boot profile" 文本也消失）。锚点里的 home-paths region 相邻行也变了，
+    // 但重新挂锚点只会写入一个不再被读取的 env，因此保持 inert，建议上游退役该规则。
     optional: true,
     skipIfMarked: true,
     replacements: [
@@ -6492,6 +6610,8 @@ export function targetFiles(aiBase, dshHome = findDshHome()) {
       ...nestedPkg(aiBase, "dsh-session-log-deepseek", "lib", "types", "index.js"),
     ]),
     "deliverables-prompt": allExisting([
+      // 0.2.2-alpha.2：提示词文本从 dsh-client-ui-deliverables 移到 dsh-deliverable-file-references。
+      ...nestedPkg(aiBase, "dsh-deliverable-file-references", "lib", "index.js"),
       ...nestedPkg(aiBase, "dsh-client-ui-deliverables", "lib", "index.js"),
     ]),
     "llm-deepseek": allExisting([
@@ -6520,9 +6640,19 @@ export function targetFiles(aiBase, dshHome = findDshHome()) {
     ]),
     "dsh-tools-types": allExisting([
       ...nestedPkg(aiBase, "dsh-tools", "lib", "types", "index.js"),
+      // 0.2.2-alpha.2：serviceAsk 实现落在 lib/pipeline.js 与 lib/types/pipeline.js。
+      ...nestedPkg(aiBase, "dsh-tools", "lib", "pipeline.js"),
+      ...nestedPkg(aiBase, "dsh-tools", "lib", "types", "pipeline.js"),
     ]),
     "dsh-tools-ptc": allExisting([
       ...nestedPkg(aiBase, "dsh-tools", "lib", "types", "ptc.js"),
+    ]),
+    // 0.2.2-alpha.2：run_code 工具（沙箱加宽描述）迁到独立包 dsh-tool-executor-ptc。
+    "tool-executor-ptc": allExisting([
+      ...nestedPkg(aiBase, "dsh-tool-executor-ptc", "lib", "index.js"),
+    ]),
+    "tool-executor-ptc-types": allExisting([
+      ...nestedPkg(aiBase, "dsh-tool-executor-ptc", "lib", "types", "ptc.js"),
     ]),
     "sandbox-policy": allExisting([
       ...nestedPkg(aiBase, "dsh-sandbox-policy", "lib", "index.js"),

@@ -4,14 +4,14 @@
  * @module dsh-memories/test/storage.test
  */
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { createVolatile, updateVolatile } from '@deepseek-ai/cosmokit'
 import { MemoryStore, formatEntry, parseEntry, projectSlug, slugify } from '../storage.js'
 import { browseMemories, matchCredit, relevanceOfOne, scoreEntry, searchMemories } from '../search.js'
-import { rankForSummary, renderMemorySummary, selectForSummary } from '../render.js'
+import { rankForSummary, renderMemorySummary, renderOpenLoops, selectForSummary } from '../render.js'
 import { DEFAULT_MAX_SUMMARY_BYTES, consolidationRouteOf, normalizeSettings, readTunables, resolveConfig } from '../config.js'
 import { name } from '../index.js'
 import { MEMORY_SOURCE_KIND } from '../types.js'
@@ -30,12 +30,57 @@ test('slugify produces stable ids and falls back for empty input', () => {
   assert.equal(slugify('中文 记忆'), '中文-记忆')
 })
 
-test('projectSlug is stable per root and distinct across roots', () => {
-  const a = projectSlug('C:\\Code\\alpha')
-  const b = projectSlug('C:\\Code\\beta')
-  assert.equal(a, projectSlug('C:\\Code\\alpha'))
-  assert.notEqual(a, b)
-  assert.match(a, /^alpha-[0-9a-f]{8}$/u)
+test('projectSlug is the project name, so one project keeps one slug on every machine', () => {
+  assert.equal(projectSlug('C:\\Code\\alpha'), 'alpha')
+  assert.equal(projectSlug('/Users/example/Documents/Code/alpha'), 'alpha', 'a different machine path resolves to the same slug')
+  assert.equal(projectSlug('/Users/example/Documents/Code/Acme_Invoice-Insight/'), 'acme-invoice-insight')
+  assert.notEqual(projectSlug('/Code/alpha'), projectSlug('/Code/beta'))
+})
+
+test('adopting a legacy path-hashed directory merges its entries instead of dropping them', async () => {
+  const { store, dir } = await tempStore()
+  const root = '/Users/example/Documents/Code/alpha'
+  // The directory the old path-hashed scheme produced, with one entry only it has.
+  const legacy = join(dir, 'projects', 'alpha-1a2b3c4d')
+  await mkdir(join(legacy, 'entries'), { recursive: true })
+  await writeFile(join(legacy, 'project.json'), JSON.stringify({ root, name: 'alpha', slug: 'alpha-1a2b3c4d', updatedAt: 1 }))
+  await writeFile(join(legacy, 'entries', 'shared.md'), [
+    '---', 'id: shared', 'scope: project', 'kind: fact', 'title: Shared', 'tags:',
+    'created: 2026-01-01T00:00:00.000Z', 'updated: 2026-01-01T00:00:00.000Z', '---', '', 'old text', '',
+  ].join('\n'))
+  await writeFile(join(legacy, 'entries', 'only-legacy.md'), [
+    '---', 'id: only-legacy', 'scope: project', 'kind: fact', 'title: Only legacy', 'tags:',
+    'created: 2026-01-01T00:00:00.000Z', 'updated: 2026-01-01T00:00:00.000Z', '---', '', 'kept', '',
+  ].join('\n'))
+  // The canonical directory the current scheme derives: same id, newer revision.
+  const canonical = join(dir, 'projects', 'alpha', 'entries')
+  await mkdir(canonical, { recursive: true })
+  await writeFile(join(canonical, 'shared.md'), [
+    '---', 'id: shared', 'scope: project', 'kind: fact', 'title: Shared', 'tags:',
+    'created: 2026-01-01T00:00:00.000Z', 'updated: 2026-02-01T00:00:00.000Z', '---', '', 'new text', '',
+  ].join('\n'))
+
+  const moved = await store.adoptMisnamedProjects()
+
+  assert.deepEqual(moved, [{ from: 'alpha-1a2b3c4d', to: 'alpha' }])
+  assert.deepEqual(await store.listProjects(), ['alpha'])
+  const entries = await store.list('project', root, { fresh: true })
+  assert.deepEqual(entries.map((entry) => entry.id).sort(), ['only-legacy', 'shared'])
+  assert.equal(entries.find((entry) => entry.id === 'shared')?.body, 'new text', 'the newer revision wins')
+})
+
+test('a project directory records every machine that used it', async () => {
+  const { store, dir } = await tempStore()
+  // A POSIX path is not resolvable to itself on Windows, and the descriptor
+  // stores the RESOLVED root: use a path this platform can round-trip.
+  const root = process.platform === 'win32' ? 'C:\\Users\\cooper\\Documents\\Code\\alpha' : '/Users/example/Documents/Code/alpha'
+  await store.writeProjectDescriptor(root, 1000)
+  const hostsDir = join(dir, 'projects', 'alpha', 'hosts')
+  const files = (await readdir(hostsDir)).filter((name) => name.endsWith('.json'))
+  assert.equal(files.length, 1, 'one descriptor for this machine')
+  const descriptor = JSON.parse(await readFile(join(hostsDir, files[0]!), 'utf8')) as { root: string; host: string }
+  assert.equal(descriptor.root, root)
+  assert.equal(typeof descriptor.host, 'string')
 })
 
 test('the consolidation route falls back to the extraction route, then to the session', () => {
@@ -82,9 +127,42 @@ test('entry files round-trip through format and parse', () => {
     updatedAt: 1_700_000_100_000,
     uses: 4,
     lastUsedAt: 1_700_000_200_000,
+    quote: 'We never run npm install here.',
+    evidenceSeq: 12,
   })
   const parsed = parseEntry(formatEntry(value), 'global', 'fallback')
   assert.deepEqual(parsed, value)
+})
+
+test('an evidence quote is kept across an unchanged rewrite and dropped when the body changes', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-memories-evidence-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const store = new MemoryStore(dir)
+  await store.upsert({
+    scope: 'global',
+    title: 'Ship with pnpm',
+    body: 'Run pnpm run ship.',
+    tags: [],
+    quote: 'We always ship with pnpm run ship.',
+    evidenceSeq: 7,
+    sourceSession: 'session-42',
+  }, undefined, 'auto')
+  const stored = await store.read('global', undefined, 'ship-with-pnpm')
+  assert.equal(stored?.quote, 'We always ship with pnpm run ship.')
+  assert.equal(stored?.evidenceSeq, 7)
+  assert.match(await readFile(join(dir, 'entries', 'ship-with-pnpm.md'), 'utf8'),
+    /^quote: We always ship with pnpm run ship\.$/mu)
+
+  // A rewrite that leaves the body alone still restates the same claim.
+  await store.upsert({ scope: 'global', title: 'Ship with pnpm', body: 'Run pnpm run ship.', tags: [] }, undefined, 'auto')
+  assert.equal((await store.read('global', undefined, 'ship-with-pnpm'))?.quote, 'We always ship with pnpm run ship.')
+
+  // A rewrite that changes the body may state something the excerpt never did,
+  // so the stale quote must not survive looking like proof.
+  await store.upsert({ scope: 'global', title: 'Ship with pnpm', body: 'Ship with pnpm, not npm run ship.', tags: [] }, undefined, 'auto')
+  const rewritten = await store.read('global', undefined, 'ship-with-pnpm')
+  assert.equal(rewritten?.quote, undefined)
+  assert.equal(rewritten?.evidenceSeq, undefined)
 })
 
 test('an entry records the session it came from, and keeps it across a rewrite', async (t) => {
@@ -762,6 +840,23 @@ test('summary renders both scopes and stays inside its byte budget', () => {
   assert.match(text, /Global memories/u)
   assert.match(text, /Project memories/u)
   assert.equal(renderMemorySummary([], { maxBytes: 100, maxEntriesPerScope: 5 }), undefined)
+})
+
+test('open loops render in deadline order, and closed ones stay out', () => {
+  const now = Date.parse('2026-11-05T00:00:00Z')
+  const text = renderOpenLoops([
+    { id: 'open-a', text: '把登录页的截图补齐', openedAt: 1, state: 'open' },
+    { id: 'open-b', text: '周五前把报价发出去', openedAt: 2, dueAt: now - 86_400_000, state: 'open' },
+    { id: 'done-c', text: '已经做完的事', openedAt: 3, state: 'done' },
+  ], { now })
+  assert.ok(text !== undefined)
+  assert.match(text, /overdue · 周五前把报价发出去/u)
+  assert.match(text, /no date · 把登录页的截图补齐/u)
+  // A closed loop is history, not something the model should be told about.
+  assert.doesNotMatch(text, /已经做完的事/u)
+  // Overdue comes first: it is the one that needs acting on.
+  assert.ok(text.indexOf('周五前把报价发出去') < text.indexOf('把登录页的截图补齐'))
+  assert.equal(renderOpenLoops([{ id: 'expired-d', text: 't', openedAt: 1, state: 'expired' }], { now }), undefined)
 })
 
 test('entry config resolves paths, clamps tunables, and reads live references', () => {

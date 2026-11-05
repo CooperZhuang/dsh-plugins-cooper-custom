@@ -9,9 +9,8 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { admitNotice, dueNotices, pruneNotices, quietHoursEnd, readNotices, withNotice, writeNotices, NOTICE_TTL_MS } from '../notices.js'
+import { ackNotice, admitNotice, dueNotices, pruneNotices, quietHoursEnd, readNotices, withNotice, writeNotices, NOTICE_TTL_MS } from '../notices.js'
 import type { Notice, NoticeQueue } from '../notices.js'
-import { say } from '../pet.js'
 import { gateNotices, parseGateReply } from '../gate.js'
 
 const NOW = Date.parse('2026-10-23T12:00:00Z')
@@ -96,39 +95,6 @@ test('the queue round-trips, delivers once, and expires', async (t) => {
   assert.equal(stale.notices[0]?.state, 'expired', 'nothing sits in the queue forever')
 })
 
-test('the pet channel reports failure instead of throwing', async () => {
-  const target = { origin: 'http://127.0.0.1:43120', petId: 'main', routeId: '7340' }
-  const ok = await say(target, { text: 'hi', duration: 1 }, (async () => new Response('{"ok":true}', { status: 200 })) as unknown as typeof fetch)
-  assert.equal(ok.ok, true)
-  const refused = await say(target, { text: 'hi', duration: 1 }, (async () => new Response('{"ok":false,"reason":"occupied"}', { status: 200 })) as unknown as typeof fetch)
-  assert.equal(refused.ok, false)
-  assert.match(refused.reason ?? '', /occupied/u)
-  const broken = await say(target, { text: 'hi', duration: 1 }, (async () => { throw new Error('ECONNREFUSED') }) as unknown as typeof fetch)
-  assert.equal(broken.ok, false)
-  assert.match(broken.reason ?? '', /ECONNREFUSED/u)
-})
-test('the broadcast URL keeps its path before the token and carries the renderer header', async () => {
-  let seenUrl = ''
-  let seenHeaders: Record<string, string> = {}
-  const capture = (async (url: string, init: { headers?: Record<string, string> }) => {
-    seenUrl = url
-    seenHeaders = init.headers ?? {}
-    return new Response('{"ok":true}', { status: 200 })
-  }) as unknown as typeof fetch
-  const result = await say(
-    { origin: 'http://127.0.0.1:43120', token: 'tok123', rendererHeader: { name: 'x-dsh-desktop-renderer', value: 'cap' }, petId: 'main', routeId: '7340' },
-    { text: 'hi', duration: 1 },
-    capture,
-  )
-  assert.equal(result.ok, true)
-  // Regression: the authenticated URL ends in ?token=..., so appending a path puts
-  // it inside the token value and the request never reaches the pet route.
-  assert.match(seenUrl, /^http:\/\/127\.0\.0\.1:43120\/dsh-pet-7340\/broadcast\?/u)
-  assert.match(seenUrl, /pet=main/u)
-  assert.match(seenUrl, /token=tok123/u)
-  assert.match(seenUrl, /surface=any/u, 'the pet refuses a broadcast without a surface')
-  assert.equal(seenHeaders['x-dsh-desktop-renderer'], 'cap', 'the desktop gate needs the renderer capability')
-})
 test('the gate only authorises ids it was shown, and fails to silence', async () => {
   const candidates = [
     { id: 'loop-a', title: '还挂着：把报销单交给财务', detail: '说了 4 天' },
@@ -149,4 +115,39 @@ test('the gate only authorises ids it was shown, and fails to silence', async ()
   assert.equal(noLlm.skipped, 'no-llm')
   const nothing = await gateNotices({ llm: undefined, session: undefined, candidates: [], timeoutMs: 1000, signal: new AbortController().signal })
   assert.equal(nothing.deliver.size, 0)
+})
+test('answering a notice records the outcome, and only once', () => {
+  const first = admitNotice({ version: 1, notices: [] }, CANDIDATE, policy)
+  assert.equal(first.ok, true)
+  if (!first.ok) return
+  const queue: NoticeQueue = { version: 1, notices: [{ ...first.notice, state: 'delivered', deliveredAt: NOW }] }
+
+  const answered = ackNotice(queue, first.notice.id.slice(0, 12), 'dismissed', NOW + 1000)
+  assert.equal(answered.notice?.id, first.notice.id, 'a unique prefix is enough to answer')
+  const stored = answered.queue.notices[0]
+  assert.equal(stored?.state, 'acked')
+  assert.equal(stored?.outcome, 'dismissed')
+  assert.equal(stored?.ackedAt, NOW + 1000)
+
+  const again = ackNotice(answered.queue, first.notice.id, 'acted', NOW + 2000)
+  assert.equal(again.notice, undefined, 'an answered notice is not answered twice')
+  assert.match(again.reason ?? '', /no unacknowledged notice/u)
+})
+
+test('an ambiguous or unknown prefix is refused instead of guessing', () => {
+  const one = admitNotice({ version: 1, notices: [] }, CANDIDATE, policy)
+  const two = admitNotice({ version: 1, notices: [] }, { ...CANDIDATE, dedupeKey: 'other' }, policy)
+  if (!one.ok || !two.ok) return
+  const queue: NoticeQueue = {
+    version: 1,
+    notices: [
+      { ...one.notice, state: 'delivered', deliveredAt: NOW },
+      { ...two.notice, state: 'delivered', deliveredAt: NOW },
+    ],
+  }
+  const ambiguous = ackNotice(queue, 'digest-', 'acted', NOW)
+  assert.equal(ambiguous.notice, undefined)
+  assert.match(ambiguous.reason ?? '', /be more specific/u)
+  const unknown = ackNotice(queue, 'zzzz', 'acted', NOW)
+  assert.equal(unknown.notice, undefined)
 })

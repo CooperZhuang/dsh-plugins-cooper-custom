@@ -15,12 +15,25 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { MemoriesRuntime } from '../index.js'
-import { EXTRACT_JSON_SCHEMA, collectWindow, parseExtraction, redactSecrets, runExtraction } from '../extract.js'
+import type { MemoryEntry } from '../types.js'
+import { EXTRACT_JSON_SCHEMA, bindEvidence, collectWindow, parseExtraction, redactSecrets, runExtraction } from '../extract.js'
 import { normalizeSettings } from '../config.js'
 import { peakDelayMs } from '../schedule.js'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
+
+/**
+ * Project entries this session actually maps to.
+ *
+ * The scope root is resolved from the session cwd by walking up for project
+ * markers (see resolveProjectRoot); inside the monorepo that walks past this
+ * package to the workspace root, so a test that hard-coded process.cwd() asserted
+ * against a directory the plugin never writes to.
+ */
+async function projectEntries(runtime: MemoriesRuntime, session: Session): Promise<readonly MemoryEntry[]> {
+  return runtime.store.list('project', await runtime.projectRoot(session), { fresh: true })
+}
 
 /** A streaming text delta in the shape the assembler consumes. */
 function textChunk(text: string, index = 0): StreamChunk {
@@ -39,10 +52,46 @@ function fakeLlm(reply: string, seen: { system?: string | undefined; user?: stri
       seen.system = options.system
       seen.user = options.messages.map((message) => message.content.filter((block) => block.type === 'text').map((block) => block.text ?? '').join('')).join('\n')
       return (async function* chunks() {
-        yield textChunk(reply)
+        yield textChunk(withQuote(reply, transcriptQuote(options)))
         yield stopChunk()
       })()
     },
+  }
+}
+
+/**
+ * The first user line of the framed prompt, quoted the way a model would.
+ *
+ * The extractor is asked to copy a verbatim passage from the transcript, and
+ * this fake copies the first user message so tests of other behaviour keep
+ * their hand-written replies short. Evidence checks themselves get dedicated
+ * tests with explicit quotes below.
+ */
+function transcriptQuote(options: { messages: { content: { type: string; text?: string }[] }[] }): string | undefined {
+  const prompt = options.messages
+    .map((message) => message.content.filter((block) => block.type === 'text').map((block) => block.text ?? '').join(''))
+    .join('\n')
+  const line = /(?:^|\n)(?:USER|ASSISTANT): ([^\n]+)/u.exec(prompt)?.[1]
+  return line === undefined ? undefined : line.trim().slice(0, 160)
+}
+
+/** Add `quote` to every memory of a canned reply that does not already carry one. */
+function withQuote(reply: string, quote: string | undefined): string {
+  if (quote === undefined || quote.length === 0) return reply
+  const start = reply.indexOf('{')
+  const end = reply.lastIndexOf('}')
+  if (start < 0 || end <= start) return reply
+  try {
+    const value = JSON.parse(reply.slice(start, end + 1)) as { memories?: unknown }
+    if (!Array.isArray(value.memories)) return reply
+    for (const item of value.memories) {
+      if (typeof item !== 'object' || item === null) continue
+      const record = item as Record<string, unknown>
+      if (record['quote'] === undefined) record['quote'] = quote
+    }
+    return JSON.stringify(value)
+  } catch {
+    return reply
   }
 }
 
@@ -153,6 +202,30 @@ test('parseExtraction redacts secrets inside extracted memories and the summary'
   const parsed = parseExtraction('{"summary":"they pasted sk-abcdefghijklmnopqrstuvwx","memories":[{"scope":"global","title":"API key","body":"the key is sk-abcdefghijklmnopqrstuvwx"}]}', 5, 'session-1')
   assert.equal(parsed.drafts[0]?.body, 'the key is [redacted]')
   assert.equal(parsed.summary, 'they pasted [redacted]')
+  // A quote that is entirely a credential is dropped, not stored as "[redacted]":
+  // an evidence field reading "[redacted]" proves nothing.
+  const secretQuote = parseExtraction('{"memories":[{"scope":"global","title":"t","body":"b","appliesTo":"a","quote":"sk-abcdefghijklmnopqrstuvwx"}]}', 5, 'session-1')
+  assert.equal(secretQuote.drafts[0]?.quote, undefined)
+})
+
+test('bindEvidence accepts only a quote that appears verbatim in one message', () => {
+  const sources = [
+    { seq: 3, text: 'I always deploy with pnpm run ship.' },
+    { seq: 4, text: 'Also run tsc before publishing.' },
+  ]
+  const base = { scope: 'global' as const, title: 't', body: 'b', tags: [] }
+  const bound = bindEvidence([
+    { ...base, title: 'exact', quote: 'I always deploy with pnpm run ship.' },
+    // Line wrapping changes whitespace, not the words; that still counts.
+    { ...base, title: 'wrapped', quote: 'Also run tsc\nbefore publishing.' },
+    { ...base, title: 'paraphrased', quote: 'I usually deploy with pnpm.' },
+    { ...base, title: 'too short', quote: 'pnpm' },
+    { ...base, title: 'missing' },
+  ], sources)
+  assert.deepEqual(bound.drafts.map((draft) => draft.title), ['exact', 'wrapped'])
+  assert.equal(bound.drafts[0]?.evidenceSeq, 3)
+  assert.equal(bound.drafts[1]?.evidenceSeq, 4)
+  assert.equal(bound.unsupported, 3)
 })
 
 test('collectWindow reads only human/assistant prose after the watermark', () => {
@@ -191,7 +264,8 @@ test('the extraction JSON schema is closed and requires the documented fields', 
   assert.deepEqual([...EXTRACT_JSON_SCHEMA.required], ['memories', 'summary'])
   // `appliesTo` is required because it is the field that lets a paraphrased turn
   // find the memory again; half the store was unsearchable without it.
-  assert.deepEqual([...EXTRACT_JSON_SCHEMA.properties.memories.items.required], ['scope', 'title', 'body', 'appliesTo'])
+  // `quote` is required because it is the only evidence the code can check.
+  assert.deepEqual([...EXTRACT_JSON_SCHEMA.properties.memories.items.required], ['scope', 'title', 'body', 'appliesTo', 'quote'])
 })
 
 test('runExtraction sends the transcript and returns parsed drafts', async () => {
@@ -208,16 +282,47 @@ test('runExtraction sends the transcript and returns parsed drafts', async () =>
   })
   assert.equal(outcome.kind, 'memories')
   assert.equal(outcome.kind === 'memories' ? outcome.drafts.length : 0, 1)
+  // The fake copied the user's line, so the draft carries the message it came from.
+  assert.equal(outcome.kind === 'memories' ? outcome.drafts[0]?.evidenceSeq : undefined, 1)
   assert.match(seen.system ?? '', /durable, reusable facts/u)
+  assert.match(seen.system ?? '', /"quote"/u)
   assert.match(seen.user ?? '', /I always use pnpm here/u)
   assert.match(seen.user ?? '', /project:work/u)
+})
+
+test('a candidate whose quote is not in the transcript is dropped, not stored', async () => {
+  const session = stubSession('C:\\work', [
+    { seq: 1, role: 'user', text: 'I always use pnpm here.' },
+    { seq: 2, role: 'assistant', text: 'Then add a workspace file.' },
+  ])
+  const reply = (quote: string) => ({
+    stream: () => (async function* chunks() {
+      yield textChunk(JSON.stringify({ memories: [{ scope: 'project', title: 'Use pnpm', body: 'This repo uses pnpm.', appliesTo: 'installing', quote }] }))
+      yield stopChunk()
+    })(),
+  })
+  const request = {
+    session,
+    window: collectWindow(session, 0, 10, 10_000),
+    projectLabel: 'project:work',
+    maxOutputTokens: 512,
+    maxMemories: 5,
+    timeoutMs: 5_000,
+    signal: new AbortController().signal,
+  }
+  // Paraphrasing the source is exactly the failure the check exists to catch.
+  const paraphrased = await runExtraction(reply('I usually use pnpm.') as never, request)
+  assert.deepEqual(paraphrased.kind === 'none' ? paraphrased.reason : paraphrased.kind, 'unsupported-evidence')
+  // An assistant line is a valid source too; the seq tells the reader which turn.
+  const fromAssistant = await runExtraction(reply('Then add a workspace file.') as never, request)
+  assert.equal(fromAssistant.kind === 'memories' ? fromAssistant.drafts[0]?.evidenceSeq : undefined, 2)
 })
 
 test('runExtraction reports an empty window and a missing route without calling the model', async () => {
   const session = stubSession('C:\\work', [{ seq: 1, role: 'user', text: 'hi' }])
   const empty = await runExtraction(fakeLlm('{}') as never, {
     session,
-    window: { text: '', lastSeq: undefined, messages: 0 },
+    window: { text: '', lastSeq: undefined, messages: 0, sources: [] },
     projectLabel: 'project:work',
     maxOutputTokens: 128,
     maxMemories: 1,
@@ -241,13 +346,13 @@ test('runExtraction reports an empty window and a missing route without calling 
 })
 
 test('a reply the output cap cut short is salvaged, never thrown', async () => {
-  const session = stubSession('C:\\work', [{ seq: 1, role: 'user', text: 'hi' }])
+  const session = stubSession('C:\\work', [{ seq: 1, role: 'user', text: 'Hi, remember this workflow.' }])
   const truncated = {
     stream: () => (async function* chunks() {
       // Two complete memories, then the cut lands inside the third object.
       yield textChunk('{"summary":"The user set up a workflow.","memories":['
-        + '{"scope":"project","title":"First fact","body":"Body one.","tags":["a"]},'
-        + '{"scope":"global","title":"Second fact","body":"Body two.","tags":["b"]},'
+        + '{"scope":"project","title":"First fact","body":"Body one.","tags":["a"],"quote":"remember this workflow"},'
+        + '{"scope":"global","title":"Second fact","body":"Body two.","tags":["b"],"quote":"remember this workflow"},'
         + '{"scope":"project","title":"Third fac')
       yield { type: 'finish', reason: { kind: 'max-tokens' } } as unknown as StreamChunk
     })(),
@@ -315,7 +420,7 @@ test('runExtraction stores drafts, advances the watermark, and never mines twice
     const agent = { id: 'extract-session', session, status: 'idle' } as unknown as Agent
 
     assert.equal((await runtime.runExtraction(agent)).stored, 1)
-    const stored = await runtime.store.list('project', process.cwd(), { fresh: true })
+    const stored = await projectEntries(runtime, session)
     assert.equal(stored.length, 1)
     assert.equal(stored[0]?.source, 'auto')
     assert.match(stored[0]?.body ?? '', /pnpm run ship/u)
@@ -326,7 +431,7 @@ test('runExtraction stores drafts, advances the watermark, and never mines twice
 
     // Nothing new on the surface, so a second pass is a no-op.
     assert.equal((await runtime.runExtraction(agent)).stored, 0)
-    assert.equal((await runtime.store.list('project', process.cwd(), { fresh: true })).length, 1)
+    assert.equal((await projectEntries(runtime, session)).length, 1)
   t.after(() => rm(dir, { recursive: true, force: true }))
 })
 
@@ -353,7 +458,7 @@ test('an llm service that arrives after activation is still used', async (t) => 
 
   live = fakeLlm(reply)
   assert.equal((await runtime.runExtraction(agent)).stored, 1, 'the pass picks the service up when it appears')
-  assert.equal((await runtime.store.list('project', process.cwd(), { fresh: true })).length, 1)
+  assert.equal((await projectEntries(runtime, session)).length, 1)
   t.after(() => rm(dir, { recursive: true, force: true }))
 })
 
@@ -387,7 +492,7 @@ test('a session the registry knows but this process never settled is still mined
   // window is invisible to it. The live registry is the second source.
   await runtime.runPeriodicPass()
 
-  assert.equal((await runtime.store.list('project', process.cwd(), { fresh: true })).length, 1,
+  assert.equal((await projectEntries(runtime, session)).length, 1,
     'a registry session is mined without ever settling here')
   const pass = lines.find((line) => line.startsWith('dsh-memories: extract pass:'))
   assert.ok(pass !== undefined, 'the pass reports itself')
@@ -522,7 +627,7 @@ test('a capped window cools down, and retries the moment the cap it blamed chang
           yield { type: 'finish', reason: { kind: 'max-tokens' } } as unknown as StreamChunk
           return
         }
-        yield textChunk('{"memories":[{"scope":"project","title":"A fact","body":"A fact.","tags":["x"]}]}')
+        yield textChunk('{"memories":[{"scope":"project","title":"A fact","body":"A fact.","tags":["x"],"quote":"worth remembering"}]}')
         yield stopChunk()
       })()
     },
@@ -598,7 +703,7 @@ test('a reply capped mid-array keeps the memories that were already complete', a
   // same truncation kept nothing — that is the case the test above pins.
   const capped = {
     stream: () => (async function* chunks() {
-      yield textChunk('{"memories":[{"scope":"project","kind":"fact","title":"First fact","body":"Finished before the cap.","appliesTo":"任何时候"},{"scope":"project","kind":"fact","title":"Second fact","body":"cut off he')
+      yield textChunk('{"memories":[{"scope":"project","kind":"fact","title":"First fact","body":"Finished before the cap.","appliesTo":"任何时候","quote":"Something worth remembering."},{"scope":"project","kind":"fact","title":"Second fact","body":"cut off he')
       yield { type: 'finish', reason: { kind: 'max-tokens' } } as unknown as StreamChunk
     })(),
   }
@@ -623,7 +728,7 @@ test('the resolved route carries the reasoning level that spends the cap', async
   })
   const lined = {
     stream: () => (async function* chunks() {
-      yield textChunk('{"memories":[{"scope":"project","kind":"fact","title":"T","body":"B","appliesTo":"A"}],"summary":"s')
+      yield textChunk('{"memories":[{"scope":"project","kind":"fact","title":"T","body":"B","appliesTo":"A","quote":"Remember this."}],"summary":"s')
       yield { type: 'finish', reason: { kind: 'max-tokens' } } as unknown as StreamChunk
     })(),
   }
@@ -695,7 +800,7 @@ test('a failing extraction call leaves the store and watermark untouched', async
     const agent = { id: 'extract-session', session, status: 'idle' } as unknown as Agent
 
     await assert.rejects(() => runtime.runExtraction(agent), /provider exploded/u)
-    assert.equal((await runtime.store.list('project', process.cwd(), { fresh: true })).length, 0)
+    assert.equal((await projectEntries(runtime, session)).length, 0)
     assert.equal(runtime.state.getSession('extract-session'), undefined)
     // The watermark is only written on success.
     assert.equal(runtime.state.sessionCount(), 0)
@@ -789,7 +894,7 @@ test('a successful pass writes the evidence note behind the drafts', async (t) =
   const note = await runtime.store.readSessionNote('extract-session')
   assert.equal(note?.summary, 'The user explained how this project ships.')
   assert.deepEqual(note?.memories, ['deploy-with-pnpm-run-ship'])
-  const stored = (await runtime.store.list('project', process.cwd(), { fresh: true }))[0]
+  const stored = (await projectEntries(runtime, session))[0]
   assert.equal(stored?.sourceSession, 'extract-session')
   t.after(() => rm(dir, { recursive: true, force: true }))
 })
@@ -820,7 +925,7 @@ test('the settle timer actually runs a pass once its wait elapses', async (t) =>
   runtime.scheduleExtraction(agent)
   await new Promise((settle) => setTimeout(settle, 1_400))
   assert.equal(runtime.state.getSession('extract-session')?.lastSeq, 1, 'the settle timer mined the session')
-  assert.equal((await runtime.store.list('project', process.cwd(), { fresh: true })).length, 1)
+  assert.equal((await projectEntries(runtime, session)).length, 1)
   t.after(() => rm(dir, { recursive: true, force: true }))
 })
 

@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "工具输出瘦身",
+    "description": "把超长的工具输出压缩成摘要，原文落进 spill 文件，需要时再取回。",
+    "detail": "docs/DETAIL.zh.md"
+  }
+}
