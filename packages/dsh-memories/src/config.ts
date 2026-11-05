@@ -205,7 +205,7 @@ export const DEFAULT_RECALL_MIN_QUERY_CHARS = 2
 export const DEFAULT_RAW_RECALL = false
 
 /** Byte budget for the raw excerpt half of one recall block. */
-export const DEFAULT_RAW_RECALL_BYTES = 1_200
+export const DEFAULT_RAW_RECALL_BYTES = 2_400
 
 /** Most raw excerpts one recall block may carry. */
 export const DEFAULT_RAW_RECALL_EXCERPTS = 3

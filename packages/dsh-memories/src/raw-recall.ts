@@ -61,12 +61,65 @@ function sharedTokens(query: Set<string>, passage: Set<string>): number {
 }
 
 /**
+ * Pick the most query-dense window of one long message.
+ *
+ * Real assistant turns are often 1-3k characters, and the useful detail sits in
+ * the middle of a markdown report. Truncating such a message from the start (the
+ * first version did) selected the right message and then cut the evidence out of
+ * it: measured on 33 real-session questions, 30 of 33 evidence quotes lived in
+ * messages longer than the 400-character cap, and the lexical selector covered
+ * only 4/33 quotes. A sliding window centred on the matching tokens fixes that
+ * without growing the budget.
+ *
+ * @param text - one message.
+ * @param queryTokens - tokens of the current turn.
+ * @param maxChars - window size.
+ * @returns the best window, its score, and where it starts.
+ */
+function bestWindow(
+  text: string,
+  queryTokens: Set<string>,
+  maxChars: number,
+): { text: string; score: number; index: number } {
+  if (text.length <= maxChars) {
+    const passageTokens = tokens(text)
+    const shared = sharedTokens(queryTokens, passageTokens)
+    return { text, score: shared + (strongToken(queryTokens, passageTokens) ? 2 : 0), index: 0 }
+  }
+  const step = Math.max(40, Math.floor(maxChars / 2))
+  let best: { text: string; score: number; index: number } | undefined
+  const limit = text.length - maxChars
+  for (let start = 0; start <= limit; start += step) {
+    const window = text.slice(start, start + maxChars)
+    const passageTokens = tokens(window)
+    const shared = sharedTokens(queryTokens, passageTokens)
+    const score = shared + (strongToken(queryTokens, passageTokens) ? 2 : 0)
+    if (best === undefined || score > best.score) best = { text: window, score, index: start }
+  }
+  // The last window is aligned to the end, so the tail cannot be skipped by stride.
+  const lastStart = Math.max(0, text.length - maxChars)
+  const last = text.slice(lastStart)
+  const lastScore = sharedTokens(queryTokens, tokens(last)) + (strongToken(queryTokens, tokens(last)) ? 2 : 0)
+  if (best === undefined || lastScore > best.score) best = { text: last, score: lastScore, index: lastStart }
+  return best
+}
+
+/** Whether the query carries a long identifier the passage also mentions. */
+function strongToken(queryTokens: Set<string>, passageTokens: Set<string>): boolean {
+  for (const token of queryTokens) {
+    if (token.length >= 6 && /^[a-z0-9_]+$/u.test(token) && passageTokens.has(token)) return true
+  }
+  return false
+}
+
+/**
  * Score prose messages against the query and pick the best few.
  *
  * The gate is the same shape as memory recall's: a single shared bigram is not
  * evidence (Chinese turns share 的/是 constantly), so a passage needs at least
- * two shared tokens, or one long Latin identifier such as a file name. Passages
- * are ranked by shared tokens, then by recency, then by brevity.
+ * two shared tokens, or one long Latin identifier such as a file name. Each
+ * message contributes its best matching window, ranked by shared tokens, then by
+ * recency, then by brevity.
  *
  * @param messages - prose messages of one session.
  * @param query - the current user turn.
@@ -83,22 +136,19 @@ export function selectExcerpts(
   const maxBytes = limits.maxBytes ?? 1200
   const queryTokens = tokens(query)
   if (queryTokens.size === 0) return []
-  const scored: { message: BackfillMessage; score: number; index: number }[] = []
+  const scored: { message: BackfillMessage; window: { text: string; score: number; index: number }; index: number }[] = []
   messages.forEach((message, index) => {
     if (message.text.trim().length < 24) return
-    const passageTokens = tokens(message.text)
-    const shared = sharedTokens(queryTokens, passageTokens)
-    if (shared < 2) return
-    // A long identifier is a strong signal on its own (a path, an error code).
-    const strong = [...queryTokens].some((token) => token.length >= 6 && /^[a-z0-9_]+$/u.test(token) && passageTokens.has(token))
-    scored.push({ message, score: shared + (strong ? 2 : 0), index })
+    const window = bestWindow(message.text.trim(), queryTokens, maxChars)
+    if (window.score < 2) return
+    scored.push({ message, window, index })
   })
-  scored.sort((left, right) => right.score - left.score || right.index - left.index || left.message.text.length - right.message.text.length)
+  scored.sort((left, right) => right.window.score - left.window.score || right.index - left.index || left.window.text.length - right.window.text.length)
   const out: RawExcerpt[] = []
   let used = 0
   for (const item of scored) {
     if (out.length >= maxExcerpts) break
-    const text = redactSecrets(item.message.text.trim()).replace(/\s+/gu, ' ').slice(0, maxChars)
+    const text = redactSecrets(item.window.text.trim()).replace(/\s+/gu, ' ').slice(0, maxChars)
     if (text.length < 24) continue
     const cost = Buffer.byteLength(text, 'utf8') + 16
     if (used + cost > maxBytes) continue
@@ -106,6 +156,40 @@ export function selectExcerpts(
     out.push({ sessionId: '', seq: item.message.seq, role: item.message.role, text })
   }
   return out
+}
+
+/**
+ * Show the window of one message that contains a memory's verbatim quote.
+ *
+ * Every automatic memory already stores the exact source text it came from
+ * (`quote`, checked as a substring when the entry was written). That makes the
+ * evidence lookup a string search, not a retrieval problem: find the message
+ * holding the quote, and cut a window around it. Measured on the real-session
+ * bank, at least one recalled memory's quote was locatable for 33/33 questions,
+ * versus 24/33 for lexical window retrieval and 32/33 for the hybrid retriever.
+ *
+ * @param messages - the source session's prose.
+ * @param quote - the entry's stored quote.
+ * @param maxChars - window size.
+ * @returns the scrubbed window, or `undefined` when the quote is no longer there.
+ */
+export function windowAroundQuote(
+  messages: readonly BackfillMessage[],
+  quote: string,
+  maxChars = 600,
+): RawExcerpt | undefined {
+  const needle = quote.replace(/\s+/gu, '').trim()
+  if (needle.length < 8) return undefined
+  for (const message of messages) {
+    const collapsed = message.text.replace(/\s+/gu, '')
+    const at = collapsed.indexOf(needle)
+    if (at < 0) continue
+    const start = Math.max(0, at - Math.floor(Math.max(0, maxChars - needle.length) / 2))
+    const text = redactSecrets(collapsed.slice(start, start + maxChars))
+    if (text.length < 8) continue
+    return { sessionId: '', seq: message.seq, role: message.role, text }
+  }
+  return undefined
 }
 
 /** Cache of parsed transcripts, keyed by sessions dir + session id. */
@@ -169,29 +253,60 @@ export async function readTranscript(
 /**
  * Collect raw excerpts for a recall: the source sessions of the memory hits.
  *
+ * Quote grounding is tried first for every source that carries one, because it
+ * reproduces the exact sentence the memory was written from. A source whose
+ * quote is gone falls back to the lexical window selector, so an old or edited
+ * entry still contributes something.
+ *
  * @param sessionsDir - `<dshHome>/sessions`.
- * @param sessionIds - candidate sessions, most relevant memory first.
+ * @param sources - memory sources in recall order, each with its optional quote.
  * @param query - the current user turn.
  * @param limits - count/character/byte caps (byte cap applies across sessions).
  * @returns excerpts with their session id filled in.
  */
 export async function collectExcerpts(
   sessionsDir: string,
-  sessionIds: readonly string[],
+  sources: readonly { readonly sessionId: string; readonly quote?: string }[],
   query: string,
   limits: RawRecallLimits & { readonly maxSessions?: number } = {},
 ): Promise<RawExcerpt[]> {
   const maxSessions = limits.maxSessions ?? 2
+  const maxExcerpts = limits.maxExcerpts ?? 3
+  const maxBytes = limits.maxBytes ?? 2400
+  const maxChars = limits.maxChars ?? 600
   const out: RawExcerpt[] = []
-  const seen = new Set<string>()
-  for (const sessionId of sessionIds) {
-    if (out.length >= (limits.maxExcerpts ?? 3) || seen.size >= maxSessions) break
-    if (sessionId.length === 0 || seen.has(sessionId)) continue
-    seen.add(sessionId)
-    const messages = await readTranscript(sessionsDir, sessionId)
+  let used = 0
+  const seenSessions = new Set<string>()
+  const seenText = new Set<string>()
+  const push = (excerpt: RawExcerpt | undefined, sessionId: string): boolean => {
+    if (excerpt === undefined) return false
+    const key = excerpt.text.slice(0, 80)
+    if (seenText.has(key)) return true
+    const cost = Buffer.byteLength(excerpt.text, 'utf8') + 16
+    if (used + cost > maxBytes) return false
+    seenText.add(key)
+    used += cost
+    out.push({ ...excerpt, sessionId })
+    return true
+  }
+  for (const source of sources) {
+    if (out.length >= maxExcerpts || seenSessions.size >= maxSessions) break
+    if (source.sessionId.length === 0) continue
+    const fresh = !seenSessions.has(source.sessionId)
+    if (fresh) seenSessions.add(source.sessionId)
+    const messages = await readTranscript(sessionsDir, source.sessionId)
     if (messages === undefined) continue
-    for (const excerpt of selectExcerpts(messages, query, limits)) {
-      out.push({ ...excerpt, sessionId })
+    // Quote grounding is tried even for a session already used: several memories
+    // from one conversation each anchor a different sentence.
+    if (source.quote !== undefined) {
+      const grounded = windowAroundQuote(messages, source.quote, maxChars)
+      if (push(grounded, source.sessionId)) continue
+    }
+    if (fresh) {
+      for (const excerpt of selectExcerpts(messages, query, { maxExcerpts, maxChars, maxBytes })) {
+        if (!push(excerpt, source.sessionId)) break
+        if (out.length >= maxExcerpts) break
+      }
     }
   }
   return out

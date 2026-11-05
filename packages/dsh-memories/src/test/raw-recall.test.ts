@@ -16,7 +16,7 @@ import test from 'node:test'
 import { zstdCompressSync } from 'node:zlib'
 import { normalizeSettings } from '../config.js'
 import { renderRecall } from '../render.js'
-import { collectExcerpts, readTranscript, selectExcerpts } from '../raw-recall.js'
+import { collectExcerpts, readTranscript, selectExcerpts, windowAroundQuote } from '../raw-recall.js'
 import { MemoriesRuntime } from '../index.js'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
@@ -47,7 +47,7 @@ function sampleLog(sessionId: string): string {
 test('raw recall is off by default and bounded by its own knobs', () => {
   const settings = normalizeSettings({})
   assert.equal(settings.rawRecall, false, 'injecting prose from other sessions is opt-in')
-  assert.equal(settings.rawRecallBytes, 1_200)
+  assert.equal(settings.rawRecallBytes, 2_400)
   assert.equal(settings.rawRecallExcerpts, 3)
   const tuned = normalizeSettings({ rawRecall: true, rawRecallBytes: -10, rawRecallExcerpts: 0 })
   assert.equal(tuned.rawRecall, true)
@@ -86,6 +86,20 @@ test('selectExcerpts returns nothing for a query with no usable tokens', () => {
   assert.deepEqual(selectExcerpts([], '部署日志在哪里'), [])
 })
 
+test('windowAroundQuote reproduces the sentence a memory was written from', () => {
+  const filler = '无关的背景说明。'.repeat(200)
+  const quote = '部署脚本的日志路径是 /var/log/deploy/app.log，出问题先看这个文件。'
+  const messages = [
+    message(1, 'user', `${filler}${quote}${filler}`),
+    message(2, 'assistant', '收到。'),
+  ]
+  const excerpt = windowAroundQuote(messages, quote, 600)
+  assert.ok(excerpt !== undefined)
+  assert.ok(excerpt.text.includes('var/log/deploy/app.log'), 'the quote is inside the window, not cut off')
+  assert.ok(excerpt.text.length <= 600)
+  assert.equal(windowAroundQuote(messages, '这段原文已经不在会话里了', 600), undefined)
+})
+
 test('readTranscript finds the session log by directory name and returns prose only', async (t) => {
   if (!zstdAvailable()) return
   const dir = await mkdtemp(join(tmpdir(), 'dsh-memories-raw-'))
@@ -112,7 +126,11 @@ test('collectExcerpts reads at most two source sessions and tags each excerpt', 
     await mkdir(logDir, { recursive: true })
     await writeFile(join(logDir, 'session.v4.jsonl.zstd'), zstdCompressSync(Buffer.from(sampleLog(sessionId), 'utf8')))
   }
-  const excerpts = await collectExcerpts(dir, ['session-a', 'session-b', 'session-missing'], '部署日志在哪里', { maxExcerpts: 2 })
+  const excerpts = await collectExcerpts(dir, [
+    { sessionId: 'session-a' },
+    { sessionId: 'session-b' },
+    { sessionId: 'session-missing' },
+  ], '部署日志在哪里', { maxExcerpts: 2 })
   assert.ok(excerpts.length >= 1)
   assert.ok(excerpts.every((excerpt) => excerpt.sessionId === 'session-a' || excerpt.sessionId === 'session-b'))
 })
@@ -166,6 +184,10 @@ test('an on-demand recall carries original excerpts when rawRecall is on', async
     body: '部署失败时先看 /var/log/deploy/app.log。',
     tags: ['部署'],
     sourceSession: sessionId,
+    // The stored quote is what the excerpt is grounded on; it must come from the
+    // same source session.
+    quote: '部署脚本的日志路径是 /var/log/deploy/app.log，出问题先看这个文件。',
+    evidenceSeq: 2,
   }, 'tool')
   const message = await runtime.recallFor(recallAgent(session))
   assert.ok(message !== undefined, 'the memory matches, so a recall block is emitted')
@@ -175,4 +197,5 @@ test('an on-demand recall carries original excerpts when rawRecall is on', async
   assert.match(text, /Original conversation excerpts/u, 'the raw half rides with the memory')
   assert.match(text, /session-raw-int/u, 'each excerpt names its source session')
   assert.match(text, /var\/log\/deploy\/app\.log/u)
+  assert.match(text, /出问题先看这个文件/u, 'the excerpt is the exact source sentence')
 })

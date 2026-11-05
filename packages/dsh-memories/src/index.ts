@@ -1462,14 +1462,15 @@ export class MemoriesRuntime {
    */
   private async rawExcerpts(entries: readonly MemoryEntry[], query: string): Promise<RawExcerpt[]> {
     if (this.settings.rawRecallExcerpts <= 0) return []
-    const sessionIds = [...new Set(entries
-      .map((entry) => entry.sourceSession)
-      .filter((session): session is string => session !== undefined && session.length > 0))]
-    if (sessionIds.length === 0) return []
-    return await collectExcerpts(join(this.deployment.dshHome, 'sessions'), sessionIds, query, {
+    const sources = entries
+      .filter((entry): entry is MemoryEntry & { sourceSession: string } =>
+        entry.sourceSession !== undefined && entry.sourceSession.length > 0)
+      .map((entry) => ({ sessionId: entry.sourceSession, ...entry.quote === undefined ? {} : { quote: entry.quote } }))
+    if (sources.length === 0) return []
+    return await collectExcerpts(join(this.deployment.dshHome, 'sessions'), sources, query, {
       maxExcerpts: this.settings.rawRecallExcerpts,
       maxBytes: this.settings.rawRecallBytes,
-      maxChars: 400,
+      maxChars: 600,
       maxSessions: 2,
     }).catch(() => [])
   }
