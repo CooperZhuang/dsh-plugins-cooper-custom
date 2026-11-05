@@ -57,6 +57,7 @@ import { citationRoots, citationWarning, ignoredUnder, missingCitations } from '
 import { planRetention, retentionKey } from './retention.js'
 import { MemoryLog, createFileSink, createLogExporter, pluginLogger } from './log.js'
 import { collectWindow, resolveLlmRoute, runExtraction } from './extract.js'
+import { collectExcerpts } from './raw-recall.js'
 import type { ExtractionRoute } from './extract.js'
 import { decodeSessionLog, findSessionLogs, parseSessionLog, planWindows, zstdAvailable } from './backfill.js'
 import type { BackfillLog, BackfillWindow } from './backfill.js'
@@ -67,6 +68,7 @@ import { discardDraft, listDrafts, promote, writeDraft } from './skills.js'
 import type { ConsolidationPlan, ConsolidationTarget, SubagentSeam } from './consolidate.js'
 import { MEMORY_KINDS, MEMORY_SOURCE_KIND } from './types.js'
 import type { MemoryDraft, MemoryEntry, MemoryKind, MemoryScope, SessionMode } from './types.js'
+import type { RawExcerpt } from './raw-recall.js'
 import { registerMemoryTool } from './tool.js'
 import { REMOTE_CONTRIBUTION, REMOTE_NAMESPACE, REMOTE_SERVICE, createRemoteService } from './remote.js'
 import type { TypertRegistryLike } from './remote.js'
@@ -1406,7 +1408,13 @@ export class MemoriesRuntime {
       picked.push(candidate)
     }
     if (picked.length === 0) return undefined
-    const text = renderRecall(picked.map((item) => item.entry), this.settings.recallMaxBytes)
+    // The second retrieval channel: original turns from the sessions these
+    // memories came from, so a detail the extraction dropped can still be read.
+    // Off by default (privacy: prose from other sessions), bounded separately.
+    const excerpts = this.settings.rawRecall && this.settings.rawRecallBytes > 0
+      ? await this.rawExcerpts(picked.map((item) => item.entry), query)
+      : []
+    const text = renderRecall(picked.map((item) => item.entry), this.settings.recallMaxBytes, [], excerpts)
     if (text === undefined) return undefined
     // Info, not `decision`: a delta is the rarer half of this path — at most
     // `recallMaxPerConversation` per conversation — and the silence below is the
@@ -1425,6 +1433,7 @@ export class MemoriesRuntime {
     const hopped = picked.filter((item) => relatedVia.has(item.entry.id))
     const extras = `${window === undefined ? '' : `, window ${window.label}`}`
       + `${hopped.length === 0 ? '' : `, +${hopped.length} related via ${[...new Set(hopped.map((item) => relatedVia.get(item.entry.id)))].join(',')}`}`
+      + `${excerpts.length === 0 ? '' : `, raw +${excerpts.length}`}`
     this.log.info('dsh-memories: session %s recalled %s (relevance %s, score %s%s, via %s)',
       session.id, picked.map((item) => item.entry.id).join(', '),
       picked[0]!.relevance.toFixed(1), picked[0]!.score.toFixed(1), extras,
@@ -1438,6 +1447,31 @@ export class MemoriesRuntime {
       // the frame, so a delta never suppresses the once-per-conversation block.
       source: { kind: MEMORY_SOURCE_KIND, form: 'recall' },
     })
+  }
+
+  /**
+   * Original-turn excerpts for a recall, read from this machine's session logs.
+   *
+   * Only the sessions the recalled memories came from are read (at most two), so
+   * the excerpt is about the same conversation as the memory. A missing log or an
+   * unreadable one yields no excerpts rather than failing the recall.
+   *
+   * @param entries - the memories already chosen for this block.
+   * @param query - the current user turn.
+   * @returns scrubbed excerpts, empty when disabled or unavailable.
+   */
+  private async rawExcerpts(entries: readonly MemoryEntry[], query: string): Promise<RawExcerpt[]> {
+    if (this.settings.rawRecallExcerpts <= 0) return []
+    const sessionIds = [...new Set(entries
+      .map((entry) => entry.sourceSession)
+      .filter((session): session is string => session !== undefined && session.length > 0))]
+    if (sessionIds.length === 0) return []
+    return await collectExcerpts(join(this.deployment.dshHome, 'sessions'), sessionIds, query, {
+      maxExcerpts: this.settings.rawRecallExcerpts,
+      maxBytes: this.settings.rawRecallBytes,
+      maxChars: 400,
+      maxSessions: 2,
+    }).catch(() => [])
   }
 
   /**

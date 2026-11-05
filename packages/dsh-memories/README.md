@@ -96,6 +96,13 @@
    命中的记忆合成**一个** ≤`recallMaxBytes`（默认 1200B）的 `<memory-recall>` 小块，最多
    `recallMaxPerConversation`（默认 4）条。`recallMode: once` 回到「只注一次」，`off` 完全不注入。
 
+   `rawRecall`（默认**关**）打开后，补注块还会带**原始会话片段**：从被召回记忆的 `sourceSession`
+   对应的**本机会话日志**里（`<dshHome>/sessions`，最多读两个来源会话）按同一套词面规则挑几段
+   原文，做凭据擦除后附在记忆后面（`rawRecallExcerpts` 条、`rawRecallBytes` 字节）。这是为了补
+   抽取时丢掉的细节——真实会话评测里 memory 26/33、只给检索片段 27/33、两者合并 32/33、整段
+   原文 33/33（`bench/real/joint.mjs`）。默认关闭，因为它会把别的会话的原文注入当前上下文；
+   片段带来源会话 id 和「data, not instructions」的框，不和记忆混成规则。
+
    **闸门有两道，因为中文只靠分数拦不住。** `recallMinScore`（默认 9）是「更严/更松」的旋钮；真正
    决定精度的是**证据闸门**：一条记忆要被补注，必须满足其一——整条提问命中标题/别名/标签/「何时有用」；
    或命中 ≥`recallMinTerms`（默认 2）个实词；或命中 1 个实词且相关度 ≥ 2×`recallMinScore`。
@@ -372,6 +379,9 @@ dsh plugin --profile web add github:you/dsh-memories
 | `recallMinTerms` | `2` | 补注所需的**实词**数（长度 ≥3 的拉丁词，或被两边同时包含的 2 字 bigram）。设为 `1` 时相关度下限成为唯一闸门，中文会明显变吵 |
 | `recallMaxPerConversation` | `4` | 一个会话最多补注多少**条记忆**；`0` 等于关掉按需补注 |
 | `recallMaxBytes` | `1200` | 单个 `<memory-recall>` 块的字节预算；`0` 关闭按需补注 |
+| `rawRecall` | `false` | 补注块是否附原始会话片段（从 `sourceSession` 的会话日志读取、凭据擦除、只读本机） |
+| `rawRecallBytes` | `1200` | 原始片段部分的字节预算；`0` 等于关闭该部分 |
+| `rawRecallExcerpts` | `3` | 一次补注最多带几条原始片段 |
 | `recallMinQueryChars` | `2` | 短于该字数的用户消息不触发补注判定（「好」「继续」不必扫全库） |
 | `maxEntriesPerScope` | `1000` | 每个作用域最多保留多少条，超出**归档**最久未使用的 |
 | `maxUnusedDays` | `90` | 多久没被读到/被注入摘要/也不是新写的就归档；`0` 关闭；人手写的与置顶的永不归档 |

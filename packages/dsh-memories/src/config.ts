@@ -195,6 +195,22 @@ export const DEFAULT_RECALL_MAX_BYTES = 1_200
 export const DEFAULT_RECALL_MIN_QUERY_CHARS = 2
 
 /**
+ * Whether a recall block may also carry original conversation excerpts.
+ *
+ * Off by default: this injects prose from *other* sessions, which is a privacy
+ * step beyond recalling a memory summary, so it is opt-in. bench/real/joint.mjs
+ * measured the payoff: memory 26/33, raw 27/33, memory+raw 32/33, rag 33/33 on
+ * the same 33 real-session questions.
+ */
+export const DEFAULT_RAW_RECALL = false
+
+/** Byte budget for the raw excerpt half of one recall block. */
+export const DEFAULT_RAW_RECALL_BYTES = 1_200
+
+/** Most raw excerpts one recall block may carry. */
+export const DEFAULT_RAW_RECALL_EXCERPTS = 3
+
+/**
  * Default number of distinct strong-field terms a recall needs.
  *
  * Two is what makes a paraphrased question reachable without letting a shared
@@ -382,6 +398,9 @@ export const Config = z.object({
   recallMaxPerConversation: z.number().default(DEFAULT_RECALL_MAX_PER_CONVERSATION).description('Maximum recall deltas injected into one conversation, counted per memory. 0 disables them.').volatile(),
   /** Byte budget for one recall delta block. */
   recallMaxBytes: z.number().default(DEFAULT_RECALL_MAX_BYTES).description('Byte budget for one on-demand recall block. 0 disables recall deltas.').volatile(),
+  rawRecall: z.boolean().default(DEFAULT_RAW_RECALL).description('Also put original conversation excerpts from the memory source sessions into the on-demand recall block. Off by default: it injects prose from earlier sessions, and it is read from the persisted session logs on this machine only.').volatile(),
+  rawRecallBytes: z.number().default(DEFAULT_RAW_RECALL_BYTES).description('Byte budget for the original-excerpt half of one recall block.').volatile(),
+  rawRecallExcerpts: z.number().default(DEFAULT_RAW_RECALL_EXCERPTS).description('Most original conversation excerpts one recall block may carry.').volatile(),
   /** Shortest user turn worth a recall decision. */
   recallMinQueryChars: z.number().default(DEFAULT_RECALL_MIN_QUERY_CHARS).description('Shortest user turn, in characters, that may trigger a recall delta. Short acknowledgements are skipped instead of scanning the store.').volatile(),
   /** Distinct strong-field terms a recall needs before it is credited. */
@@ -518,6 +537,9 @@ export interface MemoriesSettings {
   recallMinScore: number
   recallMaxPerConversation: number
   recallMaxBytes: number
+  rawRecall: boolean
+  rawRecallBytes: number
+  rawRecallExcerpts: number
   recallMinQueryChars: number
   recallMinTerms: number
   /** Whether memories written after the summary are announced as a delta. */
@@ -613,6 +635,9 @@ export const MEMORIES_SETTINGS_DEFAULTS: MemoriesSettings = {
   recallMinScore: DEFAULT_RECALL_MIN_SCORE,
   recallMaxPerConversation: DEFAULT_RECALL_MAX_PER_CONVERSATION,
   recallMaxBytes: DEFAULT_RECALL_MAX_BYTES,
+  rawRecall: DEFAULT_RAW_RECALL,
+  rawRecallBytes: DEFAULT_RAW_RECALL_BYTES,
+  rawRecallExcerpts: DEFAULT_RAW_RECALL_EXCERPTS,
   recallMinQueryChars: DEFAULT_RECALL_MIN_QUERY_CHARS,
   recallMinTerms: DEFAULT_RECALL_MIN_TERMS,
   injectDelta: DEFAULT_INJECT_DELTA,
@@ -769,6 +794,9 @@ export function normalizeSettings(input: Partial<MemoriesSettings> | undefined):
     recallMinScore: positive(value.recallMinScore, DEFAULT_RECALL_MIN_SCORE, 0),
     recallMaxPerConversation: positive(value.recallMaxPerConversation, DEFAULT_RECALL_MAX_PER_CONVERSATION, 0),
     recallMaxBytes: positive(value.recallMaxBytes, DEFAULT_RECALL_MAX_BYTES, 0),
+    rawRecall: value.rawRecall ?? DEFAULT_RAW_RECALL,
+    rawRecallBytes: positive(value.rawRecallBytes, DEFAULT_RAW_RECALL_BYTES, 0),
+    rawRecallExcerpts: positive(value.rawRecallExcerpts, DEFAULT_RAW_RECALL_EXCERPTS, 0),
     recallMinQueryChars: positive(value.recallMinQueryChars, DEFAULT_RECALL_MIN_QUERY_CHARS, 0),
     recallMinTerms: positive(value.recallMinTerms, DEFAULT_RECALL_MIN_TERMS, 0),
     injectDelta: value.injectDelta ?? DEFAULT_INJECT_DELTA,

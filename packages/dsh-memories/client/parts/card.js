@@ -82,6 +82,21 @@ const FIELDS = [
     hint: { zh: '单次按需补注块的字节上限，0 表示关闭按需补注。', en: 'Byte budget for one on-demand recall block. 0 disables recall deltas.' },
   },
   {
+    field: 'rawRecall', kind: 'boolean',
+    label: { zh: '补注带原始会话片段', en: 'Recall with original excerpts' },
+    hint: { zh: '开启后，按需补注块除了记忆摘要，还会附上这条记忆来源会话里的原始对话片段（已做凭据擦除、只读本机 session 日志、最多两条来源会话）。实测真实会话答题从 26/33 提到 32/33；默认关闭，因为它会把别的会话的原文注入当前上下文。', en: 'Adds original conversation excerpts from the memories\' source sessions to the recall block. Credential-scrubbed, local session logs only, at most two source sessions. Measured 26/33 -> 32/33 on real sessions; off by default because it injects another session\'s prose.' },
+  },
+  {
+    field: 'rawRecallBytes', kind: 'number', min: 0, step: 100,
+    label: { zh: '原始片段字节上限', en: 'Original excerpt byte budget' },
+    hint: { zh: '一次补注里原始会话片段的总字节上限；0 等于关闭原始片段（即使总开关打开）。', en: 'Byte budget for the raw-excerpt half of one recall block. 0 disables excerpts even when the master switch is on.' },
+  },
+  {
+    field: 'rawRecallExcerpts', kind: 'number', min: 0, step: 1,
+    label: { zh: '原始片段条数上限', en: 'Original excerpts per recall' },
+    hint: { zh: '一次补注最多带几条原始片段；0 等于关闭。', en: 'Most original excerpts one recall block may carry. 0 disables them.' },
+  },
+  {
     field: 'recallMinQueryChars', kind: 'number', min: 0, step: 1,
     label: { zh: '触发补注的最短发问长度', en: 'Shortest turn worth recalling' },
     hint: { zh: '用户消息短于该字符数时不判定补注（例如「好」「继续」），避免为无意义的回合扫描整个记忆库。', en: 'A user turn shorter than this is skipped instead of scanning the store, so bare acknowledgements cost nothing.' },
