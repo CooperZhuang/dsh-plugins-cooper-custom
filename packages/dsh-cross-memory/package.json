@@ -32,6 +32,7 @@
   ],
   "license": "MIT",
   "keywords": [
+    "dsh-plugin",
     "dsh",
     "deepseek-harness",
     "cordis-plugin",
