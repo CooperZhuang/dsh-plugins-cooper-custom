@@ -26,6 +26,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { MemoryStore } from '../../lib/storage.js'
 import { renderHit, renderMemorySummaryResult } from '../../lib/render.js'
 import { searchMemories } from '../../lib/search.js'
 import { createChat } from './chat.mjs'
@@ -34,6 +35,7 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const DATA = join(HERE, '..', 'data')
 const WINDOW = 60
 const OUT = join(DATA, 'real-diagnosis.json')
+const REEXTRACT_ROOT = join(DATA, 'real-reextract')
 
 function argValue(name) {
   const index = process.argv.indexOf(name)
@@ -108,6 +110,19 @@ async function main() {
   const results = JSON.parse(await readFile(join(DATA, 'real-results.json'), 'utf8'))
   const bySession = new Map(candidates.sessions.map((session) => [session.sessionId, session]))
   const rows = new Map(results.rows.map((row) => [row.questionId, row]))
+  // Diagnose a re-extracted store instead of the live one, when asked.
+  const reextract = argValue('--reextract')
+  if (reextract !== undefined) {
+    for (const session of candidates.sessions) {
+      const dir = join(REEXTRACT_ROOT, reextract, session.sessionId, 'store')
+      const root = join(REEXTRACT_ROOT, reextract, session.sessionId, 'project')
+      const store = new MemoryStore(dir)
+      session.entries = [
+        ...await store.list('project', root, { fresh: true }),
+        ...await store.list('global', undefined, { fresh: true }),
+      ]
+    }
+  }
 
   const questions = []
   for (const session of bank.sessions) {
@@ -191,6 +206,7 @@ async function main() {
       inWindow: rate(inWindowPass),
       outOfWindow: rate(outWindowPass),
     },
+    reextract: reextract ?? null,
     note: 'token mention is a heuristic: ASCII identifiers (len>=4 or with digits) or >=2 shared CJK bigrams; it can over- or under-detect.',
     questionsDetail: questions,
   }

@@ -21,6 +21,7 @@ import { createHash } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { MemoryStore } from '../../lib/storage.js'
 import { renderHit, renderMemorySummary } from '../../lib/render.js'
 import { searchMemories } from '../../lib/search.js'
 import { anchorGate, createJudge, percentage } from '../e2e/judge.mjs'
@@ -31,6 +32,7 @@ const DATA = join(HERE, '..', 'data')
 const CANDIDATES = join(DATA, 'real-candidates.json')
 const BANK = join(DATA, 'real-bank.json')
 const RESULT = join(DATA, 'real-results.json')
+const REEXTRACT_ROOT = join(DATA, 'real-reextract')
 const SUMMARY_BYTES = 4096
 const RECALL_LIMIT = 4
 const PRICE = { input: 2, output: 8 }
@@ -77,6 +79,21 @@ async function answer(chat, question, context) {
 async function main() {
   const candidates = JSON.parse(await readFile(CANDIDATES, 'utf8'))
   const bank = JSON.parse(await readFile(BANK, 'utf8'))
+  // `--reextract <variant>`: score the memory arm on a re-extracted store instead
+  // of the live one (bench/real/reextract.mjs writes these stores).
+  const reextract = argValue('--reextract')
+  if (reextract !== undefined) {
+    for (const session of candidates.sessions) {
+      const dir = join(REEXTRACT_ROOT, reextract, session.sessionId, 'store')
+      const root = join(REEXTRACT_ROOT, reextract, session.sessionId, 'project')
+      const store = new MemoryStore(dir)
+      session.entries = [
+        ...await store.list('project', root, { fresh: true }),
+        ...await store.list('global', undefined, { fresh: true }),
+      ]
+    }
+  }
+  const memoryOnly = process.argv.includes('--memory-only')
   const bySession = new Map(candidates.sessions.map((session) => [session.sessionId, session]))
   const { chat, usage, provider, model } = createChat({
     provider: argValue('--provider') ?? 'ollama',
@@ -93,8 +110,7 @@ async function main() {
     if (candidate === undefined) throw new Error(`bank session ${session.sessionId} is not in the candidates file`)
     const arms = {
       memory: memoryContext(candidate.entries, session.questions[0]?.question ?? ''),
-      rag: candidate.transcript,
-      closed: '',
+      ...memoryOnly ? {} : { rag: candidate.transcript, closed: '' },
     }
     for (const question of session.questions) {
       const row = { sessionId: session.sessionId, questionId: question.id, question: question.question }
@@ -107,7 +123,11 @@ async function main() {
         row[arm] = { pass: verdict.pass, answer: reply.trim(), reason: verdict.reason, checks: verdict.checks }
       }
       rows.push(row)
-      console.log(`  ${index + 1}/${bank.sessions.length} ${session.sessionId.slice(0, 12)} ${question.id}: memory=${row.memory.pass ? 'P' : 'F'} rag=${row.rag.pass ? 'P' : 'F'} closed=${row.closed.pass ? 'P' : 'F'}`)
+      const armsLine = Object.entries(row)
+        .filter(([key]) => ['memory', 'rag', 'closed'].includes(key))
+        .map(([key, value]) => `${key}=${value.pass ? 'P' : 'F'}`)
+        .join(' ')
+      console.log(`  ${index + 1}/${bank.sessions.length} ${session.sessionId.slice(0, 12)} ${question.id}: ${armsLine}`)
     }
   }
 
@@ -121,13 +141,14 @@ async function main() {
     bankHash: bank.bankHash,
     candidatesHash: createHash('sha256').update(JSON.stringify(candidates.sessions.map((session) => session.sessionId))).digest('hex'),
     judge: { anchor },
+    reextract: reextract ?? null,
     sessions: bank.sessions.length,
     questions: rows.length,
     arms: {},
     paired: {},
     rows,
   }
-  for (const arm of ['memory', 'rag', 'closed']) {
+  for (const arm of memoryOnly ? ['memory'] : ['memory', 'rag', 'closed']) {
     report.arms[arm] = percentage(rows.filter((row) => row[arm].pass).length, rows.length)
   }
   const pairs = (left, right) => {
@@ -135,15 +156,19 @@ async function main() {
     const loss = rows.filter((row) => !row[left].pass && row[right].pass).length
     return `${left} 赢 ${gain} / 输 ${loss}`
   }
-  report.paired.memoryVsClosed = pairs('memory', 'closed')
-  report.paired.memoryVsRag = pairs('memory', 'rag')
-  report.paired.ragVsClosed = pairs('rag', 'closed')
+  if (!memoryOnly) {
+    report.paired.memoryVsClosed = pairs('memory', 'closed')
+    report.paired.memoryVsRag = pairs('memory', 'rag')
+    report.paired.ragVsClosed = pairs('rag', 'closed')
+  }
 
   console.log('')
   console.log(`memory  ${report.arms.memory}`)
-  console.log(`rag     ${report.arms.rag}`)
-  console.log(`closed  ${report.arms.closed}`)
-  console.log(`paired: ${report.paired.memoryVsClosed}; ${report.paired.memoryVsRag}; ${report.paired.ragVsClosed}`)
+  if (!memoryOnly) {
+    console.log(`rag     ${report.arms.rag}`)
+    console.log(`closed  ${report.arms.closed}`)
+    console.log(`paired: ${report.paired.memoryVsClosed}; ${report.paired.memoryVsRag}; ${report.paired.ragVsClosed}`)
+  }
   console.log(`paid: ${usage.calls} calls, ${usage.input} in / ${usage.output} out, ~¥${cost.toFixed(3)}${offPeak() ? ' (off-peak 半价)' : ''}`)
   await mkdir(DATA, { recursive: true })
   await writeFile(RESULT, `${JSON.stringify(report, null, 2)}\n`)
