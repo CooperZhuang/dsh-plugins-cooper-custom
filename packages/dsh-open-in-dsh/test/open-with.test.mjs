@@ -12,7 +12,7 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import test from 'node:test'
 
 import {
@@ -97,7 +97,7 @@ test('the allowlist is the whole command surface', () => {
   assert.deepEqual(availableApps('linux', () => true), [])
 
   // The macOS probe only offers what it can find.
-  const installed = (path) => path === '/Applications/QSpace Pro.app'
+  const installed = (path) => path === '/Applications/QSpace Pro.app' || path === join('/Applications', 'QSpace Pro.app')
   assert.deepEqual(availableApps('darwin', installed), ['qspace', 'finder', 'terminal'])
 
   // Ids are compared exactly: a command, an app name or a forged tail is not one.
@@ -156,14 +156,14 @@ test('existingPath canonicalizes real files and directories and refuses the rest
   assert.equal(existingPath(undefined), null)
 
   const stat = fakeStat({ '/tmp/d': 'directory', '/tmp/f.txt': 'file', '/tmp/fifo': 'other' })
-  assert.deepEqual(existingPath('/tmp/d', stat), { path: '/tmp/d', directory: true })
+  assert.deepEqual(existingPath('/tmp/d', stat), { path: resolve('/tmp/d'), directory: true })
   assert.equal(existingPath('/tmp/f.txt', stat).directory, false)
   // A device or socket is not a document an application opens.
   assert.equal(existingPath('/tmp/fifo', stat), null)
 })
 
 test('the apps route reports only allowlisted apps that are installed', async () => {
-  const probes = new Set(['/Applications/QSpace Pro.app'])
+  const probes = new Set(['/Applications/QSpace Pro.app', join('/Applications', 'QSpace Pro.app')])
   const mounted = await serve(createAppsHandler(false, { platform: 'darwin', exists: (path) => probes.has(path) }))
   try {
     const response = await fetch(mounted.base + ROUTE_APPS)
@@ -187,10 +187,10 @@ test('a valid action spawns exactly the allowlisted argv', async () => {
   try {
     const result = await postOpenWith(mounted.base, { path: '/tmp/project', app: 'qspace' })
     assert.equal(result.status, 200)
-    assert.deepEqual(result.body, { ok: true, app: 'qspace', path: '/tmp/project', directory: true })
+    assert.deepEqual(result.body, { ok: true, app: 'qspace', path: resolve('/tmp/project'), directory: true })
     assert.deepEqual(
       exec.calls.map((call) => ({ file: call.file, args: call.args })),
-      [{ file: 'open', args: ['-a', 'QSpace Pro', '/tmp/project'] }],
+      [{ file: 'open', args: ['-a', 'QSpace Pro', resolve('/tmp/project')] }],
     )
     // No shell: execFile's options must not ask for one.
     assert.equal(exec.calls[0].settings.shell, undefined)

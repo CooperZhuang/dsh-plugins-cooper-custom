@@ -12,7 +12,7 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { chmodSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import test from 'node:test'
 import zlib from 'node:zlib'
 
@@ -203,12 +203,12 @@ test('a resolved Session cwd is spawned as the allowlisted directory launch', as
       ok: true,
       app: 'qspace',
       sessionId: 'session-1',
-      path: '/work/project',
+      path: resolve('/work/project'),
       directory: true,
     })
     assert.deepEqual(
       exec.calls.map((call) => ({ file: call.file, args: call.args })),
-      [{ file: 'open', args: ['-a', 'QSpace Pro', '/work/project'] }],
+      [{ file: 'open', args: ['-a', 'QSpace Pro', resolve('/work/project')] }],
     )
     assert.equal(exec.calls[0].settings.shell, undefined)
   } finally {
