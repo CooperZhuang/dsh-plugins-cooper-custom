@@ -68,11 +68,13 @@ test('the daily cap is a guard rail against a runaway trigger', () => {
 })
 
 test('quiet hours defer a notice instead of dropping it', () => {
-  const at22 = Date.parse('2026-10-23T14:00:00Z') // 22:00 in UTC+8
+  // Local-time constructors: quiet hours use the host clock, so an absolute UTC
+  // timestamp would only test the machine's timezone (and fail on UTC CI).
+  const at22 = new Date(2026, 9, 23, 22, 0, 0).getTime()
   const due = quietHoursEnd(at22, '22:00-08:00')
   assert.ok(due > at22, 'held until the window ends')
   assert.equal(quietHoursEnd(at22, ''), at22, 'no window means no delay')
-  const daytime = Date.parse('2026-10-23T02:00:00Z') // 10:00 in UTC+8
+  const daytime = new Date(2026, 9, 23, 10, 0, 0).getTime()
   assert.equal(quietHoursEnd(daytime, '22:00-08:00'), daytime, 'outside the window it fires now')
 })
 
