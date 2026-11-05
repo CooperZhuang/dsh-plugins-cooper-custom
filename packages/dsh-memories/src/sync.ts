@@ -181,6 +181,45 @@ export function sessionNoteStamp(text: string): number {
  *
  * @returns the winning text, or undefined when neither side carries a stamp.
  */
+/** Whether one repository path is a per-host descriptor: `projects/<slug>/hosts/<host>.json`. */
+export function isHostDescriptorPath(path: string): boolean {
+  return /(^|\/)hosts\/[^/]+\.json$/u.test(path)
+}
+
+/**
+ * Resolve one conflicting host descriptor by keeping the newer reading.
+ *
+ * A host descriptor is the machine's own note about one project checkout: where
+ * it is, when it was seen last, and its git origin. Only the machine named in
+ * the file writes it, but every other machine carries a copy — so a rebase
+ * between two machines stops here with an older and a newer reading of the same
+ * machine. `lastSeen` says which is newer; when both agree, the side that knows
+ * the origin wins because a descriptor written before the origin field existed
+ * lacks it.
+ *
+ * @returns the winning text, or undefined when neither side is a descriptor.
+ */
+export function newerHostDescriptor(ours: string, theirs: string): string | undefined {
+  const parse = (text: string): Record<string, unknown> | undefined => {
+    try {
+      const value: unknown = JSON.parse(text)
+      return value !== null && typeof value === 'object' ? value as Record<string, unknown> : undefined
+    } catch {
+      return undefined
+    }
+  }
+  const left = parse(ours)
+  const right = parse(theirs)
+  if (left === undefined && right === undefined) return undefined
+  if (left === undefined) return theirs
+  if (right === undefined) return ours
+  const seen = (row: Record<string, unknown>): number => typeof row['lastSeen'] === 'number' ? row['lastSeen'] as number : 0
+  if (seen(right) !== seen(left)) return seen(right) > seen(left) ? theirs : ours
+  const hasOrigin = (row: Record<string, unknown>): boolean => typeof row['origin'] === 'string'
+  if (hasOrigin(right) !== hasOrigin(left)) return hasOrigin(right) ? theirs : ours
+  return ours
+}
+
 export function newerSessionNote(ours: string, theirs: string): string | undefined {
   const left = sessionNoteStamp(ours)
   const right = sessionNoteStamp(theirs)
@@ -589,6 +628,13 @@ export class MemorySync {
           const note = isSessionNotePath(path) ? newerSessionNote(ours, theirs) : undefined
           if (note !== undefined) {
             await writeFile(join(this.dir, path), note)
+            resolvedByTime += 1
+            await git(this.dir, ['add', path], this.options.gitTimeoutMs)
+            continue
+          }
+          const descriptor = isHostDescriptorPath(path) ? newerHostDescriptor(ours, theirs) : undefined
+          if (descriptor !== undefined) {
+            await writeFile(join(this.dir, path), descriptor)
             resolvedByTime += 1
             await git(this.dir, ['add', path], this.options.gitTimeoutMs)
             continue

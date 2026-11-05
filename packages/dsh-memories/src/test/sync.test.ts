@@ -13,7 +13,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { MemorySync, STORE_GITIGNORE, entryStamp, isEntryPath, isSessionNotePath, mergeLoopLedgers, newerEntry, newerSessionNote, nextClockDelay } from '../sync.js'
+import { MemorySync, STORE_GITIGNORE, entryStamp, isEntryPath, isHostDescriptorPath, isSessionNotePath, mergeLoopLedgers, newerEntry, newerHostDescriptor, newerSessionNote, nextClockDelay } from '../sync.js'
 import { applyConflictPlan, isArchivedEntryPath, projectRootOf } from '../sync-runtime.js'
 import { slugify } from '../storage.js'
 import type { EntryConflict } from '../sync.js'
@@ -249,6 +249,19 @@ test('two machines resummarising one session keep the later note and finish the 
   assert.match(note, /second reading/u, 'the later summary won')
   assert.match(execFileSync('git', ['-C', remote, 'show', 'main:sessions/session-same.md'], { encoding: 'utf8' }), /second reading/u)
   assert.equal(git(right.dir, 'status', '--porcelain').trim(), '', 'the store is not left mid-rebase')
+})
+
+test('a conflicting host descriptor keeps the newer reading', () => {
+  const older = JSON.stringify({ host: 'h', platform: 'darwin', root: '/p', firstSeen: 1, lastSeen: 10 })
+  const newer = JSON.stringify({ host: 'h', platform: 'darwin', root: '/p', firstSeen: 1, lastSeen: 20, origin: 'github.com/a/b' })
+  assert.equal(newerHostDescriptor(older, newer), newer)
+  assert.equal(newerHostDescriptor(newer, older), newer, 'the order of the two sides does not matter')
+  const noOrigin = JSON.stringify({ host: 'h', lastSeen: 20 })
+  assert.equal(newerHostDescriptor(newer, noOrigin), newer, 'the side that knows the origin wins when lastSeen ties')
+  assert.equal(newerHostDescriptor('{}', 'not json'), '{}', 'a side that is not JSON is ignored')
+  assert.equal(isHostDescriptorPath('projects/a/hosts/example-macbook-pro-local.json'), true)
+  assert.equal(isHostDescriptorPath('projects/a/project.json'), false)
+  assert.equal(isHostDescriptorPath('entries/hosts/note.md'), false)
 })
 
 test('the clock schedule picks the next local time, and wraps to tomorrow', () => {
