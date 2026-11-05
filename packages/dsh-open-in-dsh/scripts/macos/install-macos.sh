@@ -120,8 +120,26 @@ write_document() {
   _wd_service_app=$2
   # Selected items arrive as arguments (inputMethod=1), one per argument, and
   # the launcher accepts any number of folders, so multi-select works.
-  _wd_script="for f in \"\$@\"; do
-  \"$launcher\" \"\$f\" || exit \$?
+  #
+  # The launcher is baked in as an absolute path (the shell Automator runs does
+  # not necessarily share the user's PATH), so moving this checkout leaves the
+  # click pointing at nothing. Measured 2026-11-05 after moving the repository
+  # into Code/Dsh/: Finder showed the action, and clicking it popped Automator's
+  # bare 「操作“运行Shell脚本”遇到了错误 -: line 2: <path>: No such file or
+  # directory」. The guard names the missing launcher and says what to re-run;
+  # the path travels as argv so a path with spaces or quotes cannot break the
+  # AppleScript. Exit 0 after the alert so Automator does not add a second,
+  # less specific error dialog on top of it.
+  _wd_script="launcher=\"$launcher\"
+if [ ! -x \"\$launcher\" ]; then
+  osascript -e 'on run argv' -e 'display alert \"无法通过 DSH 打开\" message (\"找不到启动器：\" & item 1 of argv & \"。这个 checkout 移动过的话，重跑 packages/dsh-open-in-dsh/scripts/macos/install-macos.sh install。\")' -e 'end run' \"\$launcher\" || {
+    printf 'open-in-dsh: launcher missing: %s\n' \"\$launcher\" >&2
+    exit 1
+  }
+  exit 0
+fi
+for f in \"\$@\"; do
+  \"\$launcher\" \"\$f\" || exit \$?
 done"
   {
     cat <<'HEAD'
@@ -282,7 +300,19 @@ refresh_services() {
   fi
 }
 
-# One line of "is this bundle installed, and with which scope".
+# The launcher path an installed workflow would run, or "" when this bundle was
+# not written by this installer (no `launcher=` line in its shell action).
+baked_launcher() {
+  _bl_doc=$1/Contents/document.wflow
+  [ -f "$_bl_doc" ] || return 1
+  _bl_cmd=$(/usr/libexec/PlistBuddy -c 'Print :actions:0:action:ActionParameters:COMMAND_STRING' "$_bl_doc" 2>/dev/null) || return 1
+  printf '%s\n' "$_bl_cmd" | sed -n 's/^launcher="\(.*\)"$/\1/p' | head -n 1
+}
+
+# One line of "is this bundle installed, and with which scope". Returns non-zero
+# when the bundle would not work from this checkout: invalid plists, or a baked
+# launcher that is not the one this installer was run against (a moved checkout
+# leaves the workflow pointing at the old absolute path).
 describe_bundle() {
   _db_bundle=$1
   if [ ! -f "$_db_bundle/Contents/document.wflow" ]; then
@@ -295,7 +325,23 @@ describe_bundle() {
     printf 'workflow   %s (scope: %s, plists OK)\n' "$_db_bundle" "$_db_scope"
   else
     printf 'workflow   %s (scope: %s, plists INVALID)\n' "$_db_bundle" "$_db_scope"
+    return 1
   fi
+  _db_baked=$(baked_launcher "$_db_bundle") || _db_baked=''
+  if [ -z "$_db_baked" ]; then
+    printf 'launcher   (workflow names no launcher; not written by this installer)\n'
+    return 0
+  fi
+  if [ "$_db_baked" != "$launcher" ]; then
+    printf 'launcher   %s (STALE: this checkout is %s; re-run install-macos.sh install)\n' "$_db_baked" "$launcher"
+    return 1
+  fi
+  if [ ! -x "$_db_baked" ]; then
+    printf 'launcher   %s (MISSING: re-run install-macos.sh install)\n' "$_db_baked"
+    return 1
+  fi
+  printf 'launcher   %s (matches this installer)\n' "$_db_baked"
+  return 0
 }
 
 install() {
@@ -350,13 +396,19 @@ uninstall() {
 }
 
 status() {
+  # Non-zero when a click would fail: missing launcher, invalid or stale bundle.
+  # That makes "is the installed service still pointing at this checkout?" a
+  # question a script can ask, not one a user answers by clicking and reading a
+  # 「运行Shell脚本 遇到了错误」dialog.
+  _st_rc=0
   if [ -x "$launcher" ]; then
     printf 'launcher   %s (executable)\n' "$launcher"
   else
     printf 'launcher   %s (MISSING)\n' "$launcher"
+    _st_rc=1
   fi
-  describe_bundle "$workflow"
-  describe_bundle "$qspace_workflow"
+  describe_bundle "$workflow" || _st_rc=1
+  describe_bundle "$qspace_workflow" || _st_rc=1
   if [ -L "$cli_link" ]; then
     printf 'command    %s -> %s\n' "$cli_link" "$(readlink "$cli_link")"
   elif [ -e "$cli_link" ]; then
@@ -365,7 +417,12 @@ status() {
     printf 'command    NOT INSTALLED (%s)\n' "$cli_link"
   fi
   printf '\nwhat a click would do:\n'
-  "$launcher" --print . 2>&1 | sed -e 's/^/  /'
+  if [ -x "$launcher" ]; then
+    "$launcher" --print . 2>&1 | sed -e 's/^/  /'
+  else
+    printf '  (skipped: launcher is not executable)\n'
+  fi
+  return $_st_rc
 }
 
 case $action in

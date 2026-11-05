@@ -33,7 +33,7 @@ DSH 0.2.2 起「插件 → 已安装」可以检查并更新**第三方 npm 插�
 ```bash
 # macOS（pnpm 11.8：file: 目录是硬链接副本，构建会写穿到 installed 目录）
 pnpm --dir ~/.dsh/profiles/desktop add --ignore-scripts \
-  "file:/Users/example/Documents/Code/dsh-plugins-cooper-custom/packages/dsh-memories"
+  "file:/Users/example/Documents/Code/Dsh/dsh-plugins-cooper-custom/packages/dsh-memories"
 
 # Windows（pnpm 11.28：file: 目录建的是符号链接，指向仓库真实目录 → 编辑/构建直接生效）
 pnpm --dir "$env:USERPROFILE\.dsh\profiles\desktop" add --ignore-scripts \

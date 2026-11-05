@@ -22,7 +22,7 @@
  * must stay testable there.
  */
 import { spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -219,6 +219,75 @@ test('the generated workflow actually delivers a folder to the launcher', { skip
   const run = spawnSync('automator', ['-i', folder, join(services, '通过 DSH 打开.workflow')], { encoding: 'utf8' })
   assert.equal(run.status, 0, run.stderr)
   assert.equal(readFileSync(argsFile, 'utf8').trim(), folder)
+})
+
+test('a moved checkout makes the workflow say what to re-run, not fail bare', { skip: !darwin }, () => {
+  // Measured 2026-11-05: the repository moved into Code/Dsh/ and the Quick
+  // Action, whose launcher path is baked at install time, failed with
+  // 「操作“运行Shell脚本”遇到了错误 -: line 2: <old path>: No such file or directory」.
+  // The workflow must name the missing path and the installer to re-run.
+  const tmp = scratch()
+  const services = join(tmp, 'Services')
+  const bin = join(tmp, 'bin')
+  const probe = join(tmp, 'probe-launcher')
+  const argsFile = join(tmp, 'probe-args.txt')
+  const install = installProbe(services, bin, probe, argsFile)
+  assert.equal(install.status, 0, install.stderr)
+
+  const document = join(services, '通过 DSH 打开.workflow/Contents/document.wflow')
+  const payload = join(tmp, 'action.sh')
+  writeFileSync(payload, `${plistValue(document, 'actions:0:action:ActionParameters:COMMAND_STRING')}\n`)
+  const alertFile = join(tmp, 'alert-args.txt')
+  const fakeBin = join(tmp, 'fakebin')
+  mkdirSync(fakeBin)
+  // The alert is checked, not shown: a real osascript here would put a modal
+  // dialog on the screen of whoever runs the tests.
+  const fakeOsascript = join(fakeBin, 'osascript')
+  writeFileSync(fakeOsascript, `#!/bin/sh\nprintf '%s\\n' "$@" > ${JSON.stringify(alertFile)}\n`)
+  chmodSync(fakeOsascript, 0o755)
+  const folder = join(tmp, 'folder')
+  mkdirSync(folder)
+
+  rmSync(probe) // the checkout moved: the baked absolute path is gone
+  const run = spawnSync('/bin/sh', [payload, folder], {
+    encoding: 'utf8',
+    env: { ...process.env, PATH: `${fakeBin}:/usr/bin:/bin` },
+  })
+  assert.equal(run.status, 0, run.stderr)
+  const alert = readFileSync(alertFile, 'utf8')
+  assert.match(alert, /找不到启动器/)
+  assert.ok(alert.includes(probe), 'the alert does not name the missing launcher')
+  assert.equal(existsSync(argsFile), false, 'a missing launcher was still invoked')
+
+  // No osascript at all (a broken PATH): the action must fail loudly instead of
+  // looking like a click that did nothing.
+  const noOsascript = spawnSync('/bin/sh', [payload, folder], {
+    encoding: 'utf8',
+    env: { ...process.env, PATH: '/nonexistent' },
+  })
+  assert.equal(noOsascript.status, 1)
+  assert.match(noOsascript.stderr, /launcher missing/)
+})
+
+test('status reports a stale workflow, and says so with a non-zero exit', { skip: !darwin }, () => {
+  const tmp = scratch()
+  const services = join(tmp, 'Services')
+  const bin = join(tmp, 'bin')
+  const probe = join(tmp, 'probe-launcher')
+  const install = installProbe(services, bin, probe, join(tmp, 'probe-args.txt'))
+  assert.equal(install.status, 0, install.stderr)
+
+  const fresh = spawnSync(installer, ['status', '--launcher', probe, '--services-dir', services, '--bin-dir', bin], { encoding: 'utf8' })
+  assert.equal(fresh.status, 0, fresh.stderr)
+  assert.match(fresh.stdout, /matches this installer/)
+
+  // What a moved checkout looks like: the workflow still runs the old absolute
+  // path while this installer sits at a new one.
+  const moved = join(tmp, 'moved', 'open-in-dsh')
+  const stale = spawnSync(installer, ['status', '--launcher', moved, '--services-dir', services, '--bin-dir', bin], { encoding: 'utf8' })
+  assert.equal(stale.status, 1)
+  assert.match(stale.stdout, /STALE/)
+  assert.ok(stale.stdout.includes(probe), 'status does not name the path the workflow would run')
 })
 
 test('QSpace gets its own service: same label and script, scoped to its bundle id', { skip: !darwin }, () => {

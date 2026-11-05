@@ -131,6 +131,13 @@ packages/dsh-open-in-dsh/scripts/macos/install-macos.sh install
 # 卸载：… uninstall     查看当前状态与「点一下会发生什么」：… status
 ```
 
+workflow 里烘焙的是启动器的**绝对路径**（Automator 跑的 shell 不一定有用户的 PATH）。把本仓库
+挪走之后菜单项还在、点一下只会弹 Automator 的
+`操作“运行Shell脚本”遇到了错误 -: line N: <旧路径>: No such file or directory`——2026-11-05 把仓库
+迁进 `Code/Dsh/` 时就是这样坏的。换路径后重跑一次 `install`；`status` 会打印
+`launcher … STALE: … re-run install-macos.sh install` 并以非 0 退出，可以拿它当「服务是否还指向
+当前 checkout」的探针。
+
 装完这些：
 
 | 位置 | 是什么 |
@@ -396,8 +403,8 @@ bundle 自带的 `cordis.patch.yml` 是默认值；profile 的 `cordis.patch.yml
 ## 验证
 
 ```powershell
-npm test        # 24 个测试
-node --test test/macos.test.mjs   # macOS：13 个测试（不需要装 node_modules）
+npm test        # 82 个测试
+node --test test/macos.test.mjs   # macOS：17 个测试（不需要装 node_modules）
 ```
 
 - `test/host.test.mjs`：序号/回放/宿主重启回退 + `%V` 的各种形态。
