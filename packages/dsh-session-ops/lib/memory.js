@@ -17,22 +17,20 @@
  *
  * @module dsh-session-ops/memory
  */
-
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
-import { basename, join, resolve } from 'node:path'
-
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { basename, join, resolve } from 'node:path';
+import { messageOf } from './store/util.js';
 /** 与 dsh-cross-memory/lib/storage.js 的 slugify 逐字一致。 */
 export function slugify(value) {
-  const slug = String(value)
-    .normalize('NFKD')
-    .toLowerCase()
-    .replace(/[\u0300-\u036f]/gu, '')
-    .replace(/[^a-z0-9\u4e00-\u9fff]+/gu, '-')
-    .replace(/^-+|-+$/gu, '')
-    .slice(0, 64)
-  return slug.length > 0 ? slug : 'memory'
+    const slug = String(value)
+        .normalize('NFKD')
+        .toLowerCase()
+        .replace(/[\u0300-\u036f]/gu, '')
+        .replace(/[^a-z0-9\u4e00-\u9fff]+/gu, '-')
+        .replace(/^-+|-+$/gu, '')
+        .slice(0, 64);
+    return slug.length > 0 ? slug : 'memory';
 }
-
 /**
  * 与 dsh-cross-memory/lib/storage.js 的 projectSlug 逐字一致：**只取项目名**，
  * 不再拼 `sha1(resolve(root))` 后缀。dsh-cross-memory 已把项目 slug 改成
@@ -40,21 +38,18 @@ export function slugify(value) {
  * 项目按机器拆成多个目录，迁移逻辑见其 storage.ts 的 LEGACY_PROJECT_SLUG）。
  */
 export function projectSlug(root) {
-  return slugify(root.replace(/[\\/]+$/u, '').split(/[\\/]/u).pop() ?? 'workspace')
+    return slugify(root.replace(/[\\/]+$/u, '').split(/[\\/]/u).pop() ?? 'workspace');
 }
-
 /** `$DSH_HOME/memories/projects`。 */
 export function projectsDirOf(dshHome) {
-  return join(dshHome, 'memories', 'projects')
+    return join(dshHome, 'memories', 'projects');
 }
-
 /** Windows 上路径比较不区分大小写（其余平台按字面比较）。 */
 function samePath(left, right) {
-  const a = resolve(left)
-  const b = resolve(right)
-  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
+    const a = resolve(left);
+    const b = resolve(right);
+    return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
-
 /**
  * 在 projects 目录里按 root 找已存在的项目（优先命中已有 slug，避免算出第二个目录）。
  * @param projectsDir - `…/memories/projects`。
@@ -62,44 +57,49 @@ function samePath(left, right) {
  * @returns `{slug, root, descriptorFile, dir}`，没有时 `undefined`。
  */
 export function findProjectByRoot(projectsDir, root) {
-  let entries
-  try {
-    entries = readdirSync(projectsDir, { withFileTypes: true })
-  } catch {
-    return undefined
-  }
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue
-    const descriptorFile = join(projectsDir, entry.name, 'project.json')
-    if (!existsSync(descriptorFile)) continue
+    let entries;
     try {
-      const descriptor = JSON.parse(readFileSync(descriptorFile, 'utf8'))
-      if (typeof descriptor?.root === 'string' && samePath(descriptor.root, root)) {
-        return { slug: entry.name, root: descriptor.root, descriptorFile, dir: join(projectsDir, entry.name) }
-      }
-    } catch {
-      /* 坏的 project.json 跳过 */
+        entries = readdirSync(projectsDir, { withFileTypes: true });
     }
-  }
-  return undefined
+    catch {
+        return undefined;
+    }
+    for (const entry of entries) {
+        if (!entry.isDirectory())
+            continue;
+        const descriptorFile = join(projectsDir, entry.name, 'project.json');
+        if (!existsSync(descriptorFile))
+            continue;
+        try {
+            const descriptor = JSON.parse(readFileSync(descriptorFile, 'utf8'));
+            if (typeof descriptor?.root === 'string' && samePath(descriptor.root, root)) {
+                return { slug: entry.name, root: descriptor.root, descriptorFile, dir: join(projectsDir, entry.name) };
+            }
+        }
+        catch {
+            /* 坏的 project.json 跳过 */
+        }
+    }
+    return undefined;
 }
-
 /** 极简 frontmatter 解析：只认 `key: value` 单行（dsh-cross-memory 的条目就是这种形状）。 */
 export function parseFrontmatter(text) {
-  const out = {}
-  if (!text.startsWith('---')) return out
-  const end = text.indexOf('\n---', 3)
-  const head = end === -1 ? text.slice(3) : text.slice(3, end)
-  for (const line of head.split('\n')) {
-    const at = line.indexOf(':')
-    if (at <= 0) continue
-    const key = line.slice(0, at).trim()
-    if (key.length === 0) continue
-    out[key] = line.slice(at + 1).trim().replace(/^"(.*)"$/u, '$1')
-  }
-  return out
+    const out = {};
+    if (!text.startsWith('---'))
+        return out;
+    const end = text.indexOf('\n---', 3);
+    const head = end === -1 ? text.slice(3) : text.slice(3, end);
+    for (const line of head.split('\n')) {
+        const at = line.indexOf(':');
+        if (at <= 0)
+            continue;
+        const key = line.slice(0, at).trim();
+        if (key.length === 0)
+            continue;
+        out[key] = line.slice(at + 1).trim().replace(/^"(.*)"$/u, '$1');
+    }
+    return out;
 }
-
 /**
  * 计算一次「记忆随会话走」的计划。**只读**。
  *
@@ -107,71 +107,74 @@ export function parseFrontmatter(text) {
  * @returns 计划：源/目标项目、匹配到的条目（按 frontmatter 的 `session:` 归属过滤）。
  */
 export function planMemoryFollow(options) {
-  const { dshHome, sessionId, fromCwd, toCwd } = options
-  const projectsDir = projectsDirOf(dshHome)
-  const source = findProjectByRoot(projectsDir, fromCwd)
-  const targetFound = findProjectByRoot(projectsDir, toCwd)
-  const target = targetFound ?? {
-    slug: projectSlug(toCwd),
-    root: resolve(toCwd),
-    descriptorFile: join(projectsDir, projectSlug(toCwd), 'project.json'),
-    dir: join(projectsDir, projectSlug(toCwd)),
-    planned: true,
-  }
-  const plan = {
-    projectsDir,
-    source: source === undefined ? null : { slug: source.slug, root: source.root, dir: source.dir },
-    target: { slug: target.slug, root: target.root, dir: target.dir, descriptorFile: target.descriptorFile, existed: targetFound !== undefined },
-    sessionId,
-    totalInSource: 0,
-    matched: [],
-  }
-  if (source === undefined) return plan
-  const entriesDir = join(source.dir, 'entries')
-  let files
-  try {
-    files = readdirSync(entriesDir)
-  } catch {
-    return plan
-  }
-  const wanted = String(sessionId).replace(/^session-/u, '')
-  for (const name of files) {
-    if (!name.endsWith('.md')) continue
-    const file = join(entriesDir, name)
-    let front
+    const { dshHome, sessionId, fromCwd, toCwd } = options;
+    const projectsDir = projectsDirOf(dshHome);
+    const source = findProjectByRoot(projectsDir, fromCwd);
+    const targetFound = findProjectByRoot(projectsDir, toCwd);
+    const target = targetFound ?? {
+        slug: projectSlug(toCwd),
+        root: resolve(toCwd),
+        descriptorFile: join(projectsDir, projectSlug(toCwd), 'project.json'),
+        dir: join(projectsDir, projectSlug(toCwd)),
+        planned: true,
+    };
+    const plan = {
+        projectsDir,
+        source: source === undefined ? null : { slug: source.slug, root: source.root, dir: source.dir },
+        target: { slug: target.slug, root: target.root, dir: target.dir, descriptorFile: target.descriptorFile, existed: targetFound !== undefined },
+        sessionId,
+        totalInSource: 0,
+        matched: [],
+    };
+    if (source === undefined)
+        return plan;
+    const entriesDir = join(source.dir, 'entries');
+    let files;
     try {
-      front = parseFrontmatter(readFileSync(file, 'utf8'))
-    } catch {
-      continue
+        files = readdirSync(entriesDir);
     }
-    plan.totalInSource += 1
-    const owner = typeof front.session === 'string' ? front.session.replace(/^session-/u, '') : undefined
-    if (owner !== wanted) continue
-    const targetFile = join(target.dir, 'entries', name)
-    plan.matched.push({
-      id: front.id ?? name.replace(/\.md$/u, ''),
-      title: front.title ?? '',
-      sourceFile: file,
-      targetFile,
-      existsInTarget: existsSync(targetFile),
-    })
-  }
-  return plan
+    catch {
+        return plan;
+    }
+    const wanted = String(sessionId).replace(/^session-/u, '');
+    for (const name of files) {
+        if (!name.endsWith('.md'))
+            continue;
+        const file = join(entriesDir, name);
+        let front;
+        try {
+            front = parseFrontmatter(readFileSync(file, 'utf8'));
+        }
+        catch {
+            continue;
+        }
+        plan.totalInSource += 1;
+        const owner = typeof front.session === 'string' ? front.session.replace(/^session-/u, '') : undefined;
+        if (owner !== wanted)
+            continue;
+        const targetFile = join(target.dir, 'entries', name);
+        plan.matched.push({
+            id: front.id ?? name.replace(/\.md$/u, ''),
+            title: front.title ?? '',
+            sourceFile: file,
+            targetFile,
+            existsInTarget: existsSync(targetFile),
+        });
+    }
+    return plan;
 }
-
 /** 建立目标项目目录（含 project.json 与 entries/）。 */
 function ensureProject(target) {
-  mkdirSync(join(target.dir, 'entries'), { recursive: true })
-  if (!existsSync(target.descriptorFile)) {
-    writeFileSync(target.descriptorFile, `${JSON.stringify({
-      root: target.root,
-      name: basename(target.root),
-      slug: target.slug,
-      updatedAt: Date.now(),
-    }, null, 2)}\n`)
-  }
+    mkdirSync(join(target.dir, 'entries'), { recursive: true });
+    if (!existsSync(target.descriptorFile)) {
+        writeFileSync(target.descriptorFile, `${JSON.stringify({
+            root: target.root,
+            name: basename(target.root),
+            slug: target.slug,
+            updatedAt: Date.now(),
+        }, null, 2)}\n`);
+    }
 }
-
 /**
  * 执行计划。`copy` 只加不删；`move` 复制后从源项目移除（= 纠正错放）。
  * 目标已有同名条目时跳过（不覆盖、按名去重）。
@@ -181,25 +184,27 @@ function ensureProject(target) {
  * @returns `{mode, copied, skipped, removed, files}`。
  */
 export function applyMemoryFollow(plan, mode) {
-  const outcome = { mode, copied: 0, skipped: 0, removed: 0, files: [] }
-  if (plan.source === null || plan.matched.length === 0) return outcome
-  ensureProject(plan.target)
-  for (const entry of plan.matched) {
-    if (entry.existsInTarget) {
-      outcome.skipped += 1
-      continue
+    const outcome = { mode, copied: 0, skipped: 0, removed: 0, files: [] };
+    if (plan.source === null || plan.matched.length === 0)
+        return outcome;
+    ensureProject(plan.target);
+    for (const entry of plan.matched) {
+        if (entry.existsInTarget) {
+            outcome.skipped += 1;
+            continue;
+        }
+        copyFileSync(entry.sourceFile, entry.targetFile);
+        outcome.copied += 1;
+        outcome.files.push(entry.id);
+        if (mode === 'move') {
+            try {
+                unlinkSync(entry.sourceFile);
+                outcome.removed += 1;
+            }
+            catch (error) {
+                outcome.removeError = messageOf(error);
+            }
+        }
     }
-    copyFileSync(entry.sourceFile, entry.targetFile)
-    outcome.copied += 1
-    outcome.files.push(entry.id)
-    if (mode === 'move') {
-      try {
-        unlinkSync(entry.sourceFile)
-        outcome.removed += 1
-      } catch (error) {
-        outcome.removeError = String(error?.message ?? error)
-      }
-    }
-  }
-  return outcome
+    return outcome;
 }

@@ -28,29 +28,21 @@
  *
  * @module dsh-session-ops/store/frames
  */
-
-import { readFileSync, readdirSync, statSync } from 'node:fs'
-import { join } from 'node:path'
-import zlib from 'node:zlib'
-
-import { isSessionLogFile } from './paths.js'
-
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+import zlib from 'node:zlib';
+import { isSessionLogFile } from './paths.js';
+import { messageOf } from './util.js';
 /** zstd 帧魔数（小端）。 */
-export const ZSTD_MAGIC = 0xfd2fb528
-
+export const ZSTD_MAGIC = 0xfd2fb528;
 /** 与 DSH 一致的压缩选项：带内容校验和。 */
-export const CHECKSUM_OPTIONS =
-  zlib.constants?.ZSTD_c_checksumFlag === undefined
+export const CHECKSUM_OPTIONS = zlib.constants?.ZSTD_c_checksumFlag === undefined
     ? {}
-    : { params: { [zlib.constants.ZSTD_c_checksumFlag]: 1 } }
-
+    : { params: { [zlib.constants.ZSTD_c_checksumFlag]: 1 } };
 /** `zstdCompressSync` 需要 Node ≥22.15 / ≥23.8；缺失时插件拒绝搬迁而不是写坏日志。 */
-export const hasZstd = typeof zlib.zstdCompressSync === 'function' && typeof zlib.zstdDecompressSync === 'function'
-
+export const hasZstd = typeof zlib.zstdCompressSync === 'function' && typeof zlib.zstdDecompressSync === 'function';
 /** `zstdDecompressSync` 同样需要 Node ≥22.15；缺失时降级为「读不到会话头」。 */
-const zstdDecompress =
-  typeof zlib.zstdDecompressSync === 'function' ? zlib.zstdDecompressSync : undefined
-
+const zstdDecompress = typeof zlib.zstdDecompressSync === 'function' ? zlib.zstdDecompressSync : undefined;
 /**
  * 走一遍拼接帧，给出每帧的字节范围。
  *
@@ -62,49 +54,58 @@ const zstdDecompress =
  * @returns `{frames, incomplete, reason}`；`frames` 每项含 `{start, end}`。
  */
 export function scanZstdFrames(buffer) {
-  const frames = []
-  let offset = 0
-  while (offset < buffer.length) {
-    const start = offset
-    if (buffer.length - offset < 4) return { frames, incomplete: true, reason: `尾部剩 ${buffer.length - offset} 字节，不足以构成帧魔数` }
-    if (buffer.readUInt32LE(offset) !== ZSTD_MAGIC) {
-      return { frames, incomplete: true, reason: `偏移 ${offset} 处不是 zstd 魔数` }
+    const frames = [];
+    let offset = 0;
+    while (offset < buffer.length) {
+        const start = offset;
+        if (buffer.length - offset < 4)
+            return { frames, incomplete: true, reason: `尾部剩 ${buffer.length - offset} 字节，不足以构成帧魔数` };
+        if (buffer.readUInt32LE(offset) !== ZSTD_MAGIC) {
+            return { frames, incomplete: true, reason: `偏移 ${offset} 处不是 zstd 魔数` };
+        }
+        offset += 4;
+        if (offset >= buffer.length)
+            return { frames, incomplete: true, reason: '帧头被截断（缺少描述符）' };
+        const descriptor = buffer.readUInt8(offset);
+        offset += 1;
+        const fcsFlag = descriptor >> 6;
+        const singleSegment = (descriptor >> 5) & 1;
+        const checksum = (descriptor >> 2) & 1;
+        const dictionaryFlag = descriptor & 3;
+        if (singleSegment === 0)
+            offset += 1; // Window_Descriptor
+        offset += dictionaryFlag === 0 ? 0 : dictionaryFlag === 1 ? 1 : dictionaryFlag === 2 ? 2 : 4;
+        const fcsSize = fcsFlag === 0 ? (singleSegment === 1 ? 1 : 0) : fcsFlag === 1 ? 2 : fcsFlag === 2 ? 4 : 8;
+        offset += fcsSize;
+        if (offset > buffer.length)
+            return { frames, incomplete: true, reason: '帧头字段越过文件尾' };
+        for (;;) {
+            if (offset + 3 > buffer.length)
+                return { frames, incomplete: true, reason: '块头被截断' };
+            const header = buffer.readUInt8(offset) | (buffer.readUInt8(offset + 1) << 8) | (buffer.readUInt8(offset + 2) << 16);
+            offset += 3;
+            const lastBlock = header & 1;
+            const blockType = (header >> 1) & 3;
+            const blockSize = header >> 3;
+            if (blockType === 0)
+                offset += blockSize;
+            else if (blockType === 1)
+                offset += 1;
+            else if (blockType === 2)
+                offset += blockSize;
+            else
+                return { frames, incomplete: true, reason: `偏移 ${offset - 3} 处出现保留块类型` };
+            if (lastBlock === 1)
+                break;
+        }
+        if (checksum === 1)
+            offset += 4;
+        if (offset > buffer.length)
+            return { frames, incomplete: true, reason: '帧体越过文件尾' };
+        frames.push({ start, end: offset });
     }
-    offset += 4
-    if (offset >= buffer.length) return { frames, incomplete: true, reason: '帧头被截断（缺少描述符）' }
-    const descriptor = buffer.readUInt8(offset)
-    offset += 1
-    const fcsFlag = descriptor >> 6
-    const singleSegment = (descriptor >> 5) & 1
-    const checksum = (descriptor >> 2) & 1
-    const dictionaryFlag = descriptor & 3
-
-    if (singleSegment === 0) offset += 1 // Window_Descriptor
-    offset += dictionaryFlag === 0 ? 0 : dictionaryFlag === 1 ? 1 : dictionaryFlag === 2 ? 2 : 4
-    const fcsSize = fcsFlag === 0 ? (singleSegment === 1 ? 1 : 0) : fcsFlag === 1 ? 2 : fcsFlag === 2 ? 4 : 8
-    offset += fcsSize
-    if (offset > buffer.length) return { frames, incomplete: true, reason: '帧头字段越过文件尾' }
-
-    for (;;) {
-      if (offset + 3 > buffer.length) return { frames, incomplete: true, reason: '块头被截断' }
-      const header = buffer.readUInt8(offset) | (buffer.readUInt8(offset + 1) << 8) | (buffer.readUInt8(offset + 2) << 16)
-      offset += 3
-      const lastBlock = header & 1
-      const blockType = (header >> 1) & 3
-      const blockSize = header >> 3
-      if (blockType === 0) offset += blockSize
-      else if (blockType === 1) offset += 1
-      else if (blockType === 2) offset += blockSize
-      else return { frames, incomplete: true, reason: `偏移 ${offset - 3} 处出现保留块类型` }
-      if (lastBlock === 1) break
-    }
-    if (checksum === 1) offset += 4
-    if (offset > buffer.length) return { frames, incomplete: true, reason: '帧体越过文件尾' }
-    frames.push({ start, end: offset })
-  }
-  return { frames, incomplete: false }
+    return { frames, incomplete: false };
 }
-
 /**
  * 读出日志第一帧里的 header 对象（只解析，不改写）。
  * @param buffer - 日志内容。
@@ -112,30 +113,32 @@ export function scanZstdFrames(buffer) {
  * @returns header 对象；不是合法会话日志时 `undefined`。
  */
 export function readHeaderFromBuffer(buffer, compressed = true) {
-  if (!compressed) {
-    try {
-      const text = buffer.toString('utf8')
-      const newlineIndex = text.indexOf('\n')
-      const parsed = JSON.parse(newlineIndex === -1 ? text : text.slice(0, newlineIndex))
-      return parsed !== null && typeof parsed === 'object' && parsed.type === 'session' ? parsed : undefined
-    } catch {
-      return undefined
+    if (!compressed) {
+        try {
+            const text = buffer.toString('utf8');
+            const newlineIndex = text.indexOf('\n');
+            const parsed = JSON.parse(newlineIndex === -1 ? text : text.slice(0, newlineIndex));
+            return parsed !== null && typeof parsed === 'object' && parsed.type === 'session' ? parsed : undefined;
+        }
+        catch {
+            return undefined;
+        }
     }
-  }
-  const scan = scanZstdFrames(buffer)
-  if (scan.frames.length === 0) return undefined
-  try {
-    const first = scan.frames[0]
-    const inflated = zlib.zstdDecompressSync(buffer.subarray(first.start, first.end))
-    const text = Buffer.from(inflated).toString('utf8')
-    const newlineIndex = text.indexOf('\n')
-    const parsed = JSON.parse(newlineIndex === -1 ? text : text.slice(0, newlineIndex))
-    return parsed !== null && typeof parsed === 'object' && parsed.type === 'session' ? parsed : undefined
-  } catch {
-    return undefined
-  }
+    const scan = scanZstdFrames(buffer);
+    if (scan.frames.length === 0)
+        return undefined;
+    try {
+        const first = scan.frames[0];
+        const inflated = zlib.zstdDecompressSync(buffer.subarray(first.start, first.end));
+        const text = Buffer.from(inflated).toString('utf8');
+        const newlineIndex = text.indexOf('\n');
+        const parsed = JSON.parse(newlineIndex === -1 ? text : text.slice(0, newlineIndex));
+        return parsed !== null && typeof parsed === 'object' && parsed.type === 'session' ? parsed : undefined;
+    }
+    catch {
+        return undefined;
+    }
 }
-
 /**
  * 把一个会话目录里的会话头读出来（**宽松**读法：扫目录找日志文件，取解压后的第一行）。
  *
@@ -149,42 +152,46 @@ export function readHeaderFromBuffer(buffer, compressed = true) {
  * @returns 头部对象，或 undefined。
  */
 export function readSessionHeader(dir, cache = new Map()) {
-  let entries
-  try {
-    entries = readdirSync(dir, { withFileTypes: true })
-  } catch {
-    return undefined
-  }
-  const log = entries.find((e) => e.isFile() && isSessionLogFile(e.name))
-  if (log === undefined) return undefined
-  const path = join(dir, log.name)
-  let stat
-  try {
-    stat = statSync(path)
-  } catch {
-    return undefined
-  }
-  const key = `${path}:${stat.mtimeMs}:${stat.size}`
-  if (cache.has(key)) return cache.get(key)
-  let header
-  try {
-    const raw = readFileSync(path)
-    const text = log.name.endsWith('.zstd')
-      ? zstdDecompress === undefined
-        ? undefined
-        : zstdDecompress(raw).toString('utf8')
-      : raw.toString('utf8')
-    if (text !== undefined) {
-      const end = text.indexOf('\n')
-      header = JSON.parse(end === -1 ? text : text.slice(0, end))
+    let entries;
+    try {
+        entries = readdirSync(dir, { withFileTypes: true });
     }
-  } catch {
-    header = undefined
-  }
-  cache.set(key, header)
-  return header
+    catch {
+        return undefined;
+    }
+    const log = entries.find((e) => e.isFile() && isSessionLogFile(e.name));
+    if (log === undefined)
+        return undefined;
+    const path = join(dir, log.name);
+    let stat;
+    try {
+        stat = statSync(path);
+    }
+    catch {
+        return undefined;
+    }
+    const key = `${path}:${stat.mtimeMs}:${stat.size}`;
+    if (cache.has(key))
+        return cache.get(key);
+    let header;
+    try {
+        const raw = readFileSync(path);
+        const text = log.name.endsWith('.zstd')
+            ? zstdDecompress === undefined
+                ? undefined
+                : zstdDecompress(raw).toString('utf8')
+            : raw.toString('utf8');
+        if (text !== undefined) {
+            const end = text.indexOf('\n');
+            header = JSON.parse(end === -1 ? text : text.slice(0, end));
+        }
+    }
+    catch {
+        header = undefined;
+    }
+    cache.set(key, header);
+    return header;
 }
-
 /**
  * 把会话头的 `cwd` 改写成另一条绝对路径。
  *
@@ -198,64 +205,70 @@ export function readSessionHeader(dir, cache = new Map()) {
  *   `rewritten: false` 并原样返回。
  */
 export function rewriteHeaderCwd(buffer, newCwd, options = {}) {
-  const compressed = options.compressed !== false
-  if (typeof newCwd !== 'string' || newCwd.length === 0) {
-    return { buffer, rewritten: false, reason: 'empty target cwd' }
-  }
-  if (!compressed) {
-    const text = buffer.toString('utf8')
-    const newlineIndex = text.indexOf('\n')
-    const firstLine = newlineIndex === -1 ? text : text.slice(0, newlineIndex)
-    const rest = newlineIndex === -1 ? '' : text.slice(newlineIndex)
-    let header
+    const compressed = options.compressed !== false;
+    if (typeof newCwd !== 'string' || newCwd.length === 0) {
+        return { buffer, rewritten: false, reason: 'empty target cwd' };
+    }
+    if (!compressed) {
+        const text = buffer.toString('utf8');
+        const newlineIndex = text.indexOf('\n');
+        const firstLine = newlineIndex === -1 ? text : text.slice(0, newlineIndex);
+        const rest = newlineIndex === -1 ? '' : text.slice(newlineIndex);
+        let header;
+        try {
+            header = JSON.parse(firstLine);
+        }
+        catch {
+            return { buffer, rewritten: false, reason: 'header line is not JSON' };
+        }
+        if (header?.type !== 'session' || typeof header.cwd !== 'string') {
+            return { buffer, rewritten: false, reason: 'header has no cwd' };
+        }
+        if (header.cwd === newCwd)
+            return { buffer, rewritten: false, header };
+        const rebuilt = {};
+        for (const [key, value] of Object.entries(header))
+            rebuilt[key] = key === 'cwd' ? newCwd : value;
+        return { buffer: Buffer.from(JSON.stringify(rebuilt) + rest, 'utf8'), rewritten: true, header: rebuilt };
+    }
+    if (!hasZstd)
+        return { buffer, rewritten: false, reason: 'this node build lacks zlib zstd support' };
+    const scan = scanZstdFrames(buffer);
+    if (scan.incomplete || scan.frames.length === 0) {
+        return { buffer, rewritten: false, reason: scan.reason ?? 'no complete frame' };
+    }
+    const firstFrame = scan.frames[0];
+    let header;
+    let rest;
     try {
-      header = JSON.parse(firstLine)
-    } catch {
-      return { buffer, rewritten: false, reason: 'header line is not JSON' }
+        const inflated = zlib.zstdDecompressSync(buffer.subarray(firstFrame.start, firstFrame.end));
+        const text = Buffer.from(inflated).toString('utf8');
+        const newlineIndex = text.indexOf('\n');
+        header = JSON.parse(newlineIndex === -1 ? text : text.slice(0, newlineIndex));
+        rest = newlineIndex === -1 ? '' : text.slice(newlineIndex);
+    }
+    catch (error) {
+        return { buffer, rewritten: false, reason: `cannot decode header frame: ${messageOf(error)}` };
     }
     if (header?.type !== 'session' || typeof header.cwd !== 'string') {
-      return { buffer, rewritten: false, reason: 'header has no cwd' }
+        return { buffer, rewritten: false, reason: 'header has no cwd' };
     }
-    if (header.cwd === newCwd) return { buffer, rewritten: false, header }
-    const rebuilt = {}
-    for (const [key, value] of Object.entries(header)) rebuilt[key] = key === 'cwd' ? newCwd : value
-    return { buffer: Buffer.from(JSON.stringify(rebuilt) + rest, 'utf8'), rewritten: true, header: rebuilt }
-  }
-
-  if (!hasZstd) return { buffer, rewritten: false, reason: 'this node build lacks zlib zstd support' }
-  const scan = scanZstdFrames(buffer)
-  if (scan.incomplete || scan.frames.length === 0) {
-    return { buffer, rewritten: false, reason: scan.reason ?? 'no complete frame' }
-  }
-  const firstFrame = scan.frames[0]
-  let header
-  let rest
-  try {
-    const inflated = zlib.zstdDecompressSync(buffer.subarray(firstFrame.start, firstFrame.end))
-    const text = Buffer.from(inflated).toString('utf8')
-    const newlineIndex = text.indexOf('\n')
-    header = JSON.parse(newlineIndex === -1 ? text : text.slice(0, newlineIndex))
-    rest = newlineIndex === -1 ? '' : text.slice(newlineIndex)
-  } catch (error) {
-    return { buffer, rewritten: false, reason: `cannot decode header frame: ${String(error?.message ?? error)}` }
-  }
-  if (header?.type !== 'session' || typeof header.cwd !== 'string') {
-    return { buffer, rewritten: false, reason: 'header has no cwd' }
-  }
-  if (header.cwd === newCwd) return { buffer, rewritten: false, header, frames: scan.frames.length }
-
-  const rebuilt = {}
-  for (const [key, value] of Object.entries(header)) rebuilt[key] = key === 'cwd' ? newCwd : value
-  let newFrame
-  try {
-    newFrame = zlib.zstdCompressSync(Buffer.from(JSON.stringify(rebuilt) + rest, 'utf8'), CHECKSUM_OPTIONS)
-  } catch (error) {
-    return { buffer, rewritten: false, reason: `cannot recompress header frame: ${String(error?.message ?? error)}` }
-  }
-  return {
-    buffer: Buffer.concat([newFrame, buffer.subarray(firstFrame.end)]),
-    rewritten: true,
-    header: rebuilt,
-    frames: scan.frames.length,
-  }
+    if (header.cwd === newCwd)
+        return { buffer, rewritten: false, header, frames: scan.frames.length };
+    const rebuilt = {};
+    for (const [key, value] of Object.entries(header))
+        rebuilt[key] = key === 'cwd' ? newCwd : value;
+    let newFrame;
+    try {
+        newFrame = zlib.zstdCompressSync(Buffer.from(JSON.stringify(rebuilt) + rest, 'utf8'), CHECKSUM_OPTIONS);
+    }
+    catch (error) {
+        return { buffer, rewritten: false, reason: `cannot recompress header frame: ${messageOf(error)}` };
+    }
+    return {
+        buffer: Buffer.concat([newFrame, buffer.subarray(firstFrame.end)]),
+        rewritten: true,
+        header: rebuilt,
+        frames: scan.frames.length,
+    };
 }

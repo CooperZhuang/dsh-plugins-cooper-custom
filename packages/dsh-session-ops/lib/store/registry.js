@@ -22,12 +22,14 @@
  * 拿不到 `agents` 服务时 admin 保守地把全部驻留会话当成「在跑」（宁可拒绝），
  * move 则把状态当成未知（`undefined`，界面照常显示）。
  *
+ * 这里声明的都是**最小本地接口**：Cordis/DSH 的宿主对象在编译期拿不到类型，
+ * 但本模块只用到这几个字段，把它们写清楚比整片 `any` 更能挡住拼写错误。
+ *
  * @module dsh-session-ops/store/registry
  */
-
+import { messageOf } from './util.js';
 /** agent 表示「这一轮还在跑」的状态值。 */
-export const SESSION_RUNNING_STATUS = 'running'
-
+export const SESSION_RUNNING_STATUS = 'running';
 /**
  * Host 进程里仍挂着的会话 id 集合（`ctx.sessions.list()`）。
  *
@@ -37,16 +39,17 @@ export const SESSION_RUNNING_STATUS = 'running'
  * @returns `Set<string>`。
  */
 export function residentSessionIds(sessions) {
-  const ids = new Set()
-  try {
-    const list = typeof sessions?.list === 'function' ? sessions.list() : []
-    for (const session of list) ids.add(String(session.id))
-  } catch {
-    /* 没有会话存储时视为无驻留 */
-  }
-  return ids
+    const ids = new Set();
+    try {
+        const list = typeof sessions?.list === 'function' ? sessions.list() : [];
+        for (const session of list)
+            ids.add(String(session.id));
+    }
+    catch {
+        /* 没有会话存储时视为无驻留 */
+    }
+    return ids;
 }
-
 /**
  * 一条会话的 agent 状态（`ctx.get('agents').get(id)?.status`）。
  * @param agents - `ctx.get('agents')` 拿到的 agent 服务（可为 undefined）。
@@ -54,14 +57,14 @@ export function residentSessionIds(sessions) {
  * @returns 状态字符串；没有 agent、拿不到服务或抛错时 `undefined`（**未知**）。
  */
 export function agentSessionStatus(agents, sessionId) {
-  try {
-    const agent = typeof agents?.get === 'function' ? agents.get(sessionId) : undefined
-    return agent !== undefined && typeof agent.status === 'string' ? agent.status : undefined
-  } catch {
-    return undefined
-  }
+    try {
+        const agent = typeof agents?.get === 'function' ? agents.get(sessionId) : undefined;
+        return agent !== undefined && typeof agent.status === 'string' ? agent.status : undefined;
+    }
+    catch {
+        return undefined;
+    }
 }
-
 /**
  * 真正「正在跑一轮」的会话：驻留集合里 agent 状态为 {@link SESSION_RUNNING_STATUS} 的那部分。
  *
@@ -72,37 +75,37 @@ export function agentSessionStatus(agents, sessionId) {
  * @returns `Set<string>`（可能就是 `residents` 本身）。
  */
 export function runningSessionIds(residents, agents) {
-  if (agents === undefined || typeof agents.get !== 'function') return residents
-  const running = new Set()
-  for (const id of residents) {
-    try {
-      if (agents.get(id)?.status === SESSION_RUNNING_STATUS) running.add(id)
-    } catch {
-      running.add(id)
+    if (agents === undefined || typeof agents.get !== 'function')
+        return residents;
+    const running = new Set();
+    for (const id of residents) {
+        try {
+            if (agents.get(id)?.status === SESSION_RUNNING_STATUS)
+                running.add(id);
+        }
+        catch {
+            running.add(id);
+        }
     }
-  }
-  return running
+    return running;
 }
-
 /**
  * 工作区的**完整记账**成员表（`workspace.record.sessionIds`）。
  * @param workspace - 工作区实体。
  * @returns id 数组；实体没有 record 视图时 `undefined`。
  */
 export function accountedSessionIds(workspace) {
-  const record = workspace?.record
-  return record !== undefined && Array.isArray(record.sessionIds) ? record.sessionIds : undefined
+    const record = workspace?.record;
+    return record !== undefined && Array.isArray(record.sessionIds) ? record.sessionIds : undefined;
 }
-
 /**
  * 归档集合（`registry.archivedSessionIds`）。
  * @param registry - `ctx.workspaceRegistry`。
  * @returns `Set<string>`（id 归一成字符串）。
  */
 export function archivedSessionIds(registry) {
-  return new Set(Array.isArray(registry.archivedSessionIds) ? registry.archivedSessionIds.map(String) : [])
+    return new Set(Array.isArray(registry.archivedSessionIds) ? registry.archivedSessionIds.map(String) : []);
 }
-
 /**
  * 按**完整记账**找出会话所属的工作区。
  * @param workspaces - 工作区实体数组（通常是 `registry.list()`）。
@@ -110,13 +113,13 @@ export function archivedSessionIds(registry) {
  * @returns 工作区实体，或 `undefined`。
  */
 export function workspaceOwningSession(workspaces, sessionId) {
-  for (const workspace of workspaces) {
-    const ids = accountedSessionIds(workspace)
-    if (ids !== undefined && ids.includes(sessionId)) return workspace
-  }
-  return undefined
+    for (const workspace of workspaces) {
+        const ids = accountedSessionIds(workspace);
+        if (ids !== undefined && ids.includes(sessionId))
+            return workspace;
+    }
+    return undefined;
 }
-
 /**
  * 按 id → path → title 的顺序找一个工作区（后两者不区分大小写）。
  * @param workspaces - 工作区实体数组（通常是 `registry.list()`）。
@@ -124,14 +127,20 @@ export function workspaceOwningSession(workspaces, sessionId) {
  * @returns 工作区实体，或 `undefined`。
  */
 export function findWorkspace(workspaces, key) {
-  if (typeof key !== 'string' || key.length === 0) return undefined
-  for (const workspace of workspaces) if (String(workspace.id) === key) return workspace
-  const lowered = key.toLowerCase()
-  for (const workspace of workspaces) if (String(workspace.path).toLowerCase() === lowered) return workspace
-  for (const workspace of workspaces) if (String(workspace.title).toLowerCase() === lowered) return workspace
-  return undefined
+    if (typeof key !== 'string' || key.length === 0)
+        return undefined;
+    for (const workspace of workspaces)
+        if (String(workspace.id) === key)
+            return workspace;
+    const lowered = key.toLowerCase();
+    for (const workspace of workspaces)
+        if (String(workspace.path).toLowerCase() === lowered)
+            return workspace;
+    for (const workspace of workspaces)
+        if (String(workspace.title).toLowerCase() === lowered)
+            return workspace;
+    return undefined;
 }
-
 /**
  * 把一个即将被删除的会话从它登记过的每个持久结构里摘掉。
  *
@@ -148,17 +157,17 @@ export function findWorkspace(workspaces, key) {
  * @returns 全部持久写入完成之后 resolve；值是真正被 detach 的工作区 id 列表。
  */
 export async function releaseSessionEverywhere(registry, sessionId) {
-  const detached = []
-  for (const workspace of registry.list()) {
-    if (!workspace.sessionIds.includes(sessionId)) continue
-    await workspace.detachSession(sessionId)
-    detached.push(String(workspace.id))
-  }
-  await registry.unarchiveSession(sessionId)
-  await registry.unpinSession(sessionId)
-  return detached
+    const detached = [];
+    for (const workspace of registry.list()) {
+        if (!workspace.sessionIds.includes(sessionId))
+            continue;
+        await workspace.detachSession(sessionId);
+        detached.push(String(workspace.id));
+    }
+    await registry.unarchiveSession(sessionId);
+    await registry.unpinSession(sessionId);
+    return detached;
 }
-
 /**
  * 持久化后端的**写入句柄表**（`persistence.tracker.writers`）。
  *
@@ -167,10 +176,11 @@ export async function releaseSessionEverywhere(registry, sessionId) {
  * @returns `Map<id, handle>`，或 `undefined`（后端不暴露 tracker 时）。
  */
 export function sessionWriteHandles(persistence) {
-  const tracker = persistence?.tracker
-  return tracker !== undefined && tracker.writers instanceof Map ? tracker.writers : undefined
+    const tracker = persistence?.tracker;
+    return tracker !== undefined && tracker.writers instanceof Map
+        ? tracker.writers
+        : undefined;
 }
-
 /**
  * 把「这条会话以后往哪写」在**内存里**也改成新 cwd。
  *
@@ -189,35 +199,36 @@ export function sessionWriteHandles(persistence) {
  *   ——`flushError` 只在 flush 抛错时出现；`liveSession` 是驻留会话对象（没有则 undefined）。
  */
 export async function redirectSessionWriters(options) {
-  const { writers, sessions, registry, sessionId, cwd } = options
-  const outcome = {
-    writeHandleRedirected: false,
-    liveHeaderUpdated: false,
-    registryHeaderCacheUpdated: false,
-    liveSession: undefined,
-  }
-  const handle = writers === undefined ? undefined : writers.get(sessionId)
-  if (handle !== undefined && handle !== null && typeof handle.header === 'object') {
-    try {
-      await handle.flush()
-    } catch (error) {
-      outcome.flushError = String(error?.message ?? error)
+    const { writers, sessions, registry, sessionId, cwd } = options;
+    const outcome = {
+        writeHandleRedirected: false,
+        liveHeaderUpdated: false,
+        registryHeaderCacheUpdated: false,
+        liveSession: undefined,
+    };
+    const handle = writers === undefined ? undefined : writers.get(sessionId);
+    if (handle !== undefined && handle !== null && typeof handle.header === 'object') {
+        try {
+            await handle.flush();
+        }
+        catch (error) {
+            outcome.flushError = messageOf(error);
+        }
+        handle.header = { ...handle.header, cwd };
+        outcome.writeHandleRedirected = true;
     }
-    handle.header = { ...handle.header, cwd }
-    outcome.writeHandleRedirected = true
-  }
-  const live = typeof sessions?.get === 'function' ? sessions.get(sessionId) : undefined
-  outcome.liveSession = live
-  if (live !== undefined) {
-    live.header = { ...live.header, cwd }
-    outcome.liveHeaderUpdated = true
-  }
-  if (registry.headers instanceof Map) {
-    const cached = registry.headers.get(sessionId)
-    if (cached !== undefined) {
-      registry.headers.set(sessionId, { ...cached, cwd })
-      outcome.registryHeaderCacheUpdated = true
+    const live = typeof sessions?.get === 'function' ? sessions.get(sessionId) : undefined;
+    outcome.liveSession = live;
+    if (live !== undefined) {
+        live.header = { ...live.header, cwd };
+        outcome.liveHeaderUpdated = true;
     }
-  }
-  return outcome
+    if (registry.headers instanceof Map) {
+        const cached = registry.headers.get(sessionId);
+        if (cached !== undefined) {
+            registry.headers.set(sessionId, { ...cached, cwd });
+            outcome.registryHeaderCacheUpdated = true;
+        }
+    }
+    return outcome;
 }

@@ -1,0 +1,49 @@
+/**
+ * Trailing status markers, exactly as the harness bash tool renders them
+ * (`dsh-tool-bash`'s `renderResult` / `renderPromoted`). They are the model's
+ * contract for exit status, so they must survive condensation byte-for-byte.
+ *
+ * @module dsh-rtk-slim/markers
+ */
+
+/** One trailing status marker line. `[status: …]` is `job_output`'s own line. */
+const MARKER = /^\[(?:exit code: -?\d+|timed out after \d+ms|stopped: [^\]]*|status: [^\]]*|killed by signal: [^\]]*|sandbox: [^\]]*|still running after \d+ms; moved to background job [^\]]+)\]$/
+
+/** Opening words of the guidance paragraph that follows a background promotion. */
+const BACKGROUND_GUIDANCE = 'The command keeps running in the background.'
+
+/** A rendered tool result split into condenser input and verbatim status tail. */
+export interface SplitMarkers {
+  /** Text rtk may condense. */
+  body: string
+  /** Trailing status block, re-attached verbatim; `''` when nothing matched. */
+  tail: string
+}
+
+/**
+ * Split the trailing status block off a rendered tool result.
+ * @param text - full rendered tool result.
+ * @returns the body to condense and the tail to preserve.
+ */
+export function splitTailMarkers(text: string): SplitMarkers {
+  if (text.length === 0) return { body: '', tail: '' }
+  const lines = text.split('\n')
+  let cut = lines.length
+  // The promoted-to-background shape is "<marker>\n<guidance>"; consume the
+  // guidance only when a real marker sits directly above it.
+  if (cut > 1 && lines[cut - 1].startsWith(BACKGROUND_GUIDANCE) && MARKER.test(lines[cut - 2])) cut -= 1
+  while (cut > 0 && MARKER.test(lines[cut - 1])) cut -= 1
+  if (cut === lines.length) return { body: text, tail: '' }
+  return { body: lines.slice(0, cut).join('\n'), tail: lines.slice(cut).join('\n') }
+}
+
+/**
+ * Re-attach a split `tail`. `joinTailMarkers(...split(x)) === x` for every `x`.
+ * @param body - condensed body.
+ * @param tail - status block produced by {@link splitTailMarkers}.
+ * @returns the reassembled text.
+ */
+export function joinTailMarkers(body: string, tail: string): string {
+  if (tail === '') return body
+  return body === '' ? tail : `${body}\n${tail}`
+}

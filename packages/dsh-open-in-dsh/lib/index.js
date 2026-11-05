@@ -37,17 +37,15 @@
  *
  * @module dsh-open-in-dsh
  */
-import { execFile } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'node:fs'
-import { createServer } from 'node:http'
-import { homedir } from 'node:os'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
-import z from '@deepseek-ai/schemastery'
-import { dshHome, encodeSegment, readSessionHeader } from 'dsh-session-ops/store'
-
+import { execFile } from 'node:child_process';
+import { chmodSync, existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'node:fs';
+import { createServer } from 'node:http';
+import { homedir } from 'node:os';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
+import z from '@deepseek-ai/schemastery';
+import { dshHome, encodeSegment, readSessionHeader } from 'dsh-session-ops/store';
 /** Cordis plugin name; the profile row's `id` is independent of it. */
-export const name = 'open-in-dsh'
-
+export const name = 'open-in-dsh';
 /**
  * macOS 交接套接字。**手抄**进 `scripts/macos/open-in-dsh`（`SOCKET_PATH_DEFAULT`），
  * `test/macos.test.mjs` 保证两份一致；`DSH_OPEN_SOCKET`（脚本）与 config `socketPath`
@@ -56,8 +54,7 @@ export const name = 'open-in-dsh'
  * 放 `~/.dsh/run/` 而不是 `$TMPDIR`：Quick Action 由 Finder 拉起，它的 TMPDIR 与终端
  * 是不是同一个目录不值得赌。
  */
-export const DEFAULT_SOCKET_PATH = join(homedir(), '.dsh', 'run', 'dsh-open-in-dsh.sock')
-
+export const DEFAULT_SOCKET_PATH = join(homedir(), '.dsh', 'run', 'dsh-open-in-dsh.sock');
 /**
  * 部署层配置。
  *
@@ -71,44 +68,41 @@ export const DEFAULT_SOCKET_PATH = join(homedir(), '.dsh', 'run', 'dsh-open-in-d
  * 本插件只有下面四个开关，不值得为它单开一页——改它们直接写 YAML 或 settings.yaml。
  */
 export const Config = z.object({
-  /** 总开关。关掉后连路由都不注册。 */
-  enabled: z.boolean().default(true),
-  /**
-   * 每次右键都新建一个空白会话。
-   *
-   * **默认 false**：复用该工作区已有的空白会话。同一个文件夹点几次就堆几个空会话
-   * 是很容易发生的，而复用正是 DSH 侧边栏「新会话」自己的语义。
-   */
-  alwaysNewSession: z.boolean().default(false),
-  /**
-   * 是否接受非回环来源。**默认 false，不要轻易打开。**
-   *
-   * 这条路由的作用是让浏览器把任意本地目录当成工作区打开，而工作区里会跑命令，
-   * 等同于一个代码执行入口，所以「能连上端口」不等于「是这台机器上的人」。
-   *
-   * 内核 0.2.1 起 webserver 不再接受通配地址（`0.0.0.0` / `::` 一律拒绝加载），
-   * 但**可以**钉到某个具体接口地址（比如本机的局域网 IP），那仍然是网络可达的，
-   * 所以这条回环检查照旧不能省。
-   */
-  allowNonLoopback: z.boolean().default(false),
-  /** 冷启动补收的时间窗：页面没开着时，请求在这段时间内仍可被补收。 */
-  backlogTtlMs: z.number().default(60000),
-  /**
-   * macOS 交接套接字路径；空串表示不监听。
-   *
-   * 桌面外壳 2.0.19 起不再接受 `--dsh-desktop-workspace`（Chromium 的选项解析会以
-   * `bad option` 直接退出），也不再转发 second-instance 的 argv，所以快速操作改由本插件
-   * 自己在套接字上收路径，与 Windows 那条 HTTP 路由共用同一个 handler。
-   */
-  socketPath: z.string().default(DEFAULT_SOCKET_PATH),
-})
-
+    /** 总开关。关掉后连路由都不注册。 */
+    enabled: z.boolean().default(true),
+    /**
+     * 每次右键都新建一个空白会话。
+     *
+     * **默认 false**：复用该工作区已有的空白会话。同一个文件夹点几次就堆几个空会话
+     * 是很容易发生的，而复用正是 DSH 侧边栏「新会话」自己的语义。
+     */
+    alwaysNewSession: z.boolean().default(false),
+    /**
+     * 是否接受非回环来源。**默认 false，不要轻易打开。**
+     *
+     * 这条路由的作用是让浏览器把任意本地目录当成工作区打开，而工作区里会跑命令，
+     * 等同于一个代码执行入口，所以「能连上端口」不等于「是这台机器上的人」。
+     *
+     * 内核 0.2.1 起 webserver 不再接受通配地址（`0.0.0.0` / `::` 一律拒绝加载），
+     * 但**可以**钉到某个具体接口地址（比如本机的局域网 IP），那仍然是网络可达的，
+     * 所以这条回环检查照旧不能省。
+     */
+    allowNonLoopback: z.boolean().default(false),
+    /** 冷启动补收的时间窗：页面没开着时，请求在这段时间内仍可被补收。 */
+    backlogTtlMs: z.number().default(60000),
+    /**
+     * macOS 交接套接字路径；空串表示不监听。
+     *
+     * 桌面外壳 2.0.19 起不再接受 `--dsh-desktop-workspace`（Chromium 的选项解析会以
+     * `bad option` 直接退出），也不再转发 second-instance 的 argv，所以快速操作改由本插件
+     * 自己在套接字上收路径，与 Windows 那条 HTTP 路由共用同一个 handler。
+     */
+    socketPath: z.string().default(DEFAULT_SOCKET_PATH),
+});
 /** The endpoint the Explorer verb's launcher calls. Mirrored in `scripts/`. */
-export const ROUTE_OPEN = '/dsh-open-in-dsh/api/v1/open'
-
+export const ROUTE_OPEN = '/dsh-open-in-dsh/api/v1/open';
 /** The endpoint the browser half follows. Hand-mirrored in `client/index.js`. */
-export const ROUTE_EVENTS = '/dsh-open-in-dsh/api/v1/events'
-
+export const ROUTE_EVENTS = '/dsh-open-in-dsh/api/v1/events';
 /**
  * Reports how many pages are following, without announcing anything.
  *
@@ -116,8 +110,7 @@ export const ROUTE_EVENTS = '/dsh-open-in-dsh/api/v1/events'
  * that is merely mid-reconnect would otherwise look like "DSH is closed" and
  * send the user a browser window they did not ask for.
  */
-export const ROUTE_STATUS = '/dsh-open-in-dsh/api/v1/status'
-
+export const ROUTE_STATUS = '/dsh-open-in-dsh/api/v1/status';
 /**
  * The right-click menu's "open with <app>" action posts `{ path, app }` here.
  *
@@ -125,14 +118,12 @@ export const ROUTE_STATUS = '/dsh-open-in-dsh/api/v1/status'
  * app name: the Host owns the whole argv, so the browser can only ask for one
  * of the allowlisted launches.
  */
-export const ROUTE_OPEN_WITH = '/dsh-open-in-dsh/api/v1/open-with'
-
+export const ROUTE_OPEN_WITH = '/dsh-open-in-dsh/api/v1/open-with';
 /**
  * The menu asks this before it shows anything, so an app that is not installed
  * on this machine never becomes an action that fails on click.
  */
-export const ROUTE_APPS = '/dsh-open-in-dsh/api/v1/apps'
-
+export const ROUTE_APPS = '/dsh-open-in-dsh/api/v1/apps';
 /**
  * The Session-scoped entry (the sidebar row menu) knows a session id, never a
  * directory: the browser half has the Session projection, not the stored
@@ -143,28 +134,22 @@ export const ROUTE_APPS = '/dsh-open-in-dsh/api/v1/apps'
  * path never crosses the wire, so a forged request cannot open an arbitrary
  * directory through this route.
  */
-export const ROUTE_OPEN_SESSION = '/dsh-open-in-dsh/api/v1/open-session'
-
+export const ROUTE_OPEN_SESSION = '/dsh-open-in-dsh/api/v1/open-session';
 /** How long an unanswered request stays replayable for a page that was closed. */
-const DEFAULT_BACKLOG_TTL_MS = 60_000
-
+const DEFAULT_BACKLOG_TTL_MS = 60_000;
 /** A right-click flood is not a queue; the newest requests are the real ones. */
-const MAX_BACKLOG = 32
-
+const MAX_BACKLOG = 32;
 /** Keeps a proxied or suspended connection from being reaped as dead. */
-const HEARTBEAT_MS = 20_000
-
+const HEARTBEAT_MS = 20_000;
 /**
  * How long after the last page went away a request still counts as "a page may
  * be coming back". A page that is reconnecting (a plugin remount, a reload)
  * looks identical to "DSH is closed" for a second or two, and the launcher must
  * not answer the first by opening a window the user did not ask for.
  */
-const RECENT_CLIENT_MS = 15_000
-
+const RECENT_CLIENT_MS = 15_000;
 /** One folder path; anything larger is not this request. */
-const MAX_REQUEST_BYTES = 16 * 1024
-
+const MAX_REQUEST_BYTES = 16 * 1024;
 /**
  * The open-with allowlist: the only commands this plugin will ever spawn.
  *
@@ -179,28 +164,35 @@ const MAX_REQUEST_BYTES = 16 * 1024
  * - win32: Explorer opens a directory and selects a file.
  */
 export const OPEN_WITH_APPS = Object.freeze({
-  darwin: Object.freeze([
-    Object.freeze({ id: 'qspace', app: 'QSpace Pro', bundle: 'QSpace Pro.app' }),
-    Object.freeze({ id: 'finder', always: true }),
-    Object.freeze({ id: 'vscode', app: 'Visual Studio Code', bundle: 'Visual Studio Code.app' }),
-    Object.freeze({ id: 'warp', app: 'Warp', bundle: 'Warp.app' }),
-    Object.freeze({ id: 'terminal', app: 'Terminal', always: true }),
-  ]),
-  win32: Object.freeze([Object.freeze({ id: 'explorer', always: true })]),
-})
-
+    darwin: Object.freeze([
+        Object.freeze({ id: 'qspace', app: 'QSpace Pro', bundle: 'QSpace Pro.app' }),
+        Object.freeze({ id: 'finder', always: true }),
+        Object.freeze({ id: 'vscode', app: 'Visual Studio Code', bundle: 'Visual Studio Code.app' }),
+        Object.freeze({ id: 'warp', app: 'Warp', bundle: 'Warp.app' }),
+        Object.freeze({ id: 'terminal', app: 'Terminal', always: true }),
+    ]),
+    win32: Object.freeze([Object.freeze({ id: 'explorer', always: true })]),
+});
 /** Where a macOS app bundle is probed for; the per-user folder comes second. */
-const DARWIN_APP_DIRS = Object.freeze(['/Applications', join(homedir(), 'Applications')])
-
+const DARWIN_APP_DIRS = Object.freeze(['/Applications', join(homedir(), 'Applications')]);
 /** One path longer than this did not come from a right-click. */
-const MAX_PATH_LENGTH = 4096
-
+const MAX_PATH_LENGTH = 4096;
 /** A Session id is one store-key segment; longer than this is not one. */
-const MAX_SESSION_ID_LENGTH = 256
-
+const MAX_SESSION_ID_LENGTH = 256;
 /** How long one launch may take before it is reported as failed. */
-const LAUNCH_TIMEOUT_MS = 10_000
-
+const LAUNCH_TIMEOUT_MS = 10_000;
+/**
+ * The allowlist rows for one platform.
+ * @param platform - process.platform spelling.
+ * @returns the rows for that platform, or an empty list when it has none.
+ */
+function appsForPlatform(platform) {
+    if (platform === 'darwin')
+        return OPEN_WITH_APPS.darwin;
+    if (platform === 'win32')
+        return OPEN_WITH_APPS.win32;
+    return [];
+}
 /**
  * The allowlist entry for one id on one platform.
  * @param platform - process.platform spelling.
@@ -208,9 +200,8 @@ const LAUNCH_TIMEOUT_MS = 10_000
  * @returns the entry, or undefined when the id is not allowlisted here.
  */
 export function findOpenWithApp(platform, id) {
-  return (OPEN_WITH_APPS[platform] ?? []).find((entry) => entry.id === id)
+    return appsForPlatform(platform).find((entry) => entry.id === id);
 }
-
 /**
  * Ids of the allowlisted apps this platform can actually launch.
  *
@@ -225,11 +216,15 @@ export function findOpenWithApp(platform, id) {
  * @returns allowlisted ids, in registry order.
  */
 export function availableApps(platform = process.platform, exists = existsSync, appDirs = DARWIN_APP_DIRS) {
-  return (OPEN_WITH_APPS[platform] ?? [])
-    .filter((entry) => entry.always === true || appDirs.some((dir) => exists(join(dir, entry.bundle))))
-    .map((entry) => entry.id)
+    return appsForPlatform(platform)
+        .filter((entry) => {
+        if (entry.always === true)
+            return true;
+        const bundle = entry.bundle;
+        return bundle !== undefined && appDirs.some((dir) => exists(join(dir, bundle)));
+    })
+        .map((entry) => entry.id);
 }
-
 /**
  * The exact argv for one allowlisted launch.
  * @param platform - process.platform spelling.
@@ -238,20 +233,23 @@ export function availableApps(platform = process.platform, exists = existsSync, 
  * @returns the command to spawn, or null when the id is not allowlisted here.
  */
 export function openWithCommand(platform, appId, target) {
-  const entry = findOpenWithApp(platform, appId)
-  if (entry === undefined) return null
-  if (platform === 'darwin') {
-    if (entry.id === 'finder') return { file: 'open', args: ['-R', target.path] }
-    const terminal = entry.id === 'terminal' || entry.id === 'warp'
-    const path = terminal && target.directory === false ? dirname(target.path) : target.path
-    return { file: 'open', args: ['-a', entry.app, path] }
-  }
-  if (platform === 'win32') {
-    return { file: 'explorer.exe', args: [target.directory ? target.path : '/select,' + target.path] }
-  }
-  return null
+    const entry = findOpenWithApp(platform, appId);
+    if (entry === undefined)
+        return null;
+    if (platform === 'darwin') {
+        if (entry.id === 'finder')
+            return { file: 'open', args: ['-R', target.path] };
+        const terminal = entry.id === 'terminal' || entry.id === 'warp';
+        const path = terminal && target.directory === false ? dirname(target.path) : target.path;
+        if (entry.app === undefined)
+            return null;
+        return { file: 'open', args: ['-a', entry.app, path] };
+    }
+    if (platform === 'win32') {
+        return { file: 'explorer.exe', args: [target.directory ? target.path : '/select,' + target.path] };
+    }
+    return null;
 }
-
 /**
  * Install the three routes.
  *
@@ -269,84 +267,54 @@ export function openWithCommand(platform, appId, target) {
  * @returns nothing; the routes are registered once `webServer` appears.
  */
 export function apply(ctx, rawConfig = {}) {
-  const config = Config(rawConfig ?? {})
-  if (config.enabled === false) return
-
-  const hub = createHub({
-    alwaysNewSession: config.alwaysNewSession,
-    backlogTtlMs: config.backlogTtlMs,
-  })
-  const allowNonLoopback = config.allowNonLoopback === true
-
-  ctx.inject(['webServer'], (host) => {
-    host.effect(
-      () =>
-        host.webServer.register({
-          kind: 'exact',
-          path: ROUTE_OPEN,
-          handler: createOpenHandler(ctx, hub, allowNonLoopback),
-        }),
-      'dsh-open-in-dsh: open route',
-    )
-    host.effect(
-      () =>
-        host.webServer.register({
-          kind: 'exact',
-          path: ROUTE_EVENTS,
-          handler: createEventsHandler(ctx, hub, allowNonLoopback),
-        }),
-      'dsh-open-in-dsh: events route',
-    )
-    host.effect(
-      () =>
-        host.webServer.register({
-          kind: 'exact',
-          path: ROUTE_STATUS,
-          handler: createStatusHandler(hub, allowNonLoopback),
-        }),
-      'dsh-open-in-dsh: status route',
-    )
-    host.effect(
-      () =>
-        host.webServer.register({
-          kind: 'exact',
-          path: ROUTE_APPS,
-          handler: createAppsHandler(allowNonLoopback),
-        }),
-      'dsh-open-in-dsh: apps route',
-    )
-    host.effect(
-      () =>
-        host.webServer.register({
-          kind: 'exact',
-          path: ROUTE_OPEN_WITH,
-          handler: createOpenWithHandler(ctx, allowNonLoopback),
-        }),
-      'dsh-open-in-dsh: open-with route',
-    )
-    host.effect(
-      () =>
-        host.webServer.register({
-          kind: 'exact',
-          path: ROUTE_OPEN_SESSION,
-          handler: createOpenSessionHandler(ctx, allowNonLoopback, {
-            resolveCwd: (sessionId) =>
-              resolveSessionCwd(sessionId, { live: createLiveCwdReader(ctx) }),
-          }),
-        }),
-      'dsh-open-in-dsh: open-session route',
-    )
-    // macOS 的交接通道：同一个 open handler，第二个传输层。
-    host.effect(
-      () => startHandoffSocket(ctx, hub, allowNonLoopback, config.socketPath),
-      'dsh-open-in-dsh: handoff socket',
-    )
-    // Streams outlive the route registration only by accident; close them when
-    // the plugin unloads so a reload never leaves the old page holding a socket.
-    host.effect(() => () => hub.close(), 'dsh-open-in-dsh: event streams')
-  })
+    const config = Config(rawConfig ?? {});
+    if (config.enabled === false)
+        return;
+    const hub = createHub({
+        alwaysNewSession: config.alwaysNewSession,
+        backlogTtlMs: config.backlogTtlMs,
+    });
+    const allowNonLoopback = config.allowNonLoopback === true;
+    ctx.inject(['webServer'], (host) => {
+        host.effect(() => host.webServer.register({
+            kind: 'exact',
+            path: ROUTE_OPEN,
+            handler: createOpenHandler(ctx, hub, allowNonLoopback),
+        }), 'dsh-open-in-dsh: open route');
+        host.effect(() => host.webServer.register({
+            kind: 'exact',
+            path: ROUTE_EVENTS,
+            handler: createEventsHandler(ctx, hub, allowNonLoopback),
+        }), 'dsh-open-in-dsh: events route');
+        host.effect(() => host.webServer.register({
+            kind: 'exact',
+            path: ROUTE_STATUS,
+            handler: createStatusHandler(hub, allowNonLoopback),
+        }), 'dsh-open-in-dsh: status route');
+        host.effect(() => host.webServer.register({
+            kind: 'exact',
+            path: ROUTE_APPS,
+            handler: createAppsHandler(allowNonLoopback),
+        }), 'dsh-open-in-dsh: apps route');
+        host.effect(() => host.webServer.register({
+            kind: 'exact',
+            path: ROUTE_OPEN_WITH,
+            handler: createOpenWithHandler(ctx, allowNonLoopback),
+        }), 'dsh-open-in-dsh: open-with route');
+        host.effect(() => host.webServer.register({
+            kind: 'exact',
+            path: ROUTE_OPEN_SESSION,
+            handler: createOpenSessionHandler(ctx, allowNonLoopback, {
+                resolveCwd: (sessionId) => resolveSessionCwd(sessionId, { live: createLiveCwdReader(ctx) }),
+            }),
+        }), 'dsh-open-in-dsh: open-session route');
+        // macOS 的交接通道：同一个 open handler，第二个传输层。
+        host.effect(() => startHandoffSocket(ctx, hub, allowNonLoopback, config.socketPath), 'dsh-open-in-dsh: handoff socket');
+        // Streams outlive the route registration only by accident; close them when
+        // the plugin unloads so a reload never leaves the old page holding a socket.
+        host.effect(() => () => hub.close(), 'dsh-open-in-dsh: event streams');
+    });
 }
-
 /**
  * The one piece of shared state: the request sequence and its followers.
  *
@@ -361,96 +329,91 @@ export function apply(ctx, rawConfig = {}) {
  * @returns the hub.
  */
 export function createHub(options = {}) {
-  const ttl = Number.isFinite(Number(options.backlogTtlMs)) && Number(options.backlogTtlMs) > 0
-    ? Number(options.backlogTtlMs)
-    : DEFAULT_BACKLOG_TTL_MS
-  const now = typeof options.now === 'function' ? options.now : () => Date.now()
-  // Defaults to the schema's shipped default (reuse a blank session), so a hub
-  // built directly — as the tests do — behaves like the mounted plugin.
-  const settings = { alwaysNewSession: options.alwaysNewSession === true }
-
-  /** Live `text/event-stream` responses, each one an open DSH page. */
-  const streams = new Set()
-  /** Newest-last request rows, bounded and time-filtered on read. */
-  const backlog = []
-  /** When a page last attached or detached; 0 until the first one ever. */
-  let lastSeenAt = 0
-  let seq = 0
-
-  /**
-   * Record one request and hand it to every open page.
-   * @param path - the canonical directory path.
-   * @returns the stored row, including the sequence number to acknowledge with.
-   */
-  function publish(path) {
-    seq += 1
-    const entry = { seq, path, at: now() }
-    backlog.push(entry)
-    while (backlog.length > MAX_BACKLOG) backlog.shift()
-
-    const frame = sseFrame('request', entry)
-    for (const stream of streams) write(stream, frame)
-    return entry
-  }
-
-  /**
-   * Requests a page that just connected has not seen yet.
-   * @param since - the highest sequence the caller already handled.
-   * @returns the still-replayable rows newer than `since`, oldest first.
-   */
-  function pending(since) {
-    const floor = Number.isFinite(since) ? since : 0
-    const deadline = now() - ttl
-    return backlog.filter((entry) => entry.seq > floor && entry.at >= deadline)
-  }
-
-  /**
-   * Attach one SSE response to the hub.
-   * @param response - the response to keep open.
-   * @returns a disposer that detaches and stops the heartbeat.
-   */
-  function subscribe(response) {
-    streams.add(response)
-    lastSeenAt = now()
-    const beat = setInterval(() => write(response, ': ping\n\n'), HEARTBEAT_MS)
-    if (typeof beat.unref === 'function') beat.unref()
-
-    let stopped = false
-    const stop = () => {
-      if (stopped) return
-      stopped = true
-      clearInterval(beat)
-      streams.delete(response)
-      lastSeenAt = now()
+    const ttl = Number.isFinite(Number(options.backlogTtlMs)) && Number(options.backlogTtlMs) > 0
+        ? Number(options.backlogTtlMs)
+        : DEFAULT_BACKLOG_TTL_MS;
+    const now = typeof options.now === 'function' ? options.now : () => Date.now();
+    // Defaults to the schema's shipped default (reuse a blank session), so a hub
+    // built directly — as the tests do — behaves like the mounted plugin.
+    const settings = { alwaysNewSession: options.alwaysNewSession === true };
+    /** Live `text/event-stream` responses, each one an open DSH page. */
+    const streams = new Set();
+    /** Newest-last request rows, bounded and time-filtered on read. */
+    const backlog = [];
+    /** When a page last attached or detached; 0 until the first one ever. */
+    let lastSeenAt = 0;
+    let seq = 0;
+    /**
+     * Record one request and hand it to every open page.
+     * @param path - the canonical directory path.
+     * @returns the stored row, including the sequence number to acknowledge with.
+     */
+    function publish(path) {
+        seq += 1;
+        const entry = { seq, path, at: now() };
+        backlog.push(entry);
+        while (backlog.length > MAX_BACKLOG)
+            backlog.shift();
+        const frame = sseFrame('request', entry);
+        for (const stream of streams)
+            write(stream, frame);
+        return entry;
     }
-    response.on('close', stop)
-    response.on('error', stop)
-    return stop
-  }
-
-  /** @returns how many DSH pages are currently following the hub. */
-  function clients() {
-    return streams.size
-  }
-
-  /** Drop every follower; called when the plugin unloads. */
-  function close() {
-    for (const stream of streams) write(stream, '')
-    streams.clear()
-  }
-
-  return {
-    publish,
-    pending,
-    subscribe,
-    clients,
-    close,
-    settings,
-    get seq() { return seq },
-    get lastSeenAt() { return lastSeenAt },
-  }
+    /**
+     * Requests a page that just connected has not seen yet.
+     * @param since - the highest sequence the caller already handled.
+     * @returns the still-replayable rows newer than `since`, oldest first.
+     */
+    function pending(since = 0) {
+        const floor = Number.isFinite(since) ? since : 0;
+        const deadline = now() - ttl;
+        return backlog.filter((entry) => entry.seq > floor && entry.at >= deadline);
+    }
+    /**
+     * Attach one SSE response to the hub.
+     * @param response - the response to keep open.
+     * @returns a disposer that detaches and stops the heartbeat.
+     */
+    function subscribe(response) {
+        streams.add(response);
+        lastSeenAt = now();
+        const beat = setInterval(() => write(response, ': ping\n\n'), HEARTBEAT_MS);
+        if (typeof beat.unref === 'function')
+            beat.unref();
+        let stopped = false;
+        const stop = () => {
+            if (stopped)
+                return;
+            stopped = true;
+            clearInterval(beat);
+            streams.delete(response);
+            lastSeenAt = now();
+        };
+        response.on('close', stop);
+        response.on('error', stop);
+        return stop;
+    }
+    /** @returns how many DSH pages are currently following the hub. */
+    function clients() {
+        return streams.size;
+    }
+    /** Drop every follower; called when the plugin unloads. */
+    function close() {
+        for (const stream of streams)
+            write(stream, '');
+        streams.clear();
+    }
+    return {
+        publish,
+        pending,
+        subscribe,
+        clients,
+        close,
+        settings,
+        get seq() { return seq; },
+        get lastSeenAt() { return lastSeenAt; },
+    };
 }
-
 /**
  * Whether a page is following now, or went away so recently that one is
  * probably on its way back.
@@ -460,11 +423,11 @@ export function createHub(options = {}) {
  * @returns true when the launcher should wait rather than open a window.
  */
 export function expectsPage(hub, now = Date.now()) {
-  if (hub.clients() > 0) return true
-  const seen = hub.lastSeenAt
-  return seen > 0 && now - seen < RECENT_CLIENT_MS
+    if (hub.clients() > 0)
+        return true;
+    const seen = hub.lastSeenAt;
+    return seen > 0 && now - seen < RECENT_CLIENT_MS;
 }
-
 /**
  * Serve the launcher's open route on a Unix domain socket.
  *
@@ -487,81 +450,85 @@ export function expectsPage(hub, now = Date.now()) {
  * @returns disposer that closes the server and removes the socket file.
  */
 function startHandoffSocket(ctx, hub, allowNonLoopback, socketPath) {
-  const path = typeof socketPath === 'string' ? socketPath.trim() : ''
-  if (path === '') return () => {}
-  if (!isAbsolute(path)) {
-    ctx.logger?.warn?.('dsh-open-in-dsh: socketPath is not absolute, handoff socket disabled: %s', path)
-    return () => {}
-  }
-
-  const openHandler = createOpenHandler(ctx, hub, allowNonLoopback, true)
-  const statusHandler = createStatusHandler(hub, allowNonLoopback, true)
-  const server = createServer((request, response) => {
-    let pathname = '/'
+    const path = typeof socketPath === 'string' ? socketPath.trim() : '';
+    if (path === '')
+        return () => { };
+    if (!isAbsolute(path)) {
+        ctx.logger?.warn?.('dsh-open-in-dsh: socketPath is not absolute, handoff socket disabled: %s', path);
+        return () => { };
+    }
+    const openHandler = createOpenHandler(ctx, hub, allowNonLoopback, true);
+    const statusHandler = createStatusHandler(hub, allowNonLoopback, true);
+    const server = createServer((request, response) => {
+        let pathname = '/';
+        try {
+            pathname = new URL(request.url ?? '/', 'http://localhost').pathname;
+        }
+        catch {
+            sendJson(response, 400, { ok: false, reason: 'bad-request' });
+            return;
+        }
+        if (pathname === ROUTE_OPEN) {
+            openHandler(request, response).catch((error) => {
+                ctx.logger?.warn?.('dsh-open-in-dsh: socket open failed: %s', messageOf(error));
+                if (!response.headersSent)
+                    sendJson(response, 500, { ok: false, reason: 'handler-failed' });
+            });
+            return;
+        }
+        if (pathname === ROUTE_STATUS) {
+            statusHandler(request, response);
+            return;
+        }
+        sendJson(response, 404, { ok: false, reason: 'not-found' });
+    });
+    let closed = false;
+    let replaced = false;
+    server.on('error', (error) => {
+        if (closed)
+            return;
+        // A crashed host leaves the file behind. A live one never lets us bind, so
+        // the stale file is safe to replace exactly once.
+        if (error?.code === 'EADDRINUSE' && !replaced) {
+            replaced = true;
+            try {
+                unlinkSync(path);
+            }
+            catch { }
+            server.listen(path);
+            return;
+        }
+        ctx.logger?.warn?.('dsh-open-in-dsh: handoff socket failed (%s): %s', path, messageOf(error));
+    });
+    server.on('listening', () => {
+        try {
+            // The file mode is the access policy: only this user may hand paths over.
+            chmodSync(path, 0o600);
+        }
+        catch (error) {
+            ctx.logger?.warn?.('dsh-open-in-dsh: could not tighten socket mode: %s', messageOf(error));
+        }
+        ctx.logger?.info?.('dsh-open-in-dsh: handoff socket listening at %s', path);
+    });
     try {
-      pathname = new URL(request.url ?? '/', 'http://localhost').pathname
-    } catch {
-      sendJson(response, 400, { ok: false, reason: 'bad-request' })
-      return
+        mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     }
-    if (pathname === ROUTE_OPEN) {
-      openHandler(request, response).catch((error) => {
-        ctx.logger?.warn?.('dsh-open-in-dsh: socket open failed: %s', messageOf(error))
-        if (!response.headersSent) sendJson(response, 500, { ok: false, reason: 'handler-failed' })
-      })
-      return
+    catch (error) {
+        ctx.logger?.warn?.('dsh-open-in-dsh: cannot create %s: %s', dirname(path), messageOf(error));
     }
-    if (pathname === ROUTE_STATUS) {
-      statusHandler(request, response)
-      return
-    }
-    sendJson(response, 404, { ok: false, reason: 'not-found' })
-  })
-
-  let closed = false
-  let replaced = false
-  server.on('error', (error) => {
-    if (closed) return
-    // A crashed host leaves the file behind. A live one never lets us bind, so
-    // the stale file is safe to replace exactly once.
-    if (error?.code === 'EADDRINUSE' && !replaced) {
-      replaced = true
-      try {
-        unlinkSync(path)
-      } catch {}
-      server.listen(path)
-      return
-    }
-    ctx.logger?.warn?.('dsh-open-in-dsh: handoff socket failed (%s): %s', path, messageOf(error))
-  })
-  server.on('listening', () => {
-    try {
-      // The file mode is the access policy: only this user may hand paths over.
-      chmodSync(path, 0o600)
-    } catch (error) {
-      ctx.logger?.warn?.('dsh-open-in-dsh: could not tighten socket mode: %s', messageOf(error))
-    }
-    ctx.logger?.info?.('dsh-open-in-dsh: handoff socket listening at %s', path)
-  })
-
-  try {
-    mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
-  } catch (error) {
-    ctx.logger?.warn?.('dsh-open-in-dsh: cannot create %s: %s', dirname(path), messageOf(error))
-  }
-  server.listen(path)
-
-  return () => {
-    closed = true
-    try {
-      server.close()
-    } catch {}
-    try {
-      unlinkSync(path)
-    } catch {}
-  }
+    server.listen(path);
+    return () => {
+        closed = true;
+        try {
+            server.close();
+        }
+        catch { }
+        try {
+            unlinkSync(path);
+        }
+        catch { }
+    };
 }
-
 /**
  * Build the request handler that the Explorer launcher posts to.
  * @param ctx - host plugin context, for the log line.
@@ -573,53 +540,50 @@ function startHandoffSocket(ctx, hub, allowNonLoopback, socketPath) {
  * @returns the exact-route handler.
  */
 function createOpenHandler(ctx, hub, allowNonLoopback, peerIsTrusted = false) {
-  return async (request, response) => {
-    if (request.method !== 'POST') {
-      sendJson(response, 405, { ok: false, reason: 'method-not-allowed' }, { allow: 'POST' })
-      return
-    }
-    if (!sameOrigin(request)) {
-      sendJson(response, 403, { ok: false, reason: 'cross-origin' })
-      return
-    }
-    if (!allowNonLoopback && peerIsTrusted !== true && !isLoopback(request)) {
-      // Opening a folder is opening a Workspace: shell commands run there.
-      sendJson(response, 403, { ok: false, reason: 'remote-not-supported' })
-      return
-    }
-
-    let body
-    try {
-      body = await readJsonBody(request)
-    } catch (error) {
-      sendJson(response, 400, { ok: false, reason: 'bad-request', message: messageOf(error) })
-      return
-    }
-
-    const path = directoryPath(body?.path)
-    if (path === null) {
-      // A wrong path is worse than no answer: the page would create a
-      // Workspace pointing somewhere the user never asked for.
-      sendJson(response, 200, { ok: false, reason: 'not-a-directory', path: String(body?.path ?? '') })
-      return
-    }
-
-    const entry = hub.publish(path)
-    ctx.logger?.info?.('dsh-open-in-dsh: %s -> seq %d (%d page(s) listening)', path, entry.seq, hub.clients())
-    // `clients` and `recent` together are the cold-start signal: with nobody
-    // following *and* nobody having followed recently, the launcher has no page
-    // to push to and must open one itself. A merely reconnecting page (a
-    // plugin remount, a reload) is not that case.
-    sendJson(response, 200, {
-      ok: true,
-      seq: entry.seq,
-      path,
-      clients: hub.clients(),
-      recent: expectsPage(hub),
-    })
-  }
+    return async (request, response) => {
+        if (request.method !== 'POST') {
+            sendJson(response, 405, { ok: false, reason: 'method-not-allowed' }, { allow: 'POST' });
+            return;
+        }
+        if (!sameOrigin(request)) {
+            sendJson(response, 403, { ok: false, reason: 'cross-origin' });
+            return;
+        }
+        if (!allowNonLoopback && peerIsTrusted !== true && !isLoopback(request)) {
+            // Opening a folder is opening a Workspace: shell commands run there.
+            sendJson(response, 403, { ok: false, reason: 'remote-not-supported' });
+            return;
+        }
+        let body;
+        try {
+            body = await readJsonBody(request);
+        }
+        catch (error) {
+            sendJson(response, 400, { ok: false, reason: 'bad-request', message: messageOf(error) });
+            return;
+        }
+        const path = directoryPath(body?.path);
+        if (path === null) {
+            // A wrong path is worse than no answer: the page would create a
+            // Workspace pointing somewhere the user never asked for.
+            sendJson(response, 200, { ok: false, reason: 'not-a-directory', path: String(body?.path ?? '') });
+            return;
+        }
+        const entry = hub.publish(path);
+        ctx.logger?.info?.('dsh-open-in-dsh: %s -> seq %d (%d page(s) listening)', path, entry.seq, hub.clients());
+        // `clients` and `recent` together are the cold-start signal: with nobody
+        // following *and* nobody having followed recently, the launcher has no page
+        // to push to and must open one itself. A merely reconnecting page (a
+        // plugin remount, a reload) is not that case.
+        sendJson(response, 200, {
+            ok: true,
+            seq: entry.seq,
+            path,
+            clients: hub.clients(),
+            recent: expectsPage(hub),
+        });
+    };
 }
-
 /**
  * Build the SSE handler the browser half follows.
  * @param ctx - host plugin context, for warnings.
@@ -628,47 +592,46 @@ function createOpenHandler(ctx, hub, allowNonLoopback, peerIsTrusted = false) {
  * @returns the exact-route handler.
  */
 function createEventsHandler(ctx, hub, allowNonLoopback) {
-  return (request, response) => {
-    if (request.method !== 'GET') {
-      sendJson(response, 405, { ok: false, reason: 'method-not-allowed' }, { allow: 'GET' })
-      return
-    }
-    if (!sameOrigin(request)) {
-      sendJson(response, 403, { ok: false, reason: 'cross-origin' })
-      return
-    }
-    if (!allowNonLoopback && !isLoopback(request)) {
-      sendJson(response, 403, { ok: false, reason: 'remote-not-supported' })
-      return
-    }
-
-    let since = 0
-    try {
-      const parsed = Number.parseInt(new URL(request.url ?? '/', 'http://localhost').searchParams.get('since') ?? '0', 10)
-      if (Number.isFinite(parsed) && parsed > 0) since = parsed
-    } catch {
-      since = 0
-    }
-
-    response.writeHead(200, {
-      'content-type': 'text/event-stream; charset=utf-8',
-      'cache-control': 'no-store, no-transform',
-      connection: 'keep-alive',
-      // A proxy that buffers would hold every frame until the stream ends.
-      'x-accel-buffering': 'no',
-    })
-    response.write('retry: 2000\n\n')
-    // `hello` carries the sequence and the settings the Client half cannot see
-    // in its own `apply(ctx)` — including the rewind a host restart implies.
-    response.write(sseFrame('hello', { seq: hub.seq, settings: hub.settings }))
-    for (const entry of hub.pending(since)) response.write(sseFrame('request', entry))
-
-    const stop = hub.subscribe(response)
-    request.on('close', stop)
-    ctx.logger?.debug?.('dsh-open-in-dsh: page following from seq %d', since)
-  }
+    return (request, response) => {
+        if (request.method !== 'GET') {
+            sendJson(response, 405, { ok: false, reason: 'method-not-allowed' }, { allow: 'GET' });
+            return;
+        }
+        if (!sameOrigin(request)) {
+            sendJson(response, 403, { ok: false, reason: 'cross-origin' });
+            return;
+        }
+        if (!allowNonLoopback && !isLoopback(request)) {
+            sendJson(response, 403, { ok: false, reason: 'remote-not-supported' });
+            return;
+        }
+        let since = 0;
+        try {
+            const parsed = Number.parseInt(new URL(request.url ?? '/', 'http://localhost').searchParams.get('since') ?? '0', 10);
+            if (Number.isFinite(parsed) && parsed > 0)
+                since = parsed;
+        }
+        catch {
+            since = 0;
+        }
+        response.writeHead(200, {
+            'content-type': 'text/event-stream; charset=utf-8',
+            'cache-control': 'no-store, no-transform',
+            connection: 'keep-alive',
+            // A proxy that buffers would hold every frame until the stream ends.
+            'x-accel-buffering': 'no',
+        });
+        response.write('retry: 2000\n\n');
+        // `hello` carries the sequence and the settings the Client half cannot see
+        // in its own `apply(ctx)` — including the rewind a host restart implies.
+        response.write(sseFrame('hello', { seq: hub.seq, settings: hub.settings }));
+        for (const entry of hub.pending(since))
+            response.write(sseFrame('request', entry));
+        const stop = hub.subscribe(response);
+        request.on('close', stop);
+        ctx.logger?.debug?.('dsh-open-in-dsh: page following from seq %d', since);
+    };
 }
-
 /**
  * Build the side-effect-free follower count the launcher polls.
  * @param hub - the shared request hub.
@@ -677,28 +640,27 @@ function createEventsHandler(ctx, hub, allowNonLoopback) {
  * @returns the exact-route handler.
  */
 function createStatusHandler(hub, allowNonLoopback, peerIsTrusted = false) {
-  return (request, response) => {
-    if (request.method !== 'GET') {
-      sendJson(response, 405, { ok: false, reason: 'method-not-allowed' }, { allow: 'GET' })
-      return
-    }
-    if (!sameOrigin(request)) {
-      sendJson(response, 403, { ok: false, reason: 'cross-origin' })
-      return
-    }
-    if (!allowNonLoopback && peerIsTrusted !== true && !isLoopback(request)) {
-      sendJson(response, 403, { ok: false, reason: 'remote-not-supported' })
-      return
-    }
-    sendJson(response, 200, {
-      ok: true,
-      clients: hub.clients(),
-      seq: hub.seq,
-      recent: expectsPage(hub),
-    })
-  }
+    return (request, response) => {
+        if (request.method !== 'GET') {
+            sendJson(response, 405, { ok: false, reason: 'method-not-allowed' }, { allow: 'GET' });
+            return;
+        }
+        if (!sameOrigin(request)) {
+            sendJson(response, 403, { ok: false, reason: 'cross-origin' });
+            return;
+        }
+        if (!allowNonLoopback && peerIsTrusted !== true && !isLoopback(request)) {
+            sendJson(response, 403, { ok: false, reason: 'remote-not-supported' });
+            return;
+        }
+        sendJson(response, 200, {
+            ok: true,
+            clients: hub.clients(),
+            seq: hub.seq,
+            recent: expectsPage(hub),
+        });
+    };
 }
-
 /**
  * Build the menu's availability route.
  *
@@ -711,27 +673,26 @@ function createStatusHandler(hub, allowNonLoopback, peerIsTrusted = false) {
  * @returns the exact-route handler.
  */
 export function createAppsHandler(allowNonLoopback = false, deps = {}) {
-  const platform = deps.platform ?? process.platform
-  const exists = deps.exists ?? existsSync
-  let cached = null
-  return (request, response) => {
-    if (request.method !== 'GET') {
-      sendJson(response, 405, { ok: false, reason: 'method-not-allowed' }, { allow: 'GET' })
-      return
-    }
-    if (!sameOrigin(request)) {
-      sendJson(response, 403, { ok: false, reason: 'cross-origin' })
-      return
-    }
-    if (!allowNonLoopback && !isLoopback(request)) {
-      sendJson(response, 403, { ok: false, reason: 'remote-not-supported' })
-      return
-    }
-    cached ??= availableApps(platform, exists)
-    sendJson(response, 200, { ok: true, platform, apps: cached })
-  }
+    const platform = deps.platform ?? process.platform;
+    const exists = deps.exists ?? existsSync;
+    let cached = null;
+    return (request, response) => {
+        if (request.method !== 'GET') {
+            sendJson(response, 405, { ok: false, reason: 'method-not-allowed' }, { allow: 'GET' });
+            return;
+        }
+        if (!sameOrigin(request)) {
+            sendJson(response, 403, { ok: false, reason: 'cross-origin' });
+            return;
+        }
+        if (!allowNonLoopback && !isLoopback(request)) {
+            sendJson(response, 403, { ok: false, reason: 'remote-not-supported' });
+            return;
+        }
+        cached ??= availableApps(platform, exists);
+        sendJson(response, 200, { ok: true, platform, apps: cached });
+    };
 }
-
 /**
  * Build the right-click action: validate a whitelisted app and an existing
  * path, then spawn the one argv the allowlist names.
@@ -745,69 +706,68 @@ export function createAppsHandler(allowNonLoopback = false, deps = {}) {
  * @returns the exact-route handler.
  */
 export function createOpenWithHandler(ctx, allowNonLoopback = false, deps = {}) {
-  const platform = deps.platform ?? process.platform
-  const stat = deps.stat ?? statSync
-  const exec = deps.exec ?? execFile
-  return async (request, response) => {
-    if (request.method !== 'POST') {
-      sendJson(response, 405, { ok: false, reason: 'method-not-allowed' }, { allow: 'POST' })
-      return
-    }
-    if (!sameOrigin(request)) {
-      sendJson(response, 403, { ok: false, reason: 'cross-origin' })
-      return
-    }
-    if (!allowNonLoopback && !isLoopback(request)) {
-      sendJson(response, 403, { ok: false, reason: 'remote-not-supported' })
-      return
-    }
-
-    let body
-    try {
-      body = await readJsonBody(request)
-    } catch (error) {
-      sendJson(response, 400, { ok: false, reason: 'bad-request', message: messageOf(error) })
-      return
-    }
-
-    const app = typeof body?.app === 'string' ? body.app.trim() : ''
-    if (findOpenWithApp(platform, app) === undefined) {
-      // The whole security story: no id, no command. A caller cannot smuggle
-      // a binary path or an app name in here.
-      sendJson(response, 400, { ok: false, reason: 'unknown-app', app, platform })
-      return
-    }
-
-    const claimed = typeof body?.path === 'string' ? body.path.trim().replace(/^"|"$/g, '') : ''
-    if (claimed === '' || !isAbsolute(claimed)) {
-      sendJson(response, 400, { ok: false, reason: 'path-not-absolute', path: String(body?.path ?? '') })
-      return
-    }
-    // Existing, canonical, regular file or directory. A path that cannot be
-    // opened far enough to prove it exists is refused before any spawn.
-    const target = existingPath(claimed, stat)
-    if (target === null) {
-      sendJson(response, 400, { ok: false, reason: 'path-not-found', path: claimed })
-      return
-    }
-
-    const command = openWithCommand(platform, app, target)
-    if (command === null) {
-      sendJson(response, 400, { ok: false, reason: 'unknown-app', app, platform })
-      return
-    }
-    try {
-      await runCommand(command, exec)
-    } catch (error) {
-      ctx.logger?.warn?.('dsh-open-in-dsh: open-with %s failed on %s: %s', app, target.path, messageOf(error))
-      sendJson(response, 500, { ok: false, reason: 'launch-failed', app, path: target.path, message: messageOf(error) })
-      return
-    }
-    ctx.logger?.info?.('dsh-open-in-dsh: opened %s with %s', target.path, app)
-    sendJson(response, 200, { ok: true, app, path: target.path, directory: target.directory })
-  }
+    const platform = deps.platform ?? process.platform;
+    const stat = deps.stat ?? statSync;
+    const exec = deps.exec ?? execFile;
+    return async (request, response) => {
+        if (request.method !== 'POST') {
+            sendJson(response, 405, { ok: false, reason: 'method-not-allowed' }, { allow: 'POST' });
+            return;
+        }
+        if (!sameOrigin(request)) {
+            sendJson(response, 403, { ok: false, reason: 'cross-origin' });
+            return;
+        }
+        if (!allowNonLoopback && !isLoopback(request)) {
+            sendJson(response, 403, { ok: false, reason: 'remote-not-supported' });
+            return;
+        }
+        let body;
+        try {
+            body = await readJsonBody(request);
+        }
+        catch (error) {
+            sendJson(response, 400, { ok: false, reason: 'bad-request', message: messageOf(error) });
+            return;
+        }
+        const claimedApp = body?.app;
+        const app = typeof claimedApp === 'string' ? claimedApp.trim() : '';
+        if (findOpenWithApp(platform, app) === undefined) {
+            // The whole security story: no id, no command. A caller cannot smuggle
+            // a binary path or an app name in here.
+            sendJson(response, 400, { ok: false, reason: 'unknown-app', app, platform });
+            return;
+        }
+        const claimedValue = body?.path;
+        const claimed = typeof claimedValue === 'string' ? claimedValue.trim().replace(/^"|"$/g, '') : '';
+        if (claimed === '' || !isAbsolute(claimed)) {
+            sendJson(response, 400, { ok: false, reason: 'path-not-absolute', path: String(body?.path ?? '') });
+            return;
+        }
+        // Existing, canonical, regular file or directory. A path that cannot be
+        // opened far enough to prove it exists is refused before any spawn.
+        const target = existingPath(claimed, stat);
+        if (target === null) {
+            sendJson(response, 400, { ok: false, reason: 'path-not-found', path: claimed });
+            return;
+        }
+        const command = openWithCommand(platform, app, target);
+        if (command === null) {
+            sendJson(response, 400, { ok: false, reason: 'unknown-app', app, platform });
+            return;
+        }
+        try {
+            await runCommand(command, exec);
+        }
+        catch (error) {
+            ctx.logger?.warn?.('dsh-open-in-dsh: open-with %s failed on %s: %s', app, target.path, messageOf(error));
+            sendJson(response, 500, { ok: false, reason: 'launch-failed', app, path: target.path, message: messageOf(error) });
+            return;
+        }
+        ctx.logger?.info?.('dsh-open-in-dsh: opened %s with %s', target.path, app);
+        sendJson(response, 200, { ok: true, app, path: target.path, directory: target.directory });
+    };
 }
-
 /**
  * Read a Session's cwd from the Host's in-memory projections, when one is live.
  *
@@ -825,34 +785,41 @@ export function createOpenWithHandler(ctx, allowNonLoopback = false, deps = {}) 
  * @returns a reader: session id -> cwd, or undefined when nothing is cached.
  */
 export function createLiveCwdReader(ctx) {
-  const serviceOf = (key) => {
-    try {
-      return typeof ctx?.get === 'function' ? ctx.get(key) : undefined
-    } catch {
-      return undefined
-    }
-  }
-  const clean = (value) => (typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined)
-  return (sessionId) => {
-    try {
-      const cached = serviceOf('workspaceRegistry')?.headers?.get?.(sessionId)
-      const cwd = clean(cached?.cwd)
-      if (cwd !== undefined) return cwd
-    } catch {}
-    try {
-      const sessions = serviceOf('sessions')
-      const entity = typeof sessions?.get === 'function' ? sessions.get(sessionId) : undefined
-      const fromEntity = clean(entity?.header?.cwd)
-      if (fromEntity !== undefined) return fromEntity
-      const rows = typeof sessions?.list === 'function' ? sessions.list() : []
-      const row = Array.isArray(rows) ? rows.find((entry) => entry?.id === sessionId) : undefined
-      return clean(row?.cwd)
-    } catch {
-      return undefined
-    }
-  }
+    const serviceOf = (key) => {
+        try {
+            return typeof ctx?.get === 'function' ? ctx.get(key) : undefined;
+        }
+        catch {
+            return undefined;
+        }
+    };
+    const clean = (value) => (typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined);
+    return (sessionId) => {
+        try {
+            const registry = serviceOf('workspaceRegistry');
+            const cached = registry?.headers?.get?.(sessionId);
+            const cwd = clean(cached?.cwd);
+            if (cwd !== undefined)
+                return cwd;
+        }
+        catch { }
+        try {
+            const sessions = serviceOf('sessions');
+            const entity = typeof sessions?.get === 'function' ? sessions.get(sessionId) : undefined;
+            const fromEntity = clean(entity?.header?.cwd);
+            if (fromEntity !== undefined)
+                return fromEntity;
+            const rows = typeof sessions?.list === 'function' ? sessions.list() : [];
+            const row = Array.isArray(rows)
+                ? rows.find((entry) => isRecord(entry) && entry.id === sessionId)
+                : undefined;
+            return clean(isRecord(row) ? row.cwd : undefined);
+        }
+        catch {
+            return undefined;
+        }
+    };
 }
-
 /**
  * Read a Session's cwd out of the session store on disk.
  *
@@ -868,35 +835,40 @@ export function createLiveCwdReader(ctx) {
  * @returns the stored cwd, or undefined when no header carries one.
  */
 export function findSessionCwdOnDisk(sessionId, deps = {}) {
-  const root = deps.sessionsRoot ?? join(deps.home ?? dshHome(), 'sessions')
-  const readdir = deps.readdir ?? readdirSync
-  const readHeader = deps.readSessionHeader ?? readSessionHeader
-  let segment
-  try {
-    segment = encodeSegment(sessionId)
-  } catch {
-    return undefined
-  }
-  let projects
-  try {
-    projects = readdir(root, { withFileTypes: true })
-  } catch {
-    return undefined
-  }
-  for (const project of projects) {
-    if (project?.isDirectory?.() !== true) continue
-    let header
+    const root = deps.sessionsRoot ?? join(deps.home ?? dshHome(), 'sessions');
+    const readdir = deps.readdir ?? readdirSync;
+    const readHeader = deps.readSessionHeader ?? readSessionHeader;
+    let segment;
     try {
-      header = readHeader(join(root, project.name, segment))
-    } catch {
-      continue
+        segment = encodeSegment(sessionId);
     }
-    const cwd = typeof header?.cwd === 'string' ? header.cwd.trim() : ''
-    if (cwd !== '') return cwd
-  }
-  return undefined
+    catch {
+        return undefined;
+    }
+    let projects;
+    try {
+        projects = readdir(root, { withFileTypes: true });
+    }
+    catch {
+        return undefined;
+    }
+    for (const project of projects) {
+        if (project?.isDirectory?.() !== true)
+            continue;
+        let header;
+        try {
+            header = readHeader(join(root, project.name, segment));
+        }
+        catch {
+            continue;
+        }
+        const record = isRecord(header) ? header : undefined;
+        const cwd = typeof record?.cwd === 'string' ? record.cwd.trim() : '';
+        if (cwd !== '')
+            return cwd;
+    }
+    return undefined;
 }
-
 /**
  * Resolve one Session id to its project directory: live projections first,
  * stored header second.
@@ -905,18 +877,19 @@ export function findSessionCwdOnDisk(sessionId, deps = {}) {
  * @returns the cwd, or undefined when this Host cannot name one.
  */
 export function resolveSessionCwd(sessionId, deps = {}) {
-  if (typeof deps.live === 'function') {
-    let live
-    try {
-      live = deps.live(sessionId)
-    } catch {
-      live = undefined
+    if (typeof deps.live === 'function') {
+        let live;
+        try {
+            live = deps.live(sessionId);
+        }
+        catch {
+            live = undefined;
+        }
+        if (typeof live === 'string' && live.trim() !== '')
+            return live.trim();
     }
-    if (typeof live === 'string' && live.trim() !== '') return live.trim()
-  }
-  return findSessionCwdOnDisk(sessionId, deps)
+    return findSessionCwdOnDisk(sessionId, deps);
 }
-
 /**
  * Build the Session-scoped launch route: resolve a session id to its cwd, then
  * spawn the same allowlisted argv the open-with route uses.
@@ -931,102 +904,94 @@ export function resolveSessionCwd(sessionId, deps = {}) {
  * @returns the exact-route handler.
  */
 export function createOpenSessionHandler(ctx, allowNonLoopback = false, deps = {}) {
-  const platform = deps.platform ?? process.platform
-  const stat = deps.stat ?? statSync
-  const exec = deps.exec ?? execFile
-  const resolveCwd =
-    typeof deps.resolveCwd === 'function' ? deps.resolveCwd : (sessionId) => resolveSessionCwd(sessionId)
-  return async (request, response) => {
-    if (request.method !== 'POST') {
-      sendJson(response, 405, { ok: false, reason: 'method-not-allowed' }, { allow: 'POST' })
-      return
-    }
-    if (!sameOrigin(request)) {
-      sendJson(response, 403, { ok: false, reason: 'cross-origin' })
-      return
-    }
-    if (!allowNonLoopback && !isLoopback(request)) {
-      sendJson(response, 403, { ok: false, reason: 'remote-not-supported' })
-      return
-    }
-
-    let body
-    try {
-      body = await readJsonBody(request)
-    } catch (error) {
-      sendJson(response, 400, { ok: false, reason: 'bad-request', message: messageOf(error) })
-      return
-    }
-
-    const app = typeof body?.app === 'string' ? body.app.trim() : ''
-    if (findOpenWithApp(platform, app) === undefined) {
-      sendJson(response, 400, { ok: false, reason: 'unknown-app', app, platform })
-      return
-    }
-
-    const claimed = typeof body?.sessionId === 'string' ? body.sessionId.trim() : ''
-    if (claimed === '') {
-      sendJson(response, 400, { ok: false, reason: 'missing-session-id' })
-      return
-    }
-    // A session id is a single path segment; these bounds keep a forged one
-    // from turning the store probe into a directory walk.
-    if (claimed.length > MAX_SESSION_ID_LENGTH || claimed.includes(String.fromCharCode(0)) || claimed.includes('/') || claimed.includes('\\')) {
-      sendJson(response, 400, { ok: false, reason: 'invalid-session-id' })
-      return
-    }
-
-    let cwd
-    try {
-      cwd = resolveCwd(claimed)
-    } catch (error) {
-      ctx.logger?.warn?.('dsh-open-in-dsh: session cwd lookup failed for %s: %s', claimed, messageOf(error))
-      sendJson(response, 500, { ok: false, reason: 'session-lookup-failed', message: messageOf(error) })
-      return
-    }
-    if (typeof cwd !== 'string' || cwd.trim() === '') {
-      sendJson(response, 404, { ok: false, reason: 'session-cwd-not-found', sessionId: claimed })
-      return
-    }
-
-    const target = existingPath(cwd, stat)
-    // A stored header can outlive its directory (a folder renamed behind DSH's
-    // back). That is still "this Session's cwd cannot be opened", not a bad
-    // request: the caller sent a perfectly valid session id.
-    if (target === null || target.directory !== true) {
-      sendJson(response, 404, { ok: false, reason: 'session-cwd-not-found', sessionId: claimed, cwd: cwd.trim() })
-      return
-    }
-
-    const command = openWithCommand(platform, app, { path: target.path, directory: true })
-    if (command === null) {
-      sendJson(response, 400, { ok: false, reason: 'unknown-app', app, platform })
-      return
-    }
-    try {
-      await runCommand(command, exec)
-    } catch (error) {
-      ctx.logger?.warn?.(
-        'dsh-open-in-dsh: open-session %s failed on %s: %s',
-        app,
-        target.path,
-        messageOf(error),
-      )
-      sendJson(response, 500, {
-        ok: false,
-        reason: 'launch-failed',
-        app,
-        sessionId: claimed,
-        path: target.path,
-        message: messageOf(error),
-      })
-      return
-    }
-    ctx.logger?.info?.('dsh-open-in-dsh: opened session %s cwd %s with %s', claimed, target.path, app)
-    sendJson(response, 200, { ok: true, app, sessionId: claimed, path: target.path, directory: true })
-  }
+    const platform = deps.platform ?? process.platform;
+    const stat = deps.stat ?? statSync;
+    const exec = deps.exec ?? execFile;
+    const resolveCwd = typeof deps.resolveCwd === 'function' ? deps.resolveCwd : (sessionId) => resolveSessionCwd(sessionId);
+    return async (request, response) => {
+        if (request.method !== 'POST') {
+            sendJson(response, 405, { ok: false, reason: 'method-not-allowed' }, { allow: 'POST' });
+            return;
+        }
+        if (!sameOrigin(request)) {
+            sendJson(response, 403, { ok: false, reason: 'cross-origin' });
+            return;
+        }
+        if (!allowNonLoopback && !isLoopback(request)) {
+            sendJson(response, 403, { ok: false, reason: 'remote-not-supported' });
+            return;
+        }
+        let body;
+        try {
+            body = await readJsonBody(request);
+        }
+        catch (error) {
+            sendJson(response, 400, { ok: false, reason: 'bad-request', message: messageOf(error) });
+            return;
+        }
+        const claimedApp = body?.app;
+        const app = typeof claimedApp === 'string' ? claimedApp.trim() : '';
+        if (findOpenWithApp(platform, app) === undefined) {
+            sendJson(response, 400, { ok: false, reason: 'unknown-app', app, platform });
+            return;
+        }
+        const claimedSession = body?.sessionId;
+        const claimed = typeof claimedSession === 'string' ? claimedSession.trim() : '';
+        if (claimed === '') {
+            sendJson(response, 400, { ok: false, reason: 'missing-session-id' });
+            return;
+        }
+        // A session id is a single path segment; these bounds keep a forged one
+        // from turning the store probe into a directory walk.
+        if (claimed.length > MAX_SESSION_ID_LENGTH || claimed.includes(String.fromCharCode(0)) || claimed.includes('/') || claimed.includes('\\')) {
+            sendJson(response, 400, { ok: false, reason: 'invalid-session-id' });
+            return;
+        }
+        let cwd;
+        try {
+            cwd = resolveCwd(claimed);
+        }
+        catch (error) {
+            ctx.logger?.warn?.('dsh-open-in-dsh: session cwd lookup failed for %s: %s', claimed, messageOf(error));
+            sendJson(response, 500, { ok: false, reason: 'session-lookup-failed', message: messageOf(error) });
+            return;
+        }
+        if (typeof cwd !== 'string' || cwd.trim() === '') {
+            sendJson(response, 404, { ok: false, reason: 'session-cwd-not-found', sessionId: claimed });
+            return;
+        }
+        const target = existingPath(cwd, stat);
+        // A stored header can outlive its directory (a folder renamed behind DSH's
+        // back). That is still "this Session's cwd cannot be opened", not a bad
+        // request: the caller sent a perfectly valid session id.
+        if (target === null || target.directory !== true) {
+            sendJson(response, 404, { ok: false, reason: 'session-cwd-not-found', sessionId: claimed, cwd: cwd.trim() });
+            return;
+        }
+        const command = openWithCommand(platform, app, { path: target.path, directory: true });
+        if (command === null) {
+            sendJson(response, 400, { ok: false, reason: 'unknown-app', app, platform });
+            return;
+        }
+        try {
+            await runCommand(command, exec);
+        }
+        catch (error) {
+            ctx.logger?.warn?.('dsh-open-in-dsh: open-session %s failed on %s: %s', app, target.path, messageOf(error));
+            sendJson(response, 500, {
+                ok: false,
+                reason: 'launch-failed',
+                app,
+                sessionId: claimed,
+                path: target.path,
+                message: messageOf(error),
+            });
+            return;
+        }
+        ctx.logger?.info?.('dsh-open-in-dsh: opened session %s cwd %s with %s', claimed, target.path, app);
+        sendJson(response, 200, { ok: true, app, sessionId: claimed, path: target.path, directory: true });
+    };
 }
-
 /**
  * Spawn one allowlisted command. execFile takes an argv array, so no shell
  * ever parses the path or the app name.
@@ -1036,37 +1001,35 @@ export function createOpenSessionHandler(ctx, allowNonLoopback = false, deps = {
  * @returns completion; rejects with the spawn error.
  */
 function runCommand(command, exec = execFile) {
-  return new Promise((settle, fail) => {
-    exec(command.file, command.args, { timeout: LAUNCH_TIMEOUT_MS, windowsHide: true }, (error) => {
-      if (error === null) {
-        settle()
-        return
-      }
-      // Explorer returns 1 even when it opened the folder; only a missing or
-      // unexecutable binary means the launch did not happen.
-      if (command.file === 'explorer.exe' && error.code !== 'ENOENT' && error.code !== 'EACCES') {
-        settle()
-        return
-      }
-      fail(error)
-    })
-  })
+    return new Promise((settle, fail) => {
+        exec(command.file, command.args, { timeout: LAUNCH_TIMEOUT_MS, windowsHide: true }, (error) => {
+            if (error === null) {
+                settle();
+                return;
+            }
+            // Explorer returns 1 even when it opened the folder; only a missing or
+            // unexecutable binary means the launch did not happen.
+            if (command.file === 'explorer.exe' && error.code !== 'ENOENT' && error.code !== 'EACCES') {
+                settle();
+                return;
+            }
+            fail(error);
+        });
+    });
 }
-
 /** Render one SSE frame. */
 function sseFrame(event, data) {
-  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
+    return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 }
-
 /** Write a frame, tolerating a page that navigated away mid-write. */
 function write(stream, text) {
-  try {
-    stream.write(text)
-  } catch {
-    // The 'close' handler detaches the stream; a failed write is not an error.
-  }
+    try {
+        stream.write(text);
+    }
+    catch {
+        // The 'close' handler detaches the stream; a failed write is not an error.
+    }
 }
-
 /**
  * Canonicalize a claimed folder path.
  *
@@ -1077,19 +1040,24 @@ function write(stream, text) {
  * @returns the canonical absolute directory path, or `null` when it is not one.
  */
 export function directoryPath(value) {
-  if (typeof value !== 'string') return null
-  let text = value.trim().replace(/^"|"$/g, '')
-  if (text === '') return null
-  if (/^[A-Za-z]:$/.test(text)) text = `${text}\\`
-  if (text.length > 3) text = text.replace(/[\\/]+$/, '')
-  try {
-    if (!statSync(text).isDirectory()) return null
-  } catch {
-    return null
-  }
-  return resolve(text)
+    if (typeof value !== 'string')
+        return null;
+    let text = value.trim().replace(/^"|"$/g, '');
+    if (text === '')
+        return null;
+    if (/^[A-Za-z]:$/.test(text))
+        text = `${text}\\`;
+    if (text.length > 3)
+        text = text.replace(/[\\/]+$/, '');
+    try {
+        if (!statSync(text).isDirectory())
+            return null;
+    }
+    catch {
+        return null;
+    }
+    return resolve(text);
 }
-
 /**
  * Canonicalize a claimed file or directory path.
  *
@@ -1101,35 +1069,41 @@ export function directoryPath(value) {
  * @returns canonical path plus the directory flag, or null when it is not one.
  */
 export function existingPath(value, stat = statSync) {
-  if (typeof value !== 'string') return null
-  const text = value.trim().replace(/^"|"$/g, '')
-  if (text === '' || text.length > MAX_PATH_LENGTH || text.includes(String.fromCharCode(0))) return null
-  if (!isAbsolute(text)) return null
-  try {
-    const info = stat(text)
-    if (info.isDirectory()) return { path: resolve(text), directory: true }
-    if (info.isFile()) return { path: resolve(text), directory: false }
-  } catch {}
-  return null
+    if (typeof value !== 'string')
+        return null;
+    const text = value.trim().replace(/^"|"$/g, '');
+    if (text === '' || text.length > MAX_PATH_LENGTH || text.includes(String.fromCharCode(0)))
+        return null;
+    if (!isAbsolute(text))
+        return null;
+    try {
+        const info = stat(text);
+        if (info.isDirectory())
+            return { path: resolve(text), directory: true };
+        if (info.isFile())
+            return { path: resolve(text), directory: false };
+    }
+    catch { }
+    return null;
 }
-
 /**
  * Read a JSON request body.
  * @param request - the incoming request.
  * @returns the parsed body, or `{}` for an empty one.
  */
 async function readJsonBody(request) {
-  const chunks = []
-  let size = 0
-  for await (const chunk of request) {
-    size += chunk.length
-    if (size > MAX_REQUEST_BYTES) throw new Error('request body too large')
-    chunks.push(chunk)
-  }
-  const text = Buffer.concat(chunks).toString('utf8').trim()
-  return text === '' ? {} : JSON.parse(text)
+    const chunks = [];
+    let size = 0;
+    for await (const chunk of request) {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        size += buffer.length;
+        if (size > MAX_REQUEST_BYTES)
+            throw new Error('request body too large');
+        chunks.push(buffer);
+    }
+    const text = Buffer.concat(chunks).toString('utf8').trim();
+    return text === '' ? {} : JSON.parse(text);
 }
-
 /**
  * Whether a request came from the page this host is serving.
  *
@@ -1141,25 +1115,25 @@ async function readJsonBody(request) {
  * @returns true when the request may announce or follow paths.
  */
 function sameOrigin(request) {
-  const origin = request.headers.origin
-  if (origin === undefined) return true
-  try {
-    return new URL(origin).host === request.headers.host
-  } catch {
-    return false
-  }
+    const origin = request.headers.origin;
+    if (origin === undefined)
+        return true;
+    try {
+        return new URL(origin).host === request.headers.host;
+    }
+    catch {
+        return false;
+    }
 }
-
 /**
  * Whether a request arrived over the loopback interface.
  * @param request - the incoming request.
  * @returns true for a loopback peer, including IPv4-mapped forms.
  */
 function isLoopback(request) {
-  const address = request.socket?.remoteAddress ?? ''
-  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1'
+    const address = request.socket?.remoteAddress ?? '';
+    return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
 }
-
 /**
  * Write a JSON response.
  * @param response - the response to own.
@@ -1168,21 +1142,29 @@ function isLoopback(request) {
  * @param headers - extra headers.
  */
 function sendJson(response, status, value, headers = {}) {
-  const body = JSON.stringify(value)
-  response.writeHead(status, {
-    'content-type': 'application/json; charset=utf-8',
-    'content-length': Buffer.byteLength(body),
-    'cache-control': 'no-store',
-    ...headers,
-  })
-  response.end(body)
+    const body = JSON.stringify(value);
+    response.writeHead(status, {
+        'content-type': 'application/json; charset=utf-8',
+        'content-length': Buffer.byteLength(body),
+        'cache-control': 'no-store',
+        ...headers,
+    });
+    response.end(body);
 }
-
 /**
  * Human-readable message for an unknown thrown value.
  * @param error - the caught value.
  * @returns the message.
  */
 function messageOf(error) {
-  return error instanceof Error ? error.message : String(error)
+    return error instanceof Error ? error.message : String(error);
+}
+/**
+ * Narrow an unknown value to a plain object, so a projected or stored record
+ * can be probed for one field without trusting its shape.
+ * @param value - the value to inspect.
+ * @returns true when the value is a non-null object.
+ */
+function isRecord(value) {
+    return value !== null && typeof value === 'object';
 }

@@ -8,9 +8,11 @@
   "description": "在 Windows 资源管理器 / macOS Finder 里右键文件夹 →「通过 DSH 打开」：DSH 把该目录作为工作区切入，并复用或新建一个空白会话。Explorer / Finder context-menu entry that opens a folder as a DSH workspace with a blank session.",
   "type": "module",
   "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
   "icon": "./assets/icon.svg",
   "exports": {
     ".": {
+      "types": "./lib/types/index.d.ts",
       "default": "./lib/index.js"
     },
     "./client": {
@@ -31,8 +33,10 @@
     "docs"
   ],
   "scripts": {
-    "build": "node scripts/build-client.mjs",
-    "test": "node scripts/build-client.mjs && node --check lib/index.js && node --check lib/client.js && node --check client/index.js && node --test test/host.test.mjs test/routes.test.mjs test/scripts.test.mjs test/macos.test.mjs test/open-with.test.mjs test/session.test.mjs test/menu.test.mjs test/session-menu.test.mjs"
+    "build": "tsc -p tsconfig.json && node scripts/build-client.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepare": "npm run build",
+    "test": "tsc -p tsconfig.json && node scripts/build-client.mjs && node --check lib/index.js && node --check lib/client.js && node --check client/index.js && node --test test/host.test.mjs test/routes.test.mjs test/scripts.test.mjs test/macos.test.mjs test/open-with.test.mjs test/session.test.mjs test/menu.test.mjs test/session-menu.test.mjs"
   },
   "engines": {
     "node": ">=24",
@@ -78,5 +82,9 @@
       ],
       "platform": "web"
     }
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2"
   }
 }

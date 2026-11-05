@@ -8,28 +8,24 @@
  *
  * @module dsh-rtk-slim/content
  */
-
-/**
- * @typedef {import('@deepseek-ai/dsh-llm').ContentBlock} ContentBlock
- */
-
 /**
  * Text of a payload that is exactly one text block.
- * @param {readonly ContentBlock[] | undefined} content
- * @returns {string | undefined} `undefined` means "out of scope, bail".
+ * @param content - the payload's content blocks, when the tool produced any.
+ * @returns `undefined` means "out of scope, bail".
  */
 export function singleText(content) {
-  if (!Array.isArray(content) || content.length !== 1) return undefined
-  const block = content[0]
-  if (block === null || typeof block !== 'object' || block.type !== 'text') return undefined
-  return block.text
+    if (!Array.isArray(content) || content.length !== 1)
+        return undefined;
+    const block = content[0];
+    if (block === null || typeof block !== 'object' || block.type !== 'text')
+        return undefined;
+    return block.text;
 }
-
 /**
  * Re-wrap condensed text as the single text block the registry expects.
- * @param {string} text
- * @returns {ContentBlock[]}
+ * @param text - condensed text.
+ * @returns the one-block content payload.
  */
 export function textBlock(text) {
-  return [{ type: 'text', text }]
+    return [{ type: 'text', text }];
 }

@@ -69,13 +69,27 @@ importers:
         specifier: ^7.0.2
         version: 7.0.2
 
-  packages/dsh-folder-path: {}
+  packages/dsh-folder-path:
+    devDependencies:
+      '@types/node':
+        specifier: ^26.6.5
+        version: 26.6.6
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
 
   packages/dsh-open-in-dsh:
     dependencies:
       '@deepseek-ai/schemastery':
         specifier: ^3.18.5
         version: 3.18.5
+    devDependencies:
+      '@types/node':
+        specifier: ^26.6.5
+        version: 26.6.6
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
 
   packages/dsh-rtk-slim:
     dependencies:
@@ -101,6 +115,13 @@ importers:
       '@deepseek-ai/schemastery':
         specifier: ^3.18.5 || ^3.18.6-alpha.1
         version: 3.19.0
+    devDependencies:
+      '@types/node':
+        specifier: ^26.6.5
+        version: 26.6.6
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
 
 packages:
 

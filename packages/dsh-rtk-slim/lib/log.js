@@ -8,32 +8,30 @@
  *
  * @module dsh-rtk-slim/log
  */
-
-import { appendFileSync, mkdirSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
-
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 /**
  * `$DSH_HOME/logs/dsh-rtk-slim.log`, falling back to `~/.dsh/logs/...`.
- * @returns {string}
+ * @returns absolute path of this plugin's log file.
  */
 export function defaultLogPath() {
-  const home = typeof process.env.DSH_HOME === 'string' && process.env.DSH_HOME.length > 0 ? process.env.DSH_HOME : join(homedir(), '.dsh')
-  return join(home, 'logs', 'dsh-rtk-slim.log')
+    const home = typeof process.env.DSH_HOME === 'string' && process.env.DSH_HOME.length > 0 ? process.env.DSH_HOME : join(homedir(), '.dsh');
+    return join(home, 'logs', 'dsh-rtk-slim.log');
 }
-
 /**
  * Append one timestamped line.
- * @param {string} line
- * @param {string} [path]
- * @returns {boolean} whether the line was written
+ * @param line - the line to record.
+ * @param path - log file path; defaults to {@link defaultLogPath}.
+ * @returns whether the line was written.
  */
 export function logStartup(line, path = defaultLogPath()) {
-  try {
-    mkdirSync(dirname(path), { recursive: true })
-    appendFileSync(path, `${new Date().toISOString()} ${line}\n`)
-    return true
-  } catch {
-    return false
-  }
+    try {
+        mkdirSync(dirname(path), { recursive: true });
+        appendFileSync(path, `${new Date().toISOString()} ${line}\n`);
+        return true;
+    }
+    catch {
+        return false;
+    }
 }

@@ -16,58 +16,63 @@
  *
  * @module dsh-session-ops/store/paths
  */
-
-import { readdirSync } from 'node:fs'
-import { join } from 'node:path'
-
+import { readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { messageOf } from './util.js';
 /** generation 规范名：`session.jsonl[.zstd]` 或 `session.vN.jsonl[.zstd]`。 */
-const GENERATION_NAME = /^session(?:\.v(\d+))?\.jsonl(\.zstd)?$/
-
+const GENERATION_NAME = /^session(?:\.v(\d+))?\.jsonl(\.zstd)?$/;
 /**
  * 把任意字符串编码成一个安全路径段（与会话 id 共用同一套转义）。
  * @param raw - 原始字符串。
  * @returns 单个文件系统安全路径段。
  */
 export function encodeSegment(raw) {
-  if (raw.length === 0) throw new Error('cannot encode an empty path segment')
-  if (raw === '.') return '~002E'
-  if (raw === '..') return '~002E~002E'
-  let out = ''
-  for (let i = 0; i < raw.length; i++) {
-    const code = raw.charCodeAt(i)
-    const ch = String.fromCharCode(code)
-    if (ch !== '~' && /^[A-Za-z0-9._-]$/.test(ch)) out += ch
-    else out += '~' + code.toString(16).toUpperCase().padStart(4, '0')
-  }
-  return out
+    if (raw.length === 0)
+        throw new Error('cannot encode an empty path segment');
+    if (raw === '.')
+        return '~002E';
+    if (raw === '..')
+        return '~002E~002E';
+    let out = '';
+    for (let i = 0; i < raw.length; i++) {
+        const code = raw.charCodeAt(i);
+        const ch = String.fromCharCode(code);
+        if (ch !== '~' && /^[A-Za-z0-9._-]$/.test(ch))
+            out += ch;
+        else
+            out += '~' + code.toString(16).toUpperCase().padStart(4, '0');
+    }
+    return out;
 }
-
 /**
  * 项目目录键：分隔符折叠成 `-`，不安全码位 `~XXXX`，截断到 251 字符。
  * @param cwd - 会话的项目目录。
  * @returns 单个文件系统安全的项目目录名。
  */
 export function projectKey(cwd) {
-  if (cwd.length === 0) throw new Error('cannot encode an empty project path')
-  let readable = ''
-  let separatorRun = false
-  for (let i = 0; i < cwd.length; i++) {
-    const code = cwd.charCodeAt(i)
-    const ch = String.fromCharCode(code)
-    if (ch === '/' || ch === '\\' || ch === ':') {
-      if (!separatorRun) readable += '-'
-      separatorRun = true
-    } else if (ch !== '~' && /^[A-Za-z0-9._-]$/.test(ch)) {
-      readable += ch
-      separatorRun = false
-    } else {
-      readable += '~' + code.toString(16).toUpperCase().padStart(4, '0')
-      separatorRun = false
+    if (cwd.length === 0)
+        throw new Error('cannot encode an empty project path');
+    let readable = '';
+    let separatorRun = false;
+    for (let i = 0; i < cwd.length; i++) {
+        const code = cwd.charCodeAt(i);
+        const ch = String.fromCharCode(code);
+        if (ch === '/' || ch === '\\' || ch === ':') {
+            if (!separatorRun)
+                readable += '-';
+            separatorRun = true;
+        }
+        else if (ch !== '~' && /^[A-Za-z0-9._-]$/.test(ch)) {
+            readable += ch;
+            separatorRun = false;
+        }
+        else {
+            readable += '~' + code.toString(16).toUpperCase().padStart(4, '0');
+            separatorRun = false;
+        }
     }
-  }
-  return `--${(readable.replace(/^-+/, '') || 'root').slice(0, 251)}--`
+    return `--${(readable.replace(/^-+/, '') || 'root').slice(0, 251)}--`;
 }
-
 /**
  * 把 `sessions/` 下的项目目录键还原成路径。
  *
@@ -78,15 +83,16 @@ export function projectKey(cwd) {
  * @returns 反解出的路径。
  */
 export function decodeProjectKey(key) {
-  let s = key
-  if (s.startsWith('--')) s = s.slice(2)
-  if (s.endsWith('--')) s = s.slice(0, -2)
-  s = s.replace(/~([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
-  s = s.replace(/-/g, '\\')
-  // 盘符的冒号在目录键里没有单独转义（`C:\a` → `--C-a--`），补回来。
-  return /^[A-Za-z]\\/.test(s) ? `${s[0]}:${s.slice(1)}` : s
+    let s = key;
+    if (s.startsWith('--'))
+        s = s.slice(2);
+    if (s.endsWith('--'))
+        s = s.slice(0, -2);
+    s = s.replace(/~([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+    s = s.replace(/-/g, '\\');
+    // 盘符的冒号在目录键里没有单独转义（`C:\a` → `--C-a--`），补回来。
+    return /^[A-Za-z]\\/.test(s) ? `${s[0]}:${s.slice(1)}` : s;
 }
-
 /**
  * **宽松**的会话日志文件名判定：`.jsonl.zstd` 或 `.jsonl` 结尾就算。
  *
@@ -97,20 +103,19 @@ export function decodeProjectKey(key) {
  * @returns 是否像一份会话日志。
  */
 export function isSessionLogFile(name) {
-  return name.endsWith('.jsonl.zstd') || name.endsWith('.jsonl')
+    return name.endsWith('.jsonl.zstd') || name.endsWith('.jsonl');
 }
-
 /**
  * 目录里是不是规范 generation 名。
  * @param name - 目录项名。
  * @returns 版本号（v0 为 0）与是否压缩；不是规范名时 `undefined`。
  */
 export function parseGenerationName(name) {
-  const match = GENERATION_NAME.exec(name)
-  if (match === null) return undefined
-  return { version: match[1] === undefined ? 0 : Number(match[1]), compressed: match[2] === '.zstd' }
+    const match = GENERATION_NAME.exec(name);
+    if (match === null)
+        return undefined;
+    return { version: match[1] === undefined ? 0 : Number(match[1]), compressed: match[2] === '.zstd' };
 }
-
 /**
  * 选出会话目录里版本最高的规范 generation 文件。
  *
@@ -121,43 +126,41 @@ export function parseGenerationName(name) {
  *   （错误文案被两个插件的用户可见报告引用，改动前先看测试）。
  */
 export function findGeneration(dir) {
-  let entries
-  try {
-    entries = readdirSync(dir, { withFileTypes: true })
-  } catch (error) {
-    return { error: `cannot list session directory ${dir}: ${String(error?.message ?? error)}` }
-  }
-  const generations = []
-  const others = []
-  for (const entry of entries) {
-    const parsed = parseGenerationName(entry.name)
-    if (parsed === undefined) {
-      others.push(entry.name)
-      continue
+    let entries;
+    try {
+        entries = readdirSync(dir, { withFileTypes: true });
     }
-    generations.push({ name: entry.name, version: parsed.version, compressed: parsed.compressed })
-  }
-  if (generations.length === 0) return { error: `no canonical session log in ${dir}`, others }
-  generations.sort((left, right) => right.version - left.version)
-  return { selected: generations[0], all: generations, others }
+    catch (error) {
+        return { error: `cannot list session directory ${dir}: ${messageOf(error)}` };
+    }
+    const generations = [];
+    const others = [];
+    for (const entry of entries) {
+        const parsed = parseGenerationName(entry.name);
+        if (parsed === undefined) {
+            others.push(entry.name);
+            continue;
+        }
+        generations.push({ name: entry.name, version: parsed.version, compressed: parsed.compressed });
+    }
+    if (generations.length === 0)
+        return { error: `no canonical session log in ${dir}`, others };
+    generations.sort((left, right) => right.version - left.version);
+    return { selected: generations[0], all: generations, others };
 }
-
 /** 物理编码后缀。 */
 export function compressionSuffix(compression) {
-  return compression === 'zstd' ? '.zstd' : ''
+    return compression === 'zstd' ? '.zstd' : '';
 }
-
 /** 一个 generation 的规范文件名（v0 不带 `vN` 段）。 */
 export function generationLogFilename(version, compression) {
-  return `${version === 0 ? 'session' : `session.v${version}`}.jsonl${compressionSuffix(compression)}`
+    return `${version === 0 ? 'session' : `session.v${version}`}.jsonl${compressionSuffix(compression)}`;
 }
-
 /** 会话目录：`<root>/<projectKey>/<encodeSegment(id)>`。 */
 export function sessionDir(root, cwd, id) {
-  return join(join(root, cwd === undefined ? '_no-cwd' : projectKey(cwd)), encodeSegment(id))
+    return join(join(root, cwd === undefined ? '_no-cwd' : projectKey(cwd)), encodeSegment(id));
 }
-
 /** 一个 generation 的绝对日志路径。 */
 export function logPath(root, cwd, id, version, compression) {
-  return join(sessionDir(root, cwd, id), generationLogFilename(version, compression))
+    return join(sessionDir(root, cwd, id), generationLogFilename(version, compression));
 }

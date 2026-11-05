@@ -21,14 +21,17 @@
   "author": "Cooper Zhuang",
   "type": "module",
   "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
   "exports": {
     ".": {
+      "types": "./lib/types/index.d.ts",
       "default": "./lib/index.js"
     },
     "./client": {
       "default": "./lib/client.js"
     },
     "./store": {
+      "types": "./lib/types/store/index.d.ts",
       "default": "./lib/store/index.js"
     },
     "./package.json": "./package.json"
@@ -44,7 +47,10 @@
     "docs"
   ],
   "scripts": {
-    "test": "node --test"
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.json && node --test",
+    "prepare": "npm run build"
   },
   "engines": {
     "node": ">=24",
@@ -77,5 +83,9 @@
       ],
       "platform": "web"
     }
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2"
   }
 }

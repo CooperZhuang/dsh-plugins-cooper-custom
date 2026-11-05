@@ -1,6 +1,6 @@
 # DSH 插件集合
 
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（简称 DSH）的自研插件 monorepo。每个插件都是独立发布到 npm 的包，带自己的 `package.json`、`cordis.patch.yml`、`lib` 与测试；开发、版本管理和发布集中在同一个仓库。
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（简称 DSH）的自研插件 monorepo。每个插件都是独立发布到 npm 的包，带自己的 `package.json`、`cordis.patch.yml`、`src`/`lib` 与测试；**宿主半边源码是 TypeScript（`src/` → `tsc` → `lib/`），浏览器半边是 classic-script JS**；开发、版本管理和发布集中在同一个仓库。
 
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](#许可证)
 
@@ -84,7 +84,7 @@ dsh plugin --profile <profile> add <包名>
 git clone https://github.com/CooperZhuang/dsh-plugins-cooper-custom.git
 cd dsh-plugins-cooper-custom
 pnpm install
-pnpm run build   # dsh-cross-memory 的 lib/ 是构建产物，不入库
+pnpm run build   # 编译全部 TypeScript 宿主（dsh-cross-memory 的 lib/ 不入库，其余包的产物随仓库提交）
 
 pnpm --dir ~/.dsh/profiles/desktop add --ignore-scripts \
   "file:$PWD/packages/dsh-cross-memory"
@@ -97,11 +97,11 @@ pnpm --dir ~/.dsh/profiles/desktop add --ignore-scripts \
 ```bash
 pnpm run test                 # 全部包的测试
 pnpm run test:cross-memory    # 单包（其他包同名脚本）
-pnpm run build                # 重建 dsh-cross-memory 产物
+pnpm run build                # 编译全部 TypeScript 宿主源码（src/ → lib/）
 pnpm run verify:profile       # 校验 profile 里的硬链接安装与源码一致
 ```
 
-- 改宿主半边（`lib/*.js`）后要重启 DSH 宿主；只改浏览器半边（`lib/client.js`）刷新页面即可。
+- 改宿主半边（`src/*.ts`，重新 `pnpm run build`）后要重启 DSH 宿主；只改浏览器半边（`client/` / `lib/client.js`）刷新页面即可。
 - 测试均基于 Node 内置 `node --test`，不启动真实宿主；`dsh-cross-memory` 另有 `pnpm --dir packages/dsh-cross-memory smoke` 做激活冒烟。
 - CI（GitHub Actions）在 ubuntu/macos × Node 24 上跑全量测试，并对每个包做 `npm pack --dry-run`；发版工作流见 `.github/workflows/release.yml`。
 
@@ -112,7 +112,7 @@ pnpm run verify:profile       # 校验 profile 里的硬链接安装与源码一
 1. 改版本号（`packages/<pkg>/package.json`）并跑测试；
 2. `npm publish --access public`（需要 npm 2FA；发布后版本约 1–2 分钟生效）；
 3. 打 tag：`git tag -a <pkg>@<version> -m "<pkg> <version> (npm)"` 并推送；
-4. `dsh-cross-memory` 发布前先 `pnpm run build`（`lib/` 不入库）；1024Store 目录会自动检测 npm 新版本。
+4. 发布前先 `pnpm run build`（`dsh-cross-memory` 的 `lib/` 不入库；其余包的 `lib/` 随仓库提交，`prepare` 也会重新编译）；1024Store 目录会自动检测 npm 新版本。
 
 ## 隐私与安全
 
@@ -126,11 +126,11 @@ pnpm run verify:profile       # 校验 profile 里的硬链接安装与源码一
 
 ```
 packages/
-  dsh-cross-memory/     跨会话记忆（TS；src/ -> lib/）
-  dsh-session-ops/      会话运维 + lib/store 共享库
-  dsh-rtk-slim/         工具输出瘦身
-  dsh-folder-path/      文件夹路径粘贴
-  dsh-open-in-dsh/      系统右键/服务项集成
+  dsh-cross-memory/     跨会话记忆（TS；src/ -> lib/，lib 不入库）
+  dsh-session-ops/      会话运维（TS；src/ -> lib/，含 lib/store 共享库）
+  dsh-rtk-slim/         工具输出瘦身（TS；src/ -> lib/）
+  dsh-folder-path/      文件夹路径粘贴（TS；src/ -> lib/，浏览器半边 client/）
+  dsh-open-in-dsh/      系统右键/服务项集成（TS；src/ -> lib/，浏览器半边 client/）
 scripts/
   verify-profile-links.mjs   profile 硬链接一致性校验
 .github/workflows/     CI 与发版

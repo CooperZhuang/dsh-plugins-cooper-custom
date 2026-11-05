@@ -22,10 +22,9 @@
  *
  * @module dsh-session-ops/store/http
  */
-
+import { messageOf } from './util.js';
 /** 请求体上限：1 MiB。 */
-const MAX_BODY_BYTES = 1024 * 1024
-
+const MAX_BODY_BYTES = 1024 * 1024;
 /**
  * 写一个 JSON 响应。
  * @param res - Node HTTP 响应。
@@ -37,19 +36,19 @@ const MAX_BODY_BYTES = 1024 * 1024
  * @returns 无。
  */
 export function writeJson(res, status, body, options = {}) {
-  const text = JSON.stringify(body)
-  if (options.contentLength === true) {
-    res.writeHead(status, {
-      'content-type': 'application/json; charset=utf-8',
-      'cache-control': 'no-store',
-      'content-length': Buffer.byteLength(text),
-    })
-  } else {
-    res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
-  }
-  res.end(text)
+    const text = JSON.stringify(body);
+    if (options.contentLength === true) {
+        res.writeHead(status, {
+            'content-type': 'application/json; charset=utf-8',
+            'cache-control': 'no-store',
+            'content-length': Buffer.byteLength(text),
+        });
+    }
+    else {
+        res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+    }
+    res.end(text);
 }
-
 /**
  * 读一个 JSON 请求体（上限 1 MiB）。
  *
@@ -64,24 +63,28 @@ export function writeJson(res, status, body, options = {}) {
  * @returns 解析出来的载荷对象。
  */
 export async function readJsonBody(req, options = {}) {
-  const requireObject = options.requireObject === true
-  const chunks = []
-  let size = 0
-  for await (const chunk of req) {
-    size += chunk.length
-    if (size > MAX_BODY_BYTES) throw new Error('request body too large')
-    chunks.push(chunk)
-  }
-  if (chunks.length === 0) return {}
-  const buffer = Buffer.concat(chunks).toString('utf8')
-  if (!requireObject) return JSON.parse(buffer)
-  const text = buffer.trim()
-  if (text === '') return {}
-  const parsed = JSON.parse(text)
-  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('request body must be a JSON object')
-  return parsed
+    const requireObject = options.requireObject === true;
+    const chunks = [];
+    let size = 0;
+    for await (const chunk of req) {
+        size += chunk.length;
+        if (size > MAX_BODY_BYTES)
+            throw new Error('request body too large');
+        chunks.push(chunk);
+    }
+    if (chunks.length === 0)
+        return {};
+    const buffer = Buffer.concat(chunks).toString('utf8');
+    if (!requireObject)
+        return JSON.parse(buffer);
+    const text = buffer.trim();
+    if (text === '')
+        return {};
+    const parsed = JSON.parse(text);
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed))
+        throw new Error('request body must be a JSON object');
+    return parsed;
 }
-
 /**
  * 造一个 `kind: 'prefix'` 路由处理器（`ctx.webServer.register({kind:'prefix', path, handler})` 的 `handler`）。
  *
@@ -98,31 +101,33 @@ export async function readJsonBody(req, options = {}) {
  * @returns `async (req, res) => void`。
  */
 export function createApiHandler(options) {
-  const { prefix, methods, trustRequest, log, readBody = readJsonBody, contentLength = false } = options
-  const reply = (res, status, body) => writeJson(res, status, body, { contentLength })
-  return async (req, res) => {
-    if (typeof trustRequest !== 'function' || !trustRequest(req)) {
-      reply(res, 403, { ok: false, error: { code: 'forbidden', message: 'forbidden' } })
-      return
-    }
-    const url = new URL(req.url ?? '/', 'http://dsh.internal')
-    const method = url.pathname.startsWith(`${prefix}/`) ? url.pathname.slice(prefix.length + 1) : undefined
-    if (method === undefined || method.includes('/')) {
-      reply(res, 404, { ok: false, error: { code: 'not-found', message: 'unknown method' } })
-      return
-    }
-    const handler = methods[method]
-    if (typeof handler !== 'function') {
-      reply(res, 404, { ok: false, error: { code: 'not-found', message: `unknown method ${method}` } })
-      return
-    }
-    try {
-      const payload = req.method === 'GET' ? Object.fromEntries(url.searchParams) : await readBody(req)
-      const value = await handler(payload)
-      reply(res, 200, { ok: true, value })
-    } catch (error) {
-      if (typeof log === 'function') log('warn', `${method} failed: ${String(error?.message ?? error)}`)
-      reply(res, 400, { ok: false, error: { code: 'bad-request', message: String(error?.message ?? error) } })
-    }
-  }
+    const { prefix, methods, trustRequest, log, readBody = readJsonBody, contentLength = false } = options;
+    const reply = (res, status, body) => writeJson(res, status, body, { contentLength });
+    return async (req, res) => {
+        if (typeof trustRequest !== 'function' || !trustRequest(req)) {
+            reply(res, 403, { ok: false, error: { code: 'forbidden', message: 'forbidden' } });
+            return;
+        }
+        const url = new URL(req.url ?? '/', 'http://dsh.internal');
+        const method = url.pathname.startsWith(`${prefix}/`) ? url.pathname.slice(prefix.length + 1) : undefined;
+        if (method === undefined || method.includes('/')) {
+            reply(res, 404, { ok: false, error: { code: 'not-found', message: 'unknown method' } });
+            return;
+        }
+        const handler = methods[method];
+        if (typeof handler !== 'function') {
+            reply(res, 404, { ok: false, error: { code: 'not-found', message: `unknown method ${method}` } });
+            return;
+        }
+        try {
+            const payload = req.method === 'GET' ? Object.fromEntries(url.searchParams) : await readBody(req);
+            const value = await handler(payload);
+            reply(res, 200, { ok: true, value });
+        }
+        catch (error) {
+            if (typeof log === 'function')
+                log('warn', `${method} failed: ${messageOf(error)}`);
+            reply(res, 400, { ok: false, error: { code: 'bad-request', message: messageOf(error) } });
+        }
+    };
 }

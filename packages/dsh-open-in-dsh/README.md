@@ -33,7 +33,7 @@ dsh plugin --profile <profile> add dsh-open-in-dsh
 把 `<profile>` 换成目标 profile（桌面版 `desktop`、`dsh web` 用 `web`）。
 从源码安装时把最后一项换成 checkout 里的 `packages/dsh-open-in-dsh` 路径。
 
-装完刷新页面；**改宿主半边（`lib/index.js`）后必须重启宿主**——桌面版要完全退出应用再打开
+装完刷新页面；**改宿主半边（`src/index.ts`，重新 `npm run build` 后）必须重启宿主**——桌面版要完全退出应用再打开
 （关窗口只是缩进托盘），否则运行中的进程还在用模块缓存里的旧代码。
 
 ### 2. 注册系统右键菜单

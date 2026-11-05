@@ -8,6 +8,7 @@
   },
   "type": "module",
   "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
   "exports": {
     ".": {
       "default": "./lib/index.js"
@@ -19,6 +20,7 @@
   },
   "files": [
     "lib/index.js",
+    "lib/types",
     "lib/client.js",
     "client",
     "scripts",
@@ -31,9 +33,10 @@
     "docs"
   ],
   "scripts": {
-    "build": "node scripts/build-client.mjs",
-    "prepare": "node scripts/build-client.mjs",
-    "test": "node --check lib/index.js && node --check lib/client.js && node --test"
+    "build": "tsc -p tsconfig.json && node scripts/build-client.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepare": "npm run build",
+    "test": "tsc -p tsconfig.json && node scripts/build-client.mjs && node --test"
   },
   "engines": {
     "node": ">=24",
@@ -71,5 +74,9 @@
     "client": {
       "platform": "web"
     }
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2"
   }
 }

@@ -8,8 +8,10 @@
   "description": "DSH host plugin: condense oversized bash/job_output text through rtk, with lossless spill traceability",
   "type": "module",
   "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
   "exports": {
     ".": {
+      "types": "./lib/types/index.d.ts",
       "default": "./lib/index.js"
     },
     "./cordis.patch.yml": "./cordis.patch.yml",
@@ -27,9 +29,11 @@
   ],
   "license": "MIT",
   "scripts": {
-    "test": "node --test test/*.test.mjs",
-    "typecheck": "tsc -p jsconfig.json",
-    "check": "npm run typecheck && npm test"
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.json && node --test test/*.test.mjs",
+    "check": "npm run typecheck && npm test",
+    "prepare": "npm run build"
   },
   "engines": {
     "node": ">=24",
@@ -70,5 +74,8 @@
       "patch": "./cordis.patch.yml"
     }
   },
-  "icon": "./icon.svg"
+  "icon": "./icon.svg",
+  "peerDependencies": {
+    "@deepseek-ai/dsh-llm": "^0.2.1-rc.2 || ^0.2.2-alpha.2"
+  }
 }

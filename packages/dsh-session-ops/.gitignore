@@ -2,7 +2,14 @@
 # (@deepseek-ai/schemastery); never committed.
 node_modules/
 
-# `lib/` is hand-written SOURCE in this repo, not build output — do not ignore it.
+# `lib/` is deliberately NOT ignored, and after the TypeScript migration it holds
+# two different things:
+#   - `lib/client.js` — hand-written SOURCE (the browser half; DSH loads it as a
+#     classic script, `tsc` never compiles it). It must stay in the repo.
+#   - the rest of `lib/` — build OUTPUT of `tsc -p tsconfig.json`, regenerated from
+#     `src/` by `npm run build` (and by the `prepare` hook).
+# Repo convention: `lib/` stays tracked (committed) so `file:` installs and the
+# existing `test/*.mjs` paths keep working without running a build first.
 
 # Local editor and OS noise.
 .DS_Store

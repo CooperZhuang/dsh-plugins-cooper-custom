@@ -23,9 +23,8 @@
  *
  * @module dsh-session-ops/store
  */
-
-export * from './paths.js'
-export * from './frames.js'
-export * from './registry.js'
-export * from './host.js'
-export * from './http.js'
+export * from './paths.js';
+export * from './frames.js';
+export * from './registry.js';
+export * from './host.js';
+export * from './http.js';

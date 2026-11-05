@@ -107,11 +107,13 @@ import { projectKey, readSessionHeader, hasZstd } from 'dsh-session-ops/store'
 ## Development
 
 ```bash
-npm test          # node --test: all use cases from both halves plus lib/store
+npm run build     # tsc -p tsconfig.json: src/ -> lib/ (plus lib/types/)
+npm test          # build, then node --test: both halves plus lib/store
 ```
 
-`lib/` is hand-written source, not build output; `lib/client.js` is an IIFE for the browser classic
-script loader and can be validated with `node --check`.
+Host code lives in `src/` as TypeScript; `lib/*.js` and `lib/types/` are the `tsc` output committed
+with the repo (so a checkout/profile install works without a build). `lib/client.js` is the one
+hand-written file: an IIFE for the browser classic-script loader, not compiled by `tsc`.
 
 ## License
 
