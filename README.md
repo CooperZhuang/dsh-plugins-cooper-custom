@@ -14,6 +14,14 @@ DeepSeek Harness 自研插件集合。每个插件仍是独立的 npm 包（各�
 | `packages/dsh-folder-path` | 粘贴文件夹路径而不是尝试上传（功能仅 Windows） | 0.2.2-rc.1 |
 | `packages/dsh-open-in-dsh` | 「通过 DSH 打开」：Windows 资源管理器右键动词；macOS 是 Finder 快速操作 + QSpace「服务」项 + `dsh-open`（桌面外壳启动参数交接，不经插件 HTTP 路由） | 0.2.2-rc.1（peer 区间也覆盖 0.2.1-rc.x） |
 
+## 第三方插件更新与回滚（0.2.2+）
+
+DSH 0.2.2 起「插件 → 已安装」可以检查并更新**第三方 npm 插件**；更新过程中插件会被移除并重装，失败（装不上或起不来）时自动重装被移除的旧版本（需要 HMR 可用；没有 HMR 时只给 restart-required，不回滚）。
+
+- 可更新：`dsh-better-sidebar`、`dsh-easyrewrite`、`dsh-lsp-actions` 这类以包名按 registry spec 安装的 npm 插件。
+- 不可更新（预期）：本仓库全部 `file:` 插件，以及 `github:` 安装的 `dsh-minimax-connect`——它们的版本由本仓库提交与机器本地路径决定，升级走 git/pnpm，不走插件页更新。
+- 官方 `@deepseek-ai/*` bundle 跟随 DSH 版本，不出现在可更新列表。
+
 ## 目录与历史
 
 `packages/<name>` 分别由原独立仓库用 `git subtree` 导入，**每个子目录保留原仓库的完整 git 历史**。注意 subtree 的语义：原仓库历史作为「导入提交」的祖先保留在提交图里（`git log --graph`、`git log <导入提交>^2` 可查），但 `git log -- packages/dsh-memories` 只显示导入那一笔——这是 subtree 已知限制，不是丢历史。原独立仓库已在迁移后删除，旧仓库源码另存于迁移机的 `~/.dsh/backups/old-dsh-repos-20261026.tgz`。

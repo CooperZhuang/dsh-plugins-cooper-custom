@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "会话存储共享库",
+    "description": "会话存储的共享实现：项目目录 key、jsonl.zstd 帧、header 改写与工作区注册表，被工具箱复用。",
+    "detail": "docs/DETAIL.zh.md"
+  }
+}

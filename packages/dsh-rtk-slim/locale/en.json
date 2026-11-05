@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Tool output slimming",
+    "description": "Condenses oversized tool output, spilling the full text to a file that can be fetched on demand.",
+    "detail": "docs/DETAIL.md"
+  }
+}
