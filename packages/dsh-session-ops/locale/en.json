@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Session operations",
+    "description": "Really delete persisted sessions and move them between workspaces: two right-pane tabs, batch filters, running guards, context-menu entries and shared session-store primitives.",
+    "detail": "docs/DETAIL.md"
+  }
+}

@@ -1,7 +1,0 @@
-{
-  "meta": {
-    "title": "Session toolbox",
-    "description": "Real deletion and cross-workspace moves for sessions: two right-pane tabs, batch filters, running guards and context-menu entries.",
-    "detail": "docs/DETAIL.md"
-  }
-}

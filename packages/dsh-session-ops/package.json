@@ -1,0 +1,81 @@
+{
+  "name": "dsh-session-ops",
+  "version": "0.1.4",
+  "private": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "description": "Session operations for DeepSeek Harness: really delete persisted sessions (workspace/archive/subagent filters, running-session guards) and move sessions between workspaces (log relocation, header.cwd rewrite, workspace registry follow). Ships the shared session-store primitives (project-directory keys, jsonl.zstd frames, workspace registry, host/HTTP plumbing) as lib/store. One host entry with two HTTP prefixes and two model tools, one browser bundle with two right-pane tabs and a merged config card.",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis-plugin",
+    "session",
+    "session-delete",
+    "session-move",
+    "session-store",
+    "housekeeping"
+  ],
+  "license": "MIT",
+  "author": "Cooper Zhuang",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./store": {
+      "default": "./lib/store/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "README.zh.md",
+    "LICENSE",
+    "icon.svg",
+    "locale",
+    "docs"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=24",
+    "dsh": "^0.2.1-rc.2 || ^0.2.2-alpha.2"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.5 || ^3.18.6-alpha.1"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/schemastery": "^3.18.5 || ^3.18.6-alpha.1"
+  },
+  "icon": "./icon.svg",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CooperZhuang/dsh-plugins-cooper-custom.git",
+    "directory": "packages/dsh-session-ops"
+  },
+  "homepage": "https://github.com/CooperZhuang/dsh-plugins-cooper-custom/tree/main/packages/dsh-session-ops#readme",
+  "bugs": {
+    "url": "https://github.com/CooperZhuang/dsh-plugins-cooper-custom/issues"
+  },
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-context-menu"
+      ],
+      "platform": "web"
+    }
+  }
+}
