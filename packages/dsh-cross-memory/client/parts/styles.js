@@ -26,6 +26,7 @@ const CSS = [
   '.dshm-input:focus{outline:none;border-color:var(--dsw-alias-brand-primary)}',
   '.dshm-input:disabled{opacity:.6}',
   '.dshm-check{width:16px;height:16px;accent-color:var(--dsw-alias-brand-primary)}',
+  '.dshm-inline{display:flex;align-items:center;gap:8px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary);cursor:pointer}',
   '.dshm-reset{height:26px;padding:0 8px;font:inherit;font-size:12px;border-radius:13px;border:.5px solid var(--dsw-alias-border-l3);background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer}',
   '.dshm-reset:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}',
   '.dshm-status{font-size:12px;line-height:18px;margin:0}',

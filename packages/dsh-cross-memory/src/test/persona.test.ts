@@ -14,7 +14,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { personaPath, readPersona, renderPersonaBlock, writePersona } from '../persona.js'
+import { clearPersona, isPersonaLocked, personaLockPath, personaPath, readPersona, renderPersonaBlock, setPersonaLocked, writePersona } from '../persona.js'
 import { MemoryStore } from '../storage.js'
 import { parsePlan } from '../consolidate.js'
 
@@ -78,4 +78,20 @@ test('a legacy single-file profile is still read as the human block', async (t) 
   t.after(() => rm(dir, { recursive: true, force: true }))
   await writeFile(join(dir, 'persona.md'), '旧的单文件画像\n', 'utf8')
   assert.equal(await readPersona(dir), '旧的单文件画像', 'upgrading does not lose the profile')
+})
+
+test('the manual-edit lock is a timestamped marker, and clearing removes the profile', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-cross-memory-lock-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+
+  assert.equal(await isPersonaLocked(dir), false, 'an untouched store is unlocked')
+  await writePersona(dir, '他先确认再改代码。')
+  await setPersonaLocked(dir, true)
+  assert.equal(await isPersonaLocked(dir), true, 'the marker locks the profile')
+  assert.match(await readFile(personaLockPath(dir), 'utf8'), /\d{4}-\d{2}-\d{2}T/u, 'the marker records when it was locked')
+
+  await clearPersona(dir)
+  assert.equal(await readPersona(dir), undefined, 'clearing removes the profile the injector reads')
+  await setPersonaLocked(dir, false)
+  assert.equal(await isPersonaLocked(dir), false, 'unlocking removes the marker')
 })

@@ -40,6 +40,7 @@ const SECTION_COPY = {
     promoted: '已提升',
     tunables: '配置项',
     tabMemories: '记忆',
+    tabPersona: '画像',
     tabConfig: '配置',
     tabDisputes: '待裁决',
     disputesTitle: '合并时需要你拍板的事',
@@ -55,6 +56,13 @@ const SECTION_COPY = {
     updated: '更新于',
     saved: '已保存。',
     removed: '已删除。',
+    personaIntro: '这就是每个会话开头注入的「这个人是谁」画像（<persona> 块）。手动保存后，后台合并默认仍可能按需改写；勾选锁定后，只有你的保存会改变它。',
+    personaLock: '锁定画像：后台合并不要自动改写',
+    personaLockHint: '锁定只阻止后台合并写入，不影响每个会话的注入。',
+    personaPlaceholder: '这个人是谁：工作方式、偏好、不能违反的边界……',
+    personaSave: '保存画像',
+    personaSaved: '画像已保存。',
+    personaBudgetNote: '注入字节预算在「配置」里的 personaMaxBytes 调整（默认 12000）；超出预算的部分按行截断。',
     needTitle: '标题和正文都要填。',
   },
   en: {
@@ -86,6 +94,7 @@ const SECTION_COPY = {
     promoted: 'Promoted',
     tunables: 'Tunables',
     tabMemories: 'Memories',
+    tabPersona: 'Persona',
     tabConfig: 'Configuration',
     tabDisputes: 'Needs review',
     disputesTitle: 'Decisions consolidation will not make on its own',
@@ -101,6 +110,13 @@ const SECTION_COPY = {
     updated: 'updated',
     saved: 'Saved.',
     removed: 'Deleted.',
+    personaIntro: 'This is the "who this user is" profile injected at the start of every conversation (the <persona> block). Saving it by hand still leaves background consolidation free to rewrite it; lock it to make your saves the only writes.',
+    personaLock: 'Lock the profile: background consolidation must not rewrite it',
+    personaLockHint: 'The lock only stops automatic writes; injection is unchanged.',
+    personaPlaceholder: 'Who this person is: how they work, what they prefer, the boundaries they set…',
+    personaSave: 'Save profile',
+    personaSaved: 'Profile saved.',
+    personaBudgetNote: 'The injection byte budget is personaMaxBytes under Configuration (default 12000); text beyond it is cut at a line boundary.',
     needTitle: 'A title and a body are both required.',
   },
 }
@@ -331,6 +347,10 @@ function createMemoriesSection(React, Card) {
     const [tab, setTab] = React.useState('memories')
     const [disputes, setDisputes] = React.useState([])
     const [draft, setDraft] = React.useState({ scope: 'global', kind: 'fact', title: '', body: '', tags: '' })
+    const [personaDraft, setPersonaDraft] = React.useState('')
+    const [personaLocked, setPersonaLocked] = React.useState(false)
+    const [personaLoaded, setPersonaLoaded] = React.useState(false)
+    const [personaBusy, setPersonaBusy] = React.useState(false)
 
     const loadOverview = React.useCallback(async () => {
       if (api === undefined) return
@@ -380,6 +400,25 @@ function createMemoriesSection(React, Card) {
       }
     }, [api])
 
+    const loadPersona = React.useCallback(async () => {
+      if (api === undefined || typeof api.persona !== 'function') return
+      try {
+        const result = await api.persona()
+        setPersonaDraft(result?.text ?? '')
+        setPersonaLocked(result?.locked === true)
+        setPersonaLoaded(true)
+        setError(null)
+      } catch (failure) {
+        setError(errorText(failure))
+      }
+    }, [api])
+
+    // The profile is only read when its tab is opened: it is a document the
+    // user edits, not page furniture.
+    React.useEffect(() => {
+      if (tab === 'persona' && !personaLoaded) void loadPersona()
+    }, [tab, personaLoaded, loadPersona])
+
     React.useEffect(() => { void loadOverview() }, [loadOverview])
     React.useEffect(() => { void loadEntries() }, [loadEntries])
     React.useEffect(() => { void loadDisputes() }, [loadDisputes])
@@ -414,6 +453,28 @@ function createMemoriesSection(React, Card) {
         setError(errorText(failure))
       } finally {
         setBusy(false)
+      }
+    }
+
+    const onSavePersona = async () => {
+      if (api === undefined || typeof api.savePersona !== 'function') {
+        setError(copy.unavailable)
+        return
+      }
+      setPersonaBusy(true)
+      setNotice(null)
+      try {
+        // One object keyed by the wire fields, like every other Remote call.
+        const result = await api.savePersona({ text: personaDraft, locked: personaLocked })
+        setPersonaDraft(result?.text ?? '')
+        setPersonaLocked(result?.locked === true)
+        setPersonaLoaded(true)
+        setNotice(copy.personaSaved)
+        setError(null)
+      } catch (failure) {
+        setError(errorText(failure))
+      } finally {
+        setPersonaBusy(false)
       }
     }
 
@@ -618,6 +679,14 @@ function createMemoriesSection(React, Card) {
         onClick: () => setTab('memories'),
       }, copy.tabMemories),
       h('button', {
+        key: 'persona',
+        type: 'button',
+        role: 'tab',
+        'aria-selected': tab === 'persona',
+        className: `dshm-tab${tab === 'persona' ? ' dshm-tab-active' : ''}${personaLocked ? ' dshm-tab-locked' : ''}`,
+        onClick: () => setTab('persona'),
+      }, personaLocked ? `🔒 ${copy.tabPersona}` : copy.tabPersona),
+      h('button', {
         key: 'config',
         type: 'button',
         role: 'tab',
@@ -658,6 +727,46 @@ function createMemoriesSection(React, Card) {
         intro: false,
         lang: copy.lang,
       }),
+    ])
+
+    const personaPanel = h('div', { key: 'panel-persona', role: 'tabpanel', className: 'dshm-panel' }, [
+      h('p', { key: 'intro', className: 'dshm-note' }, copy.personaIntro),
+      api === undefined || typeof api.savePersona !== 'function'
+        ? h('p', { key: 'unavailable', className: 'dshm-status dshm-error' }, copy.unavailable)
+        : null,
+      h('textarea', {
+        key: 'text',
+        className: 'dshm-area',
+        rows: 14,
+        value: personaDraft,
+        placeholder: copy.personaPlaceholder,
+        disabled: api === undefined || personaBusy,
+        onChange: (event) => setPersonaDraft(event.target.value),
+      }),
+      h('label', { key: 'lock', className: 'dshm-inline' }, [
+        h('input', {
+          key: 'input',
+          className: 'dshm-check',
+          type: 'checkbox',
+          checked: personaLocked,
+          disabled: api === undefined || personaBusy,
+          onChange: (event) => setPersonaLocked(event.target.checked),
+        }),
+        copy.personaLock,
+      ]),
+      h('p', { key: 'lock-hint', className: 'dshm-note' }, copy.personaLockHint),
+      h('p', { key: 'budget', className: 'dshm-note' }, copy.personaBudgetNote),
+      h('div', { key: 'actions', className: 'dshm-actions' }, [
+        h('button', {
+          key: 'save',
+          type: 'button',
+          className: 'dshm-btn dshm-btn-primary',
+          disabled: personaBusy || api === undefined,
+          onClick: onSavePersona,
+        }, copy.personaSave),
+      ]),
+      notice !== null ? h('p', { key: 'notice', className: 'dshm-status dshm-ok' }, notice) : null,
+      error !== null ? h('p', { key: 'error', className: 'dshm-status dshm-error' }, error) : null,
     ])
 
     // Only the decisions a pass refused to make alone. Each row is one reading
@@ -710,7 +819,7 @@ function createMemoriesSection(React, Card) {
     const children = [head]
     if (overview !== null) children.push(h('p', { key: 'store', className: 'dshm-path' }, `${copy.store}: ${overview.storePath}`))
     children.push(tabList)
-    children.push(tab === 'config' ? configPanel : tab === 'disputes' ? disputesPanel : memoriesPanel)
+    children.push(tab === 'config' ? configPanel : tab === 'disputes' ? disputesPanel : tab === 'persona' ? personaPanel : memoriesPanel)
     return h('div', { className: 'dshm-page' }, children)
   }
 }

@@ -507,7 +507,7 @@ export const Config = z.object({
   /** Whether a model decides if a judgement-based notice is worth an interruption. */
   noticeGate: z.boolean().default(true).description('Before raising a notice that has no rule behind it (an undated promise that has been sitting for days), ask a model whether it is worth interrupting for. The default answer is silence: a gate that cannot run, or that fails, suppresses the notice. Rule-based notices (daily digest, backlog warning, a promise whose deadline passed) are never gated.').volatile(),
   /** Byte budget for the persona block injected ahead of the memory summary. */
-  personaMaxBytes: z.number().default(1200).description('Byte budget for the persona block (who the user is, in their own words) injected once per conversation ahead of the memory summary. 0 disables the block. Kept separate from the summary budget because the profile is context for the whole turn, not one of the memories being listed.').volatile(),
+  personaMaxBytes: z.number().default(12000).description('Byte budget for the persona block (who the user is, in their own words) injected once per conversation ahead of the memory summary. 0 disables the block. The profile is edited in Settings → Memories → Persona; locking it there stops the consolidation pass from rewriting it. Kept separate from the summary budget because the profile is context for the whole turn, not one of the memories being listed.').volatile(),
   /** Share of a scope above which a query term stops counting as recall evidence. */
   evidenceMaxDf: z.number().default(DEFAULT_EVIDENCE_MAX_DF).description('A query term that appears in more than this share of one scope does not count towards the recall gate\'s evidence requirement. 0.15 is measured on a real 200-entry store: it catches exactly one term (dsh, 22% of entries) and cuts false admissions by three quarters without changing any of ten labelled probes. 0 disables the discount and restores the pre-2026-10-23 behaviour.').volatile(),
   /** Local-time windows whose tokens are the expensive ones. */
@@ -670,7 +670,7 @@ export const MEMORIES_SETTINGS_DEFAULTS: MemoriesSettings = {
   consolidateTimeoutMs: DEFAULT_CONSOLIDATE_TIMEOUT_MS,
   autoDecide: true,
   autoDecideMinConfidence: 0.7,
-  personaMaxBytes: 1200,
+  personaMaxBytes: 12000,
   noticeGate: true,
   reflectionEnabled: true,
   noticesEnabled: true,
@@ -829,7 +829,7 @@ export function normalizeSettings(input: Partial<MemoriesSettings> | undefined):
     consolidateTimeoutMs: positive(value.consolidateTimeoutMs, DEFAULT_CONSOLIDATE_TIMEOUT_MS),
     autoDecide: value.autoDecide ?? true,
     autoDecideMinConfidence: clampUnit(value.autoDecideMinConfidence, 0.7),
-    personaMaxBytes: positive(value.personaMaxBytes, 1200, 0),
+    personaMaxBytes: positive(value.personaMaxBytes, 12000, 0),
     noticeGate: value.noticeGate ?? true,
     reflectionEnabled: value.reflectionEnabled ?? true,
     noticesEnabled: value.noticesEnabled ?? true,

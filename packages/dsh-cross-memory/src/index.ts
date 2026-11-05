@@ -40,7 +40,7 @@ import { StateStore, importLegacyState, statePath } from './state.js'
 import { browseMemories, EXPAND_SEEDS, hubTerms, matchCredit, prefilterEntries, QUALIFIED_SCORE_FACTOR, relatedHits, searchMemories } from './search.js'
 import type { MatchCredit, ScopeEntries } from './search.js'
 import { readFile } from 'node:fs/promises'
-import { readPersona, renderPersonaBlock, writePersona } from './persona.js'
+import { isPersonaLocked, readPersona, renderPersonaBlock, writePersona } from './persona.js'
 import { StoreSyncService } from './sync-runtime.js'
 import { ackNotice, admitNotice, dueNotices, pruneNotices, readNotices, withNotice, writeNotices } from './notices.js'
 import { systemNotification } from './notify.js'
@@ -2895,10 +2895,16 @@ export class MemoriesRuntime {
       // The profile is a document, not a memory: it is injected as its own block
       // at a known budget, so it is written beside the store rather than into it.
       if (plan.persona !== undefined && plan.persona.trim().length > 0) {
-        await writePersona(this.store.memoriesDir, plan.persona).catch((error: unknown) => {
-          this.log.warn('dsh-cross-memory: could not write the persona profile: %s',
-            error instanceof Error ? error.message : String(error))
-        })
+        // A locked profile is the user's document: the pass may still propose a
+        // rewrite, but it must not land one behind their back.
+        if (await isPersonaLocked(this.store.memoriesDir).catch(() => false)) {
+          this.log.info('dsh-cross-memory: persona is locked; the automatic profile update was skipped')
+        } else {
+          await writePersona(this.store.memoriesDir, plan.persona).catch((error: unknown) => {
+            this.log.warn('dsh-cross-memory: could not write the persona profile: %s',
+              error instanceof Error ? error.message : String(error))
+          })
+        }
       }
       // Skill drafts are staged, not installed: a background pass must not
       // silently grow the model's skill catalog.

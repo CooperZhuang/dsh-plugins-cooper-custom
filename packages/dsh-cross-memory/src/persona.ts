@@ -17,7 +17,7 @@
  *
  * @module dsh-cross-memory/persona
  */
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
 /** Directory holding the profile, inside the memory store. */
@@ -32,6 +32,14 @@ export const PERSONA_MAX_SOURCE_CHARS = 6000
 /** Path of the profile. */
 export function personaPath(memoriesDir: string): string {
   return join(memoriesDir, PERSONA_DIR, 'human.md')
+}
+
+/** Marker file that stops the consolidation pass rewriting the profile. */
+export const PERSONA_LOCK_FILE = 'human.lock'
+
+/** Path of the manual-edit lock marker. */
+export function personaLockPath(memoriesDir: string): string {
+  return join(memoriesDir, PERSONA_DIR, PERSONA_LOCK_FILE)
 }
 
 /**
@@ -116,4 +124,52 @@ export function renderPersonaBlock(
 /** UTF-8 length of one string. */
 function byteLength(text: string): number {
   return Buffer.byteLength(text, 'utf8')
+}
+
+/**
+ * Whether the user locked the profile against automatic rewrites.
+ *
+ * The lock is an opt-in marker beside the profile: a missing or empty file
+ * means unlocked, so upgrading a store never silently changes the behaviour.
+ *
+ * @param memoriesDir - the memory store root.
+ * @returns whether the consolidation pass must leave the profile alone.
+ */
+export async function isPersonaLocked(memoriesDir: string): Promise<boolean> {
+  const marker = await readFile(personaLockPath(memoriesDir), 'utf8').catch(() => undefined)
+  return marker !== undefined && marker.trim().length > 0
+}
+
+/**
+ * Set or clear the manual-edit lock.
+ *
+ * The marker carries a timestamp rather than the word "true": it is read as a
+ * boolean by {@link isPersonaLocked}, and the timestamp is what a person sees
+ * when they open the file to ask when it was locked. The write is atomic for the
+ * same reason the profile is.
+ *
+ * @param memoriesDir - the memory store root.
+ * @param locked - whether automatic rewrites are forbidden.
+ */
+export async function setPersonaLocked(memoriesDir: string, locked: boolean): Promise<void> {
+  const target = personaLockPath(memoriesDir)
+  if (!locked) {
+    await rm(target, { force: true })
+    return
+  }
+  await mkdir(dirname(target), { recursive: true })
+  const temp = `${target}.${process.pid}.${Date.now().toString(36)}.tmp`
+  await writeFile(temp, `${new Date().toISOString()}\n`, 'utf8')
+  await rename(temp, target)
+}
+
+/**
+ * Remove the profile, including the legacy single file, so the next read finds
+ * nothing to inject. Used when the editor saves an empty document.
+ *
+ * @param memoriesDir - the memory store root.
+ */
+export async function clearPersona(memoriesDir: string): Promise<void> {
+  await rm(personaPath(memoriesDir), { force: true })
+  await rm(join(memoriesDir, LEGACY_PERSONA_FILE), { force: true })
 }

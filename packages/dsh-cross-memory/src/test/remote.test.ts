@@ -94,6 +94,7 @@ test('the wire table and the expanded descriptors agree', () => {
   // Every shape the browser renders is covered by a codec factory call.
   assert.ok(seen.has('overview') && seen.has('entries') && seen.has('entry') && seen.has('removed'))
   assert.ok(seen.has('skill') && seen.has('discard') && seen.has('text') && seen.has('number'))
+  assert.ok(seen.has('persona') && seen.has('flag'))
 })
 
 test('the host codecs validate instead of passing values through', () => {
@@ -111,6 +112,19 @@ test('the host codecs validate instead of passing values through', () => {
   assert.throws(() => textCodec?.create().parse(7), /must be a string/u)
   assert.equal(numberCodec?.create().parse(10), 10)
   assert.throws(() => numberCodec?.create().parse('10'), /must be a number/u)
+})
+
+test('the settings page can read, save and lock the persona profile', async (t) => {
+  const { store, dshHome } = await roots(t)
+  const service = createRemoteService({ store, dshHome })
+
+  assert.deepEqual(await service.persona(), { text: '', locked: false }, 'an empty store has no profile')
+  const saved = await service.savePersona('他先确认再改代码。', true)
+  assert.deepEqual(saved, { text: '他先确认再改代码。', locked: true })
+  assert.deepEqual(await service.persona(), saved, 'the saved document and its lock are read back')
+
+  await service.savePersona('', false)
+  assert.deepEqual(await service.persona(), { text: '', locked: false }, 'saving an empty document clears it')
 })
 
 test('the settings page can list and resolve the decisions waiting for a person', async (t) => {

@@ -29,6 +29,7 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { browseMemories, searchMemories, type ScopeEntries } from './search.js'
+import { clearPersona, isPersonaLocked, readPersona, setPersonaLocked, writePersona } from './persona.js'
 import { discardDraft, listDrafts, promote } from './skills.js'
 import type { MemoryStore, ProjectDescriptor } from './storage.js'
 import type { MemoryEntry, MemoryKind, MemoryScope } from './types.js'
@@ -47,6 +48,10 @@ export type WireShape =
   | 'text'
   /** A numeric parameter. */
   | 'number'
+  /** A boolean flag parameter. */
+  | 'flag'
+  /** The persona profile plus whether it is locked against automatic rewrites. */
+  | 'persona'
   /** Store home, per-project counts, staged skill drafts. */
   | 'overview'
   /** A ranked entry page plus the total before paging. */
@@ -138,6 +143,19 @@ export const REMOTE_INVOCATION_DATA: readonly WireInvocation[] = [
     method: 'discardSkill',
     parameters: [{ name: 'name', wire: 'name', shape: 'text' }],
     result: 'discard',
+  },
+  {
+    method: 'persona',
+    parameters: [],
+    result: 'persona',
+  },
+  {
+    method: 'savePersona',
+    parameters: [
+      { name: 'text', wire: 'text', shape: 'text' },
+      { name: 'locked', wire: 'locked', shape: 'flag' },
+    ],
+    result: 'persona',
   },
   {
     method: 'disputes',
@@ -319,9 +337,15 @@ function hostCodec(shape: WireShape): StrictCodec {
         const view = asRecord(value, 'skill')
         return { name: asText(view.name, 'skill.name'), path: asText(view.path, 'skill.path') }
       }
+      case 'flag':
+        return asFlag(value, 'argument')
       case 'discard': {
         const view = asRecord(value, 'discard')
         return { name: asText(view.name, 'discard.name'), removed: asFlag(view.removed, 'discard.removed') }
+      }
+      case 'persona': {
+        const view = asRecord(value, 'persona')
+        return { text: asText(view.text, 'persona.text'), locked: asFlag(view.locked, 'persona.locked') }
       }
       case 'disputes': {
         const view = asRecord(value, 'disputes')
@@ -465,8 +489,18 @@ export interface MemoriesRemote {
   forget(project?: string, scope?: string, id?: string): Promise<{ readonly removed: boolean }>
   promoteSkill(name?: string): Promise<{ readonly name: string; readonly path: string }>
   discardSkill(name?: string): Promise<{ readonly name: string; readonly removed: boolean }>
+  persona(): Promise<PersonaView>
+  savePersona(text?: string, locked?: boolean): Promise<PersonaView>
   disputes(): Promise<{ readonly disputes: readonly DisputeView[] }>
   resolveDispute(id?: string, decision?: string): Promise<string>
+}
+
+/** The persona profile as the settings page edits it. */
+export interface PersonaView {
+  /** Stored markdown, empty when no profile exists yet. */
+  readonly text: string
+  /** Whether automatic consolidation must leave the profile alone. */
+  readonly locked: boolean
 }
 
 /** One consolidation decision, as the settings page renders it. */
@@ -611,6 +645,21 @@ export function createRemoteService(host: RemoteHost): MemoriesRemote & { readon
     async discardSkill(name?: string) {
       const wanted = (name ?? '').trim()
       return { name: wanted, removed: await discardDraft(store.memoriesDir, wanted) }
+    },
+
+    async persona(): Promise<PersonaView> {
+      return {
+        text: (await readPersona(store.memoriesDir)) ?? '',
+        locked: await isPersonaLocked(store.memoriesDir),
+      }
+    },
+
+    async savePersona(text?: string, locked?: boolean): Promise<PersonaView> {
+      const body = (text ?? '').trim()
+      if (body.length > 0) await writePersona(store.memoriesDir, body)
+      else await clearPersona(store.memoriesDir)
+      await setPersonaLocked(store.memoriesDir, locked === true)
+      return { text: body, locked: locked === true }
     },
 
     async disputes() {

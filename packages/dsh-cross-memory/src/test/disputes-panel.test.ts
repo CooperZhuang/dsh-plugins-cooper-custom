@@ -191,6 +191,11 @@ function fakeApi(calls: Record<string, unknown>[], rows: readonly Record<string,
       calls.push(args)
       return Promise.resolve('Applied.')
     },
+    persona: () => Promise.resolve({ text: '他先确认再改代码。', locked: false }),
+    savePersona: (args: Record<string, unknown>) => {
+      calls.push(args)
+      return Promise.resolve({ text: args.text, locked: args.locked })
+    },
   }
 }
 
@@ -364,4 +369,32 @@ test('a retirement strikes the body and renders no replacement', async () => {
   assert.match(textOf(retired), /这条记忆从没被读过/u)
   assert.equal(findClass(panel, 'dshm-ins'), undefined, 'nothing replaces a retirement')
   assert.equal(findClass(panel, 'dshm-del'), undefined)
+})
+
+test('the persona tab loads the profile and saves text plus the lock flag', async () => {
+  const calls: Record<string, unknown>[] = []
+  const module = await loadSection()
+  const { render } = await mountSection(fakeApi(calls), module.SECTION_COPY.zh as Record<string, unknown>)
+
+  const memories = await render()
+  click(findByText(memories, 'button', '画像'))
+  const panel = await render()
+
+  const area = [...walk(panel)].find((element) => element.type === 'textarea')
+  assert.equal(area?.props.value, '他先确认再改代码。', 'the stored profile is in the editor')
+  ;(area?.props.onChange as ((event: { target: { value: string } }) => void))({ target: { value: '新的画像' } })
+  const edited = await render()
+
+  const lock = [...walk(edited)].find((element) => element.type === 'input' && element.props.type === 'checkbox')
+  assert.equal(lock?.props.checked, false, 'the lock starts from the stored flag')
+  ;(lock?.props.onChange as ((event: { target: { checked: boolean } }) => void))({ target: { checked: true } })
+  const locked = await render()
+  assert.equal([...walk(locked)].find((element) => element.type === 'input' && element.props.type === 'checkbox')?.props.checked, true)
+
+  click(findByText(locked, 'button', '保存画像'))
+  await new Promise((resolve) => { setTimeout(resolve, 20) })
+  assert.deepEqual(calls.at(-1), { text: '新的画像', locked: true }, 'one object with both wire fields')
+
+  const after = await render()
+  assert.match(textOf(after), /画像已保存。/u, 'the save is reported')
 })
