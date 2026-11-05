@@ -12,6 +12,7 @@
     "test:session-toolbox": "pnpm --dir packages/dsh-session-toolbox test",
     "test:folder-path": "pnpm --dir packages/dsh-folder-path test",
     "test:open-in-dsh": "pnpm --dir packages/dsh-open-in-dsh test",
-    "test:rtk-slim": "pnpm --dir packages/dsh-rtk-slim test"
+    "test:rtk-slim": "pnpm --dir packages/dsh-rtk-slim test",
+    "verify:profile": "node scripts/verify-profile-links.mjs"
   }
 }

@@ -42,6 +42,8 @@ pnpm --dir "$env:USERPROFILE\.dsh\profiles\desktop" add --ignore-scripts \
 
 **Windows 额外一步**：符号链接指向仓库真实目录，依赖解析也从那里向上找，所以必须先在本仓库根跑一次 `pnpm install`（`autoInstallPeers: false`；`dsh-session-store` 由根 devDependencies 的 `link:` 提供），否则 `dsh-session-store` / `@deepseek-ai/schemastery` 解析不到。
 
+> **新增源文件不会随 `pnpm build` 进 profile**：`file:` 在本机是硬链接副本，构建只写穿已存在的文件。源码里新加的模块（2026-11-05 的 `packages/dsh-memories/lib/raw-recall.js` 就是案例）不会出现在 `~/.dsh/profiles/desktop/node_modules/<包>/lib/` 里，宿主启动时直接 `ERR_MODULE_NOT_FOUND`，而 `pnpm install` 对清单没变的 `file:` 依赖只报 `Already up to date`。改完跑 `pnpm verify:profile` 自查（加 `--fix` 补硬链接，或 `remove` + `add` 重装）；宿主里已判失败的条目改一下 profile 的 `cordis.patch.yml` 触发 hmr 重组就能重新 import，不必重启。
+
 **dsh-memories 是 TS 项目**：`lib/` 是构建产物（gitignore，不入库）。新机器/clone 后要先构建一次：
 
 ```bash
