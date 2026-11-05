@@ -16,7 +16,7 @@ import test from 'node:test'
 import { MEMORIES_SETTINGS_DEFAULTS, Config } from '../config.js'
 
 /** The browser half, resolved from the compiled test's own location. */
-const CARD = new URL('../../client/parts/card.js', import.meta.url)
+const CARD = new URL('../../.client-build/parts/card.js', import.meta.url)
 
 test('the settings card covers exactly the schema, with bilingual copy', async () => {
   const text = await readFile(CARD, 'utf8')

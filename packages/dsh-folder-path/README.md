@@ -128,12 +128,12 @@ dsh plugin --profile <profile> remove dsh-folder-path
 ## 开发
 
 ```sh
-npm run build   # tsc: src/index.ts -> lib/index.js；再 client/index.js -> lib/client.js
+npm run build   # tsc: src/index.ts -> lib/index.js，client/index.ts -> .client-build/index.js；再包成 lib/client.js
 npm test        # 先 build，再跑宿主路由 / 浏览器半契约 / 清单契约测试（node --test，无需 DSH 服务器）
 ```
 
 宿主半边源码在 `src/index.ts`（TypeScript，`lib/index.js` 与 `lib/types/` 是 tsc 产物，随仓库提交）；
-浏览器半边仍是 `client/index.js`，由构建脚本包成 `lib/client.js`。
+浏览器半边是 `client/index.ts`（`.client-build/index.js` 是 tsc 产物），由构建脚本包成 `lib/client.js`。
 
 浏览器侧调试钩子（devtools 控制台）：
 

@@ -24,3 +24,6 @@ scripts/*.patch.yml
 # Hand-labelled retrieval probes: they quote real memory ids and this repository
 # is public. The template (eval/retrieval.example.json) is committed instead.
 eval/*.local.json
+
+# tsc 的浏览器半边中间产物（最终 bundle 在 lib/client.js）
+.client-build/

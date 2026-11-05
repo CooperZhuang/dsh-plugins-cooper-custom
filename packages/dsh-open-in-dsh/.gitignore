@@ -2,3 +2,6 @@ node_modules/
 package-lock.json
 output/
 *.log
+
+# tsc 的浏览器半边中间产物（最终 bundle 在 lib/client.js）
+.client-build/

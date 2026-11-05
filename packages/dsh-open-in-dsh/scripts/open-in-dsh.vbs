@@ -37,7 +37,7 @@ If Not fso.FileExists(script) Then WScript.Quit 1
 
 ' The Desktop shell's own port (dsh-desktop-host starts the profile with
 ' `--port 19387`). Kept in step with $DesktopPort in open-in-dsh.ps1 and with
-' the installer by test/scripts.test.mjs.
+' the installer by test/scripts.test.ts.
 port = "19387"
 If args.Count >= 2 Then
   If IsNumeric(args(1)) Then port = Trim(args(1))

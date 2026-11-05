@@ -58,8 +58,8 @@ const DISPUTES = [{
 }]
 
 /** The browser half, resolved from the compiled test's own location. */
-const SECTION = new URL('../../client/parts/section.js', import.meta.url)
-const REMOTE = new URL('../../client/parts/remote.js', import.meta.url)
+const SECTION = new URL('../../.client-build/parts/section.js', import.meta.url)
+const REMOTE = new URL('../../.client-build/parts/remote.js', import.meta.url)
 
 /** Load the section factory the bundle concatenates. */
 async function loadSection(): Promise<SectionModule> {

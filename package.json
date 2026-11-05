@@ -12,6 +12,6 @@
     "test:folder-path": "pnpm --dir packages/dsh-folder-path test",
     "test:rtk-slim": "pnpm --dir packages/dsh-rtk-slim test",
     "test:open-in-dsh": "pnpm --dir packages/dsh-open-in-dsh test",
-    "verify:profile": "node scripts/verify-profile-links.mjs"
+    "verify:profile": "node scripts/verify-profile-links.mts"
   }
 }

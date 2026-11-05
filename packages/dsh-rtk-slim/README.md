@@ -176,16 +176,16 @@ tail -n 3 "${DSH_HOME:-$HOME/.dsh}/logs/dsh-rtk-slim.log"
 ```sh
 npm install --ignore-scripts
 npm run build                          # tsc -p tsconfig.json：src/ -> lib/（含 lib/types/）
-npm test                               # 先 build，再 node --test test/*.test.mjs
+npm test                               # 先 build，再 node --test test/*.test.ts
 npm run typecheck                      # tsc -p tsconfig.json --noEmit（仅 src/）
 npm run check                          # 两者都跑
-node test/fixtures/make-fixtures.mjs   # 重新生成语料（确定性）
+node test/fixtures/make-fixtures.mts   # 重新生成语料（确定性）
 ```
 
 - 宿主半边源码是 `src/**` 下的 TypeScript，`lib/` 是 `tsc` 产物（随仓库一起提交，装好即可用）；测试仍从
   `../lib/*.js` 导入，所以跑测试前必须先 build（`npm test` 已经代劳）。
 - 端到端用例会调用**真实 rtk**：`rtk` 不在 `PATH` 时自动跳过；装在非标准路径时用
-  `RTK_BIN=/path/to/rtk npm test` 指定。其余用例用 `test/bin/rtk-stub.mjs`，不依赖外部程序。
+  `RTK_BIN=/path/to/rtk npm test` 指定。其余用例用 `test/bin/rtk-stub.mts`，不依赖外部程序。
 - 类型检查只覆盖 `src/**`：那是「用运行时同版本类型校验插件契约」的落点；测试文件是动态桩。
 - 语料必须**忠实于真实输出**：例如 rtk 的 `grep` filter 按文件分组，语料若写成「每个文件 1 行命中」
   就不会被压缩（曾因此误判为代码 bug）。

@@ -202,7 +202,7 @@ Chrome 会把后台页面的定时器节流到每分钟一次，而刚点完右�
 
 ```sh
 npm test                            # 82 个测试（含客户端构建与语法检查）
-node --test test/macos.test.mjs     # macOS 启动器/安装器 17 个测试
+node --test test/macos.test.ts     # macOS 启动器/安装器 17 个测试
 ```
 
 `npm test` 覆盖宿主路由与回放、`%V` 的各种形态、脚本镜像（路由路径/端口/`-Probe` 一致）、

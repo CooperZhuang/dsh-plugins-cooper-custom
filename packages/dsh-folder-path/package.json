@@ -1,6 +1,6 @@
 {
   "name": "dsh-folder-path",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "DSH 插件：粘贴（复制来的）文件夹时不再尝试上传，而是把它的完整路径作为文本插入输入框（Windows / macOS）。Paste a copied folder and get its full path as text instead of a failed upload (Windows and macOS).",
   "private": false,
   "publishConfig": {
@@ -33,10 +33,10 @@
     "docs"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json && node scripts/build-client.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.client.json && node scripts/build-client.mts",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
     "prepare": "npm run build",
-    "test": "tsc -p tsconfig.json && node scripts/build-client.mjs && node --test"
+    "test": "npm run build && node --test test/*.test.ts"
   },
   "engines": {
     "node": ">=24",

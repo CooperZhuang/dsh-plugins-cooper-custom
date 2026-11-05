@@ -1,5 +1,5 @@
 {
-  "_comment": "检索离线评测的探针模板。真正的探针要按你自己的库标注（id 指向真实记忆），所以放在 eval/retrieval.local.json 里、不入库。这个模板用 expect: [] 表示「只看结果、不做断言」，拿它先看清自己库里的排序长什么样：node scripts/eval-retrieval.mjs --probes=eval/retrieval.example.json --top=8 --verbose",
+  "_comment": "检索离线评测的探针模板。真正的探针要按你自己的库标注（id 指向真实记忆），所以放在 eval/retrieval.local.json 里、不入库。这个模板用 expect: [] 表示「只看结果、不做断言」，拿它先看清自己库里的排序长什么样：node scripts/eval-retrieval.mts --probes=eval/retrieval.example.json --top=8 --verbose",
   "probes": [
     {
       "id": "explore-1",

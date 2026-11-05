@@ -3,13 +3,13 @@
 记忆检索的对照台。跑的都是本地真实记忆库，数据不随仓库走。
 
 ```
-node bench/export-corpus.mjs            # 导出 ~/.dsh/memories 的 global 作用域 + 抽样 150 条
-node bench/run-bench.mjs                # 四条对照臂：出厂打分 / BM25 / dense / RRF
-node bench/ablate.mjs                   # 复刻打分函数后逐项拆解：idf、长度、饱和、注入排序
-node bench/analyze.mjs                  # 字段贡献、闸门拒绝原因、按 kind 的召回
-node bench/sensitivity.mjs              # BM25 的 k1×b×字段重复 64 格敏感性
-node bench/e2e/run.mjs                  # 端到端三臂（记忆 / 整段原文 / 闭卷），见 e2e/README.md
-node bench/real/sample.mjs               # 真实会话取样 → 出题 → 三臂评测，见 real/README.md
+node bench/export-corpus.mts            # 导出 ~/.dsh/memories 的 global 作用域 + 抽样 150 条
+node bench/run-bench.mts                # 四条对照臂：出厂打分 / BM25 / dense / RRF
+node bench/ablate.mts                   # 复刻打分函数后逐项拆解：idf、长度、饱和、注入排序
+node bench/analyze.mts                  # 字段贡献、闸门拒绝原因、按 kind 的召回
+node bench/sensitivity.mts              # BM25 的 k1×b×字段重复 64 格敏感性
+node bench/e2e/run.mts                  # 端到端三臂（记忆 / 整段原文 / 闭卷），见 e2e/README.md
+node bench/real/sample.mts               # 真实会话取样 → 出题 → 三臂评测，见 real/README.md
 ```
 
 前五个是**检索排名**基准；`e2e/` 是**答案**基准——记忆有没有让回答变对，闭卷能不能猜中。
@@ -25,7 +25,7 @@ node bench/real/sample.mjs               # 真实会话取样 → 出题 → 三
 - `queries-a.jsonl`：生成器边写边跑检索自查，改到三臂都排第一才落盘，出厂打分在这批上
   是 100% R@1。这批只能当上限，不能用来衡量排序改动。
 
-所以 `run-bench.mjs` 与 `ablate.mjs` 的表都按 all / a / b 拆开打印。聚合数会把一批饱和
+所以 `run-bench.mts` 与 `ablate.mts` 的表都按 all / a / b 拆开打印。聚合数会把一批饱和
 样本和一批干净样本平均成一个谁都不代表的数。
 
 ## 已知边界

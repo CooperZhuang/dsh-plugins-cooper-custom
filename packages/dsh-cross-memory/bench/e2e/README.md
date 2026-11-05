@@ -1,6 +1,6 @@
 # e2e：端到端记忆评测
 
-回答一个问题：**这条记忆到底帮没帮上忙**。`../run-bench.mjs` 只测「目标条目有没有排进前 N」，
+回答一个问题：**这条记忆到底帮没帮上忙**。`../run-bench.mts` 只测「目标条目有没有排进前 N」，
 `run-bench` 的 R@1 高不等于答得对；这里测的是答案。
 
 ## 三条臂
@@ -18,10 +18,10 @@
 
 ## 题库
 
-题库分两个文件：`scenarios.mjs`（首轮 23 条，保持字节不变，已有结果可追溯）和
-`scenarios-extra.mjs`（P1 扩充 30 条，10 个类别各 3 条），合计 53 条。题目是中文，事实都写在
+题库分两个文件：`scenarios.mts`（首轮 23 条，保持字节不变，已有结果可追溯）和
+`scenarios-extra.mts`（P1 扩充 30 条，10 个类别各 3 条），合计 53 条。题目是中文，事实都写在
 对话里，不依赖外部知识。题库是**合成**的，不含真实会话与隐私，所以可以入库；真实记忆库只用于
-`../` 下的检索基准。`run.mjs` 把两批拼成一个 bank 再取哈希，所以扩题不会改掉旧题的哈希含义。
+`../` 下的检索基准。`run.mts` 把两批拼成一个 bank 再取哈希，所以扩题不会改掉旧题的哈希含义。
 
 写题规则（抄自 companion-memory 的作者规则）：
 
@@ -34,20 +34,20 @@
 
 ```bash
 # 本地 ollama（免费、离线、可复现）
-node bench/e2e/run.mjs
+node bench/e2e/run.mts
 
 # 在线 DeepSeek（谷时 00:30–08:30 半价；53 个场景全量抽取约 ¥0.27，只重跑答案约 ¥0.13）
-node bench/e2e/run.mjs --provider deepseek
+node bench/e2e/run.mts --provider deepseek
 
 # 冒烟 / 只跑指定场景
-node bench/e2e/run.mjs --limit 3
-node bench/e2e/run.mjs --provider deepseek --only hot-reload-restart,open-plan-tomorrow
+node bench/e2e/run.mts --limit 3
+node bench/e2e/run.mts --provider deepseek --only hot-reload-restart,open-plan-tomorrow
 
 # 复用上一轮的抽取，只改答案 prompt 或判分器时用（把变量隔离出来）
-node bench/e2e/run.mjs --provider deepseek --reuse-store
+node bench/e2e/run.mts --provider deepseek --reuse-store
 
 # 只重判已存答案（不调用生成）：换判分规则后改分数，原文件不动
-node bench/e2e/run.mjs --provider deepseek --regrade bench/data/e2e-results.json
+node bench/e2e/run.mts --provider deepseek --regrade bench/data/e2e-results.json
 ```
 
 DeepSeek 的 key 从环境变量 `DEEPSEEK_API_KEY` 或 `~/.dsh/.credentials.yaml` 的
@@ -153,5 +153,5 @@ DeepSeek 的 key 从环境变量 `DEEPSEEK_API_KEY` 或 `~/.dsh/.credentials.yam
 
 ```bash
 # 换判分规则后只重判已存答案，原文件不动
-node bench/e2e/run.mjs --provider deepseek --regrade bench/data/e2e-results.json
+node bench/e2e/run.mts --provider deepseek --regrade bench/data/e2e-results.json
 ```

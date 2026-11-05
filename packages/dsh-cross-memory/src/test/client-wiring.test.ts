@@ -1,9 +1,10 @@
 /**
  * Wiring guard for the browser half's two surfaces.
  *
- * `client/index.js` is a plain CJS script that the bundle wrapper turns into a
- * DSH client bundle, so there is no module to import: the parts are
- * concatenated here exactly the way `scripts/build-client.mjs` concatenates
+ * The compiled browser half (`.client-build/index.js`) is a plain CJS
+ * script that the bundle wrapper turns into a DSH client bundle, so there is
+ * no module to import: the parts are
+ * concatenated here exactly the way `scripts/build-client.mts` concatenates
  * them, and the factory is called for real. What this pins is the registration
  * contract, because nothing else in the suite covers it:
  *
@@ -16,7 +17,7 @@
  *     wrong key silently means "no card in the GUI";
  *   - both registrations hand the same shared form (`scope` + `useSnapshot`) to
  *     their component, so the two editors cannot disagree;
- *   - `PACKAGE` is the package name, and `scripts/build-client.mjs` uses that
+ *   - `PACKAGE` is the package name, and `scripts/build-client.mts` uses that
  *     same value as the bundle id.
  *
  * @module dsh-cross-memory/test/client-wiring.test
@@ -39,9 +40,9 @@ interface Plugin {
   readonly apply: (ctx: unknown) => Promise<void>
 }
 
-/** Where the hand-written half lives. */
-const PARTS = new URL('../../client/parts/', import.meta.url)
-const INDEX = new URL('../../client/index.js', import.meta.url)
+/** Where the compiled browser half lives (emitted from `client/*.ts`). */
+const PARTS = new URL('../../.client-build/parts/', import.meta.url)
+const INDEX = new URL('../../.client-build/index.js', import.meta.url)
 const MANIFEST = new URL('../../package.json', import.meta.url)
 
 /**

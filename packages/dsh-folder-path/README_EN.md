@@ -145,8 +145,8 @@ or this package's own `cordis.patch.yml`, which `dsh plugin add` wires in):
 ## Development
 
 ```sh
-npm run build   # client/index.js -> lib/client.js (wraps the browser half as a __ModuleLoader__ bundle)
-npm test        # syntax checks + host route / browser-half contract / manifest contract tests
+npm run build   # client/index.ts -> .client-build/index.js -> lib/client.js (wraps the browser half as a __ModuleLoader__ bundle)
+npm test        # builds both halves, then host route / browser-half contract / manifest contract tests
                 # (node --test, no DSH server needed)
 ```
 

@@ -93,7 +93,7 @@ $ErrorActionPreference = 'Stop'
 # hard-coded port (`dsh-desktop-host` starts the profile with
 # `--no-open --port 19387`); 3080 is the historical `dsh web` port this
 # repository's README was written around. Mirrored in `install-menu.ps1` and
-# asserted against the scripts by `test/scripts.test.mjs`.
+# asserted against the scripts by `test/scripts.test.ts`.
 $DesktopPort = 19387
 $WebPort = 3080
 

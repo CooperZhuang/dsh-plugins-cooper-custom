@@ -107,13 +107,15 @@ import { projectKey, readSessionHeader, hasZstd } from 'dsh-session-ops/store'
 ## Development
 
 ```bash
-npm run build     # tsc -p tsconfig.json: src/ -> lib/ (plus lib/types/)
-npm test          # build, then node --test: both halves plus lib/store
+npm run build     # host tsc (src/ -> lib/, lib/types/), client tsc (client/ -> .client-build/),
+                  # then scripts/build-client.mts emits the browser bundle to lib/client.js
+npm test          # build, then node --test on test/**/*.test.ts (Node >= 24 runs TS natively)
 ```
 
-Host code lives in `src/` as TypeScript; `lib/*.js` and `lib/types/` are the `tsc` output committed
-with the repo (so a checkout/profile install works without a build). `lib/client.js` is the one
-hand-written file: an IIFE for the browser classic-script loader, not compiled by `tsc`.
+All hand-written code is TypeScript now: host code in `src/`, the browser half in `client/`
+(a plain classic-script IIFE for `window.__ModuleLoader__`, so it is emitted as one file rather
+than bundled). `lib/**/*.js` and `lib/types/` are build output committed with the repo (so a
+checkout/profile install works without a build); `test/*.ts` is run directly by Node, never emitted.
 
 ## License
 

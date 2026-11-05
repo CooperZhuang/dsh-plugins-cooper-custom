@@ -33,14 +33,14 @@
 #
 # Without a Desktop app the launcher falls back to the plugin route on a
 # `dsh web` host. The route path below is mirrored in `lib/index.js`; a copy
-# that drifts fails silently, so `test/macos.test.mjs` asserts they still match.
+# that drifts fails silently, so `test/macos.test.ts` asserts they still match.
 #
 # Environment: DSH_OPEN_APP, DSH_OPEN_PORT, DSH_OPEN_LOG (log file),
 # DSH_OPEN_SOCKET (handoff socket), DSH_OPEN_WAIT (cold-start wait seconds),
 # DSH_OPEN_DRY_RUN=1 (same as --print).
 set -u
 
-# Mirrored from lib/index.js by hand; test/macos.test.mjs keeps the copies honest.
+# Mirrored from lib/index.js by hand; test/macos.test.ts keeps the copies honest.
 ROUTE_OPEN='/dsh-open-in-dsh/api/v1/open'
 DEFAULT_WEB_PORT=3080
 SOCKET_PATH_DEFAULT="$HOME/.dsh/run/dsh-open-in-dsh.sock"

@@ -12,12 +12,12 @@
 | `rag` | 那场会话的完整原文（上限 12k 字符；见「采样」） |
 | `closed` | 什么都不给 |
 
-判分用 `../e2e/judge.mjs` 的逐点判分器（必需点 `met` / 禁止点 `violated`，通过位由代码算），
+判分用 `../e2e/judge.mts` 的逐点判分器（必需点 `met` / 禁止点 `violated`，通过位由代码算），
 判分时看不到臂名。跑之前先过 5 个锚点。
 
 ## 采样
 
-`sample.mjs` 读 `<DSH_HOME>/sessions` 的持久会话日志（zstd，可解析 `session.v4.jsonl.zstd`），
+`sample.mts` 读 `<DSH_HOME>/sessions` 的持久会话日志（zstd，可解析 `session.v4.jsonl.zstd`），
 只保留同时满足下列条件的会话：
 
 - 用户/助手散文 10–160 条，总字符 800–24k，至少 2 条用户消息；
@@ -30,11 +30,11 @@
 
 ## 出题与冻结
 
-`author.mjs` 对每场会话出 2 个问题：答案必须在节选里被明确写下，优先耐久事实（决策、命令、
+`author.mts` 对每场会话出 2 个问题：答案必须在节选里被明确写下，优先耐久事实（决策、命令、
 配置、约定、踩坑、偏好），每题给 `required`（1–3 条判分要点）、`forbidden`（0–1 条明确错误
 说法）、`quote`（逐字节选）。`quote` 不是节选子串的问题直接丢弃。
 
-出题后还会跑一遍 **verifier**（`author.mjs --verify`）：让模型只凭节选回答每个问题，答不了
+出题后还会跑一遍 **verifier**（`author.mts --verify`）：让模型只凭节选回答每个问题，答不了
 或只能推断的题删掉——第一轮 38 题里删了 5 题（例如节选只写了现象、问题却问「为什么」）。
 
 题库按会话/问题内容的 SHA-256 冻结在 `bench/data/real-bank.json`（gitignore）；重新出题是
@@ -44,7 +44,7 @@
 
 - 所有中间产物都落在 `bench/data/`（已 gitignore）：`real-candidates.json`（含转录）、
   `real-bank.json`、`real-results.json`。**仓库里只有本文件的聚合数字**，没有转录、问题或回答。
-- 发给 DeepSeek 的内容只有两样：`sample.mjs` 已做凭据擦除的转录，和由它生成的问题。
+- 发给 DeepSeek 的内容只有两样：`sample.mts` 已做凭据擦除的转录，和由它生成的问题。
   本地默认对话路由本来就是 `deepseek-account`（同一会话内容已走 DeepSeek），这里不引入新的
   数据接收方；仍然建议只在谷时跑（00:30–08:30 半价）。
 - 取样会话本身可能含个人信息；v1 只做了凭据擦除，没有做更细的脱敏。
@@ -52,18 +52,18 @@
 ## 运行
 
 ```bash
-node bench/real/sample.mjs                       # 取样 → bench/data/real-candidates.json
-node bench/real/author.mjs --provider deepseek   # 出题 → bench/data/real-bank.json（冻结）
-node bench/real/author.mjs --provider deepseek --verify --force   # 出题后核一遍
-node bench/real/run.mjs --provider deepseek      # 三臂作答 + 盲判
-node bench/real/run.mjs --provider deepseek --limit 5             # 冒烟
+node bench/real/sample.mts                       # 取样 → bench/data/real-candidates.json
+node bench/real/author.mts --provider deepseek   # 出题 → bench/data/real-bank.json（冻结）
+node bench/real/author.mts --provider deepseek --verify --force   # 出题后核一遍
+node bench/real/run.mts --provider deepseek      # 三臂作答 + 盲判
+node bench/real/run.mts --provider deepseek --limit 5             # 冒烟
 
 # 抽取预算实验：重放抽取 → 只测 memory 臂
-node bench/real/reextract.mjs --name more20 --max-memories 20 --max-output-tokens 8000 --provider deepseek
-node bench/real/run.mjs --provider deepseek --reextract more20 --memory-only
+node bench/real/reextract.mts --name more20 --max-memories 20 --max-output-tokens 8000 --provider deepseek
+node bench/real/run.mts --provider deepseek --reextract more20 --memory-only
 
 # 联合召回：memory / raw / memory+raw / rag 四臂（需要本地 ollama 提供嵌入）
-node bench/real/joint.mjs --provider deepseek
+node bench/real/joint.mts --provider deepseek
 ```
 
 费用（首轮实测）：取样 0；出题 20 场约 ¥0.13；核题 38 题约 ¥0.22；作答+判分约见下。
@@ -84,7 +84,7 @@ node bench/real/joint.mjs --provider deepseek
 v2 配对：memory 赢 RAG 0 题、输 10 题、平 23 题；memory 相对闭卷 22:0。
 v2 费用：出题 ¥0.129 + 核题 ¥0.255 + 作答/判分 ¥0.302 + 诊断约 ¥0.02。
 
-### 缺口诊断（`diagnose.mjs --llm`，离线看条目，不重新作答）
+### 缺口诊断（`diagnose.mts --llm`，离线看条目，不重新作答）
 
 对每道 memory 失败的题，让模型先判「那场会话关联的记忆条目里有没有足够信息」，再判「一臂实际
 展示的那块上下文（摘要 + 补注）里有没有」，于是失败被分成三类：
@@ -101,8 +101,8 @@ v2 费用：出题 ¥0.129 + 核题 ¥0.255 + 作答/判分 ¥0.302 + 诊断约 
 
 ### 抽取预算实验（同一批 v2 题目，只改每轮抽取上限）
 
-`reextract.mjs` 用真实 `runExtraction`（同一 prompt、同一 quote 校验）把每场会话按抽取窗口重放
-一遍，只改 `extractMaxMemories`；存储按变体隔离，再用 `run.mjs --reextract <name> --memory-only`
+`reextract.mts` 用真实 `runExtraction`（同一 prompt、同一 quote 校验）把每场会话按抽取窗口重放
+一遍，只改 `extractMaxMemories`；存储按变体隔离，再用 `run.mts --reextract <name> --memory-only`
 只测 memory 臂。这样 v2 题、判分器、上下文渲染都不变，唯一变量是每轮能留下多少条。
 
 | 存储 | 每轮上限 | 条目数 | memory |
@@ -141,8 +141,8 @@ replay 变体之间是同一条件。另外 replay 的条目更多会挤占 4KB 
 ### 复查命令
 
 ```bash
-node bench/real/diagnose.mjs                    # 无模型的窗口/ token 口径
-node bench/real/diagnose.mjs --llm --provider deepseek   # 三类归因（约 ¥0.02）
+node bench/real/diagnose.mts                    # 无模型的窗口/ token 口径
+node bench/real/diagnose.mts --llm --provider deepseek   # 三类归因（约 ¥0.02）
 ```
 ### 回答侧变体（more20 store，同一批题、同一判分）
 
@@ -164,7 +164,7 @@ more20 的失败里 5 道是「注入块里有、回答没覆盖」，所以再�
 前几轮已经证明：memory 失败里展示缺口为 0，瓶颈是抽取丢细节与回答覆盖。于是按 Memory-Tax 的
 结论做一次对照——**把「记忆」和「同一会话的原始片段」一起给模型**，看能不能补回差距。
 
-做法（[joint.mjs](./joint.mjs)）：
+做法（[joint.mts](./joint.mts)）：
 每场会话的转录按消息边界切 ~900 字符的块；问题到来时用 **字符 bigram BM25 + 本地
 qwen3-embedding 余弦 + RRF(k=60)** 在**该会话自己的块**里取 top-3，拼进上下文（原文预算
 2.2KB）。memory 臂用 more20 重放 store + commit 答案 prompt。四条臂同题、同判分器：
@@ -199,7 +199,7 @@ qwen3-embedding 余弦 + RRF(k=60)** 在**该会话自己的块**里取 top-3，
 - 两轮的题不同（不同题库），所以 v1→v2 的分数差**不能**读成「评测变好了」，只能说「在更公平的
   出题规则下，memory 的劣势依然存在」。
 - v2 出题/核题仍不完美：还有题在问精确到秒的时间；核题器有 2 题因回复不是 JSON 被误删。
-- 缺口归因也是模型判的（`diagnose.mjs --llm`），不是人工逐题确认；三类边界（尤其「回答漏要点」
+- 缺口归因也是模型判的（`diagnose.mts --llm`），不是人工逐题确认；三类边界（尤其「回答漏要点」
   和「判分过严」）很难机械区分。
 - 真实会话的题是模型按「节选里有什么」出的，不是按「插件该记什么」出的；已有 2 题问到会话里
   明确说不要记的易变值，这类题对 memory 臂天然不公。

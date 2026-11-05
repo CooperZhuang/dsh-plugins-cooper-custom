@@ -2,16 +2,18 @@
 # (@deepseek-ai/schemastery); never committed.
 node_modules/
 
-# `lib/` is deliberately NOT ignored, and after the TypeScript migration it holds
-# two different things:
-#   - `lib/client.js` — hand-written SOURCE (the browser half; DSH loads it as a
-#     classic script, `tsc` never compiles it). It must stay in the repo.
-#   - the rest of `lib/` — build OUTPUT of `tsc -p tsconfig.json`, regenerated from
-#     `src/` by `npm run build` (and by the `prepare` hook).
-# Repo convention: `lib/` stays tracked (committed) so `file:` installs and the
-# existing `test/*.mjs` paths keep working without running a build first.
+# `lib/` is deliberately NOT ignored — it is build OUTPUT, committed with the repo
+# so `file:` installs (and the tests) work without running a build first:
+#   - `lib/*.js` + `lib/types/` — `tsc -p tsconfig.json` output of the host half in `src/`;
+#   - `.client-build/index.js` — `tsc -p tsconfig.client.json` output of `client/`;
+#   - `lib/client.js` — that browser bundle copied by `scripts/build-client.mts`
+#     (a classic script for DSH's `window.__ModuleLoader__`; not bundled).
+# All hand-written code is TypeScript (`src/`, `client/`, `test/*.ts`, `scripts/*.mts`).
 
 # Local editor and OS noise.
 .DS_Store
 Thumbs.db
 *.log
+
+# tsc 的浏览器半边中间产物（最终 bundle 在 lib/client.js）
+.client-build/

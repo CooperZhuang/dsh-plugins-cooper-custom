@@ -1,6 +1,6 @@
 {
   "name": "dsh-session-ops",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "private": false,
   "publishConfig": {
     "access": "public"
@@ -47,9 +47,9 @@
     "docs"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsc -p tsconfig.json && node --test",
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.client.json && node scripts/build-client.mts",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
+    "test": "npm run build && node --test test/*.test.ts test/store/*.test.ts",
     "prepare": "npm run build"
   },
   "engines": {

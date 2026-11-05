@@ -100,11 +100,15 @@ import { projectKey, readSessionHeader, hasZstd } from 'dsh-session-ops/store'
 ## 开发
 
 ```bash
-npm test          # node --test：两个半边全部用例 + lib/store 用例
+npm run build     # 宿主 tsc（src/ -> lib/、lib/types/）、浏览器 tsc（client/ -> .client-build/），
+                  # 再由 scripts/build-client.mts 产出 lib/client.js
+npm test          # 先 build，再用 node --test 跑 test/**/*.test.ts（Node ≥24 原生执行 TS）
 ```
 
-`lib/` 是手写源码，不走构建；`lib/client.js` 是给浏览器经典脚本加载器用的 IIFE，
-直接用 `node --check` 即可校验。
+手写代码现在全是 TypeScript：宿主在 `src/`，浏览器半边在 `client/`（给
+`window.__ModuleLoader__` 用的经典脚本 IIFE，按单文件发射、不打包）。
+`lib/**/*.js` 与 `lib/types/` 是随仓库入库的构建产物（checkout / profile 安装不先 build 也能用）；
+`test/*.ts` 由 Node 直接执行，不参与发射。
 
 ## License
 

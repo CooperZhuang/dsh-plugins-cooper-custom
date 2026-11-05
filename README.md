@@ -1,6 +1,6 @@
 # DSH 插件集合
 
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（简称 DSH）的自研插件 monorepo。每个插件都是独立发布到 npm 的包，带自己的 `package.json`、`cordis.patch.yml`、`src`/`lib` 与测试；**宿主半边源码是 TypeScript（`src/` → `tsc` → `lib/`），浏览器半边是 classic-script JS**；开发、版本管理和发布集中在同一个仓库。
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（简称 DSH）的自研插件 monorepo。每个插件都是独立发布到 npm 的包，带自己的 `package.json`、`cordis.patch.yml`、`src`/`lib` 与测试；**手写代码全部是 TypeScript**：宿主 `src/`（→ `tsc` → `lib/`）、浏览器 `client/`、测试 `test/*.test.ts`、构建脚本 `scripts/*.mts`；只有 `lib/` 下的运行产物是 JS；开发、版本管理和发布集中在同一个仓库。
 
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](#许可证)
 
@@ -84,7 +84,7 @@ dsh plugin --profile <profile> add <包名>
 git clone https://github.com/CooperZhuang/dsh-plugins-cooper-custom.git
 cd dsh-plugins-cooper-custom
 pnpm install
-pnpm run build   # 编译全部 TypeScript 宿主（dsh-cross-memory 的 lib/ 不入库，其余包的产物随仓库提交）
+pnpm run build   # 编译全部 TypeScript（宿主 src/ + 浏览器 client/；dsh-cross-memory 的 lib/ 不入库，其余包产物随仓库提交）
 
 pnpm --dir ~/.dsh/profiles/desktop add --ignore-scripts \
   "file:$PWD/packages/dsh-cross-memory"
@@ -97,12 +97,12 @@ pnpm --dir ~/.dsh/profiles/desktop add --ignore-scripts \
 ```bash
 pnpm run test                 # 全部包的测试
 pnpm run test:cross-memory    # 单包（其他包同名脚本）
-pnpm run build                # 编译全部 TypeScript 宿主源码（src/ → lib/）
+pnpm run build                # 编译全部 TypeScript（宿主 src/ + 浏览器 client/）
 pnpm run verify:profile       # 校验 profile 里的硬链接安装与源码一致
 ```
 
-- 改宿主半边（`src/*.ts`，重新 `pnpm run build`）后要重启 DSH 宿主；只改浏览器半边（`client/` / `lib/client.js`）刷新页面即可。
-- 测试均基于 Node 内置 `node --test`，不启动真实宿主；`dsh-cross-memory` 另有 `pnpm --dir packages/dsh-cross-memory smoke` 做激活冒烟。
+- 改宿主半边（`src/*.ts`，重新 `pnpm run build`）后要重启 DSH 宿主；只改浏览器半边（`client/*.ts`，重新 build）刷新页面即可。
+- 测试均基于 Node 内置 `node --test`（Node ≥24 直接执行 `test/*.test.ts`，类型剥离），不启动真实宿主；`dsh-cross-memory` 另有 `pnpm --dir packages/dsh-cross-memory smoke` 做激活冒烟。
 - CI（GitHub Actions）在 ubuntu/macos × Node 24 上跑全量测试，并对每个包做 `npm pack --dry-run`；发版工作流见 `.github/workflows/release.yml`。
 
 ## 发布流程
@@ -126,13 +126,13 @@ pnpm run verify:profile       # 校验 profile 里的硬链接安装与源码一
 
 ```
 packages/
-  dsh-cross-memory/     跨会话记忆（TS；src/ -> lib/，lib 不入库）
-  dsh-session-ops/      会话运维（TS；src/ -> lib/，含 lib/store 共享库）
-  dsh-rtk-slim/         工具输出瘦身（TS；src/ -> lib/）
-  dsh-folder-path/      文件夹路径粘贴（TS；src/ -> lib/，浏览器半边 client/）
-  dsh-open-in-dsh/      系统右键/服务项集成（TS；src/ -> lib/，浏览器半边 client/）
+  dsh-cross-memory/     跨会话记忆（全 TS；src/ + client/ -> lib/，lib 不入库）
+  dsh-session-ops/      会话运维（全 TS；src/ + client/ -> lib/，含 lib/store 共享库）
+  dsh-rtk-slim/         工具输出瘦身（全 TS；src/ -> lib/）
+  dsh-folder-path/      文件夹路径粘贴（全 TS；src/ + client/ -> lib/）
+  dsh-open-in-dsh/      系统右键/服务项集成（全 TS；src/ + client/ -> lib/）
 scripts/
-  verify-profile-links.mjs   profile 硬链接一致性校验
+  verify-profile-links.mts   profile 硬链接一致性校验
 .github/workflows/     CI 与发版
 ```
 

@@ -252,7 +252,7 @@ export const name = 'open-in-dsh'
 
 /**
  * macOS 交接套接字。**手抄**进 `scripts/macos/open-in-dsh`（`SOCKET_PATH_DEFAULT`），
- * `test/macos.test.mjs` 保证两份一致；`DSH_OPEN_SOCKET`（脚本）与 config `socketPath`
+ * `test/macos.test.ts` 保证两份一致；`DSH_OPEN_SOCKET`（脚本）与 config `socketPath`
  * （宿主）都能覆盖。
  *
  * 放 `~/.dsh/run/` 而不是 `$TMPDIR`：Quick Action 由 Finder 拉起，它的 TMPDIR 与终端
@@ -317,7 +317,7 @@ export interface OpenInDshConfig {
 /** The endpoint the Explorer verb's launcher calls. Mirrored in `scripts/`. */
 export const ROUTE_OPEN = '/dsh-open-in-dsh/api/v1/open'
 
-/** The endpoint the browser half follows. Hand-mirrored in `client/index.js`. */
+/** The endpoint the browser half follows. Hand-mirrored in `client/index.ts`. */
 export const ROUTE_EVENTS = '/dsh-open-in-dsh/api/v1/events'
 
 /**
