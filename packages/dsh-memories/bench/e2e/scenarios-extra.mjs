@@ -225,8 +225,12 @@ export const SCENARIOS_EXTRA = [
       { role: 'user', text: '这个服务只连 RabbitMQ，别的消息中间件都不接。' },
       { role: 'assistant', text: '只连 RabbitMQ。' },
     ],
-    question: '这个服务连的 RabbitMQ vhost 和主消费队列分别叫什么？',
-    required: ['vhost 用 /bq-prod', '主消费队列叫 order.batch.v3'],
+    // Bank v2 fix: the first version asked "这个服务" about the vhost AND the
+    // consumer queue, but the queue belongs to 对账单, not 蓝莓队列. The memory
+    // arm correctly answered "该服务的主消费队列资料没给" and was graded wrong;
+    // the question is split by subject instead of merging two services.
+    question: '蓝莓队列连的 RabbitMQ vhost 是什么？对账单的主消费队列和重试队列分别叫什么？',
+    required: ['蓝莓队列的 vhost 用 /bq-prod', '对账单主消费队列是 order.batch.v3', '重试队列是 order.batch.v3.retry'],
     forbidden: ['vhost 用默认的 /'],
   },
   {

@@ -207,24 +207,42 @@ async function answer(question, context) {
   ], { numPredict: 200 })
 }
 
-/** Grade one answer blind: no arm label is sent, only the points to check. */
+/** Read a per-point flag the judge returned, by its index. */
+function pointFlag(list, index, key) {
+  const item = Array.isArray(list) ? list.find((entry) => entry !== null && typeof entry === 'object' && Number(entry.index) === index) : undefined
+  return item?.[key] === true
+}
+
+/**
+ * Grade one answer blind, one point at a time.
+ *
+ * A whole-answer pass/fail let the judge mix two points together: round 5 failed
+ * a correct answer because the forbidden point and the answer both mentioned
+ * "改限流后的数字" while the answer actually said the opposite. Asking for each
+ * required point's `met` and each forbidden point's `violated` separately makes
+ * the judgment structural, and the pass bit is then computed by code rather than
+ * trusted from prose.
+ */
 async function judge(scenario, answerText) {
   const reply = await chat([
     { role: 'system', content: '你是判分员，只返回 JSON。' },
     { role: 'user', content: JSON.stringify({
       问题: scenario.question,
-      必需点: scenario.required,
-      禁止点: scenario.forbidden,
       回答: answerText,
-      要求: '判通过的两条规则。一、必需点：回答必须表达每一条（意思对即可，不要求原词）。二、禁止点：只有回答把禁止点描述的做法/说法当作正确或当前事实来支持时，才算“表达禁止点”。回答明确反对、劝阻、否定它，或说它不成立，都不算违反；判断时只看回答的主张，不要因为出现相同词语就判违反。例如禁止点「可以直接 force-push」，回答「不要直接 force-push，先问我」不算违反；禁止点「双击结果可以当准」，回答「不要相信双击结果」不算违反。禁止点在回答里作为例外、条件或对照被提起（例如回答「CI 里仍可用 3000」并不违反「本地必须用 3000」）也不算违反。回答「不知道」不算通过。只返回 {"pass":true|false,"reason":"一句话"}。',
+      必需点: scenario.required.map((point, index) => ({ index, point })),
+      禁止点: scenario.forbidden.map((point, index) => ({ index, point })),
+      要求: '逐条判断，不要给整体印象分。必需点：回答是否表达了这个意思（意思对即可，不要求原词）。禁止点：回答是否在主张这条禁止的说法/做法成立？只有回答明确支持它才算违反；回答反对、劝阻、否定、说它不成立，或把它当例外/条件/对照提起，都不算违反；判断时只看回答的主张，不要因为出现相同词语就判违反。回答「不知道」时所有必需点 met=false。只返回 {"required":[{"index":0,"met":true|false}],"forbidden":[{"index":0,"violated":true|false}],"reason":"一句话"}，逐条覆盖每一个 index。',
     }) },
-  ], { json: true, numPredict: 200 })
+  ], { json: true, numPredict: 300 })
   try {
     const value = JSON.parse(reply)
-    return { pass: value.pass === true, reason: String(value.reason ?? '') }
+    const required = scenario.required.map((point, index) => ({ point, met: pointFlag(value.required, index, 'met') }))
+    const forbidden = scenario.forbidden.map((point, index) => ({ point, violated: pointFlag(value.forbidden, index, 'violated') }))
+    const pass = required.every((item) => item.met) && forbidden.every((item) => !item.violated)
+    return { pass, checks: { required, forbidden }, reason: String(value.reason ?? '') }
   } catch {
     // A judge that cannot answer is not a pass: report it as a failure with why.
-    return { pass: false, reason: `judge reply was not JSON: ${reply.slice(0, 120)}` }
+    return { pass: false, checks: { required: [], forbidden: [] }, reason: `judge reply was not JSON: ${reply.slice(0, 120)}` }
   }
 }
 
@@ -291,10 +309,10 @@ async function regrade(file) {
     if (scenario === undefined) throw new Error(`scenario ${row.id} is not in the current bank`)
     for (const arm of ['memory', 'rag', 'closed']) {
       const verdict = await judge(scenario, row[arm].answer)
-      row[arm] = { ...row[arm], pass: verdict.pass, reason: verdict.reason }
+      row[arm] = { ...row[arm], pass: verdict.pass, reason: verdict.reason, checks: verdict.checks }
     }
   }
-  report.judge = { version: 'v4-negation-prohibition', anchor }
+  report.judge = { version: 'v5-per-point', anchor }
   report.regradedFrom = file
   for (const arm of ['memory', 'rag', 'closed']) {
     report.arms[arm] = percentage(report.rows.filter((row) => row[arm].pass).length, report.rows.length)
@@ -410,7 +428,7 @@ async function main() {
     for (const [arm, context] of Object.entries(arms)) {
       const reply = await answer(scenario.question, context)
       const verdict = await judge(scenario, reply)
-      row[arm] = { pass: verdict.pass, answer: reply.trim(), reason: verdict.reason }
+      row[arm] = { pass: verdict.pass, answer: reply.trim(), reason: verdict.reason, checks: verdict.checks }
     }
     rows.push(row)
     console.log(`  ${index + 1}/${scenarios.length} ${scenario.id}: memory=${row.memory.pass ? 'P' : 'F'} rag=${row.rag.pass ? 'P' : 'F'} closed=${row.closed.pass ? 'P' : 'F'}`)
@@ -426,7 +444,7 @@ async function main() {
     usage: { ...usage, estimatedCny: Number(cost.toFixed(3)) },
     bankHash: hash,
     scenarios: scenarios.length,
-    judge: { version: 'v4-negation-prohibition', anchor },
+    judge: { version: 'v5-per-point', anchor },
     store: 'per-scenario',
     reusedStore: reuseStore,
     extraction,
