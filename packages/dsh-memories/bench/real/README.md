@@ -61,6 +61,9 @@ node bench/real/run.mjs --provider deepseek --limit 5             # 冒烟
 # 抽取预算实验：重放抽取 → 只测 memory 臂
 node bench/real/reextract.mjs --name more20 --max-memories 20 --max-output-tokens 8000 --provider deepseek
 node bench/real/run.mjs --provider deepseek --reextract more20 --memory-only
+
+# 联合召回：memory / raw / memory+raw / rag 四臂（需要本地 ollama 提供嵌入）
+node bench/real/joint.mjs --provider deepseek
 ```
 
 费用（首轮实测）：取样 0；出题 20 场约 ¥0.13；核题 38 题约 ¥0.22；作答+判分约见下。
@@ -155,6 +158,33 @@ more20 的失败里 5 道是「注入块里有、回答没覆盖」，所以再�
 答案侧的克制确实值 +2 题；加上抽取预算，memory 从线上 22/33 提到 26/33（78.8%），离 RAG 的
 32/33 还差 6 题。剩下的 7 道失败里仍有 3 道是条目里就没有那条事实，另外 4 道里至少一道是题目
 本身要求了原文没有的点（`f5de8814-2`）——**存储和回答两侧都还有空间，但都不是「召回没召到」**。
+
+## 联合召回实验（记忆 + 原始会话片段）
+
+前几轮已经证明：memory 失败里展示缺口为 0，瓶颈是抽取丢细节与回答覆盖。于是按 Memory-Tax 的
+结论做一次对照——**把「记忆」和「同一会话的原始片段」一起给模型**，看能不能补回差距。
+
+做法（[joint.mjs](/Users/example/Documents/Code/Dsh/dsh-plugins-cooper-custom/packages/dsh-memories/bench/real/joint.mjs)）：
+每场会话的转录按消息边界切 ~900 字符的块；问题到来时用 **字符 bigram BM25 + 本地
+qwen3-embedding 余弦 + RRF(k=60)** 在**该会话自己的块**里取 top-3，拼进上下文（原文预算
+2.2KB）。memory 臂用 more20 重放 store + commit 答案 prompt。四条臂同题、同判分器：
+
+| 臂 | 通过 | 上下文量级 |
+| --- | --- | --- |
+| memory | 26/33（78.8%） | ~4KB 记忆摘要+补注 |
+| raw（top-3 检索片段） | 27/33（81.8%） | ~2.2KB |
+| **memory+raw** | **32/33（97.0%）** | ~6KB |
+| rag（整段原文 ≤12k） | 33/33（100%） | 12k |
+
+配对：memory+raw 对 memory **赢 6 / 输 0**；对 rag **赢 0 / 输 1**。费用 269 次调用 ≈ **¥0.93**。
+
+两点值得记住：
+
+1. **单靠 raw 不够**（27/33）：top-3 片段检索会漏掉没进块或排名靠后的细节；单靠 memory 也不够
+   （26/33）：抽取时丢的细节补不回来。两者拼起来才到 32/33——和 Memory-Tax 的「联合检索原文」
+   结论一致。
+2. 这个组合只用 ~6KB 上下文就达到整段 12KB 的 97%，说明**插件该抄的不是更花哨的记忆结构，而是
+   在召回时把原始会话片段当成第二路候选**（companion-memory 的 turn_recall 是同一件事）。
 
 ## 限定
 
