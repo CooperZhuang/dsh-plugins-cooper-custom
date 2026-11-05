@@ -62,6 +62,23 @@ bundle's own page between its description and its rows. It carries all seven vol
 (4 delete, 3 move). The `plugins.row.config` registration (key
 `dsh-session-toolbox#session-toolbox`) was removed with it, so the same form exists once.
 
+### Session context menu (kernel 0.2.2+)
+
+`dsh.client.inject` declares `@deepseek-ai/dsh-client-ui-context-menu`. Each half registers
+one `target: 'session'` contribution, so a session row's right-click / Shift+F10 menu gets:
+
+- **Move session to workspace…** — resolve only decides whether a move is possible (running,
+  no cwd, Host config refusal) and writes the reason into the label; `run` re-reads Host state
+  and then opens the existing "Session move" pane with that session preselected;
+- **Delete session…** — the same flow as the header trash icon (dry run → two confirmations →
+  delete), re-probed inside `run`; the disabled reason sits in the label and it renders in the
+  same footer group as the built-in Archive action.
+
+Icons are registered in the keyed `contextMenu.icon` slot (keys
+`session-toolbox.move-session` / `session-toolbox.delete-session`). `contextMenus` is an
+**optional** injection: without the service (shell 0.2.1 and older) only these two entries are
+missing.
+
 ## Safety defaults (unchanged)
 
 `headerDeleteButton=true`, `allowWorkspaceSessions=false`, `allowLiveSessions=false`,

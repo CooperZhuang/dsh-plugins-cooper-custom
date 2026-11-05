@@ -16,6 +16,11 @@ import assert from 'node:assert/strict'
 let fetched = []
 /** 当前这轮 `config` 接口的应答（垃圾桶用例用）。 */
 let configReply = { headerDeleteButton: true }
+/**
+ * 按方法名定制的应答（右键菜单用例用）：key 是 URL 末段的方法名（`delete` / `list`…），
+ * 没配的方法回落到 `configReply`。
+ */
+let apiReplies = {}
 
 // bundle 是写给浏览器外壳的：挂载时它 `setInterval(…, 120_000)` 起角标轮询，并发
 // `fetch('/session-admin/api/count')` 这类**相对 URL**。在 Node 里这两件事都必须换掉：
@@ -24,8 +29,11 @@ let configReply = { headerDeleteButton: true }
 globalThis.setInterval = () => 0
 globalThis.clearInterval = () => {}
 globalThis.fetch = async (url) => {
-  fetched.push(String(url))
-  return { status: 200, json: async () => ({ ok: true, value: configReply }) }
+  const target = String(url)
+  fetched.push(target)
+  const method = target.replace(/\/+$/, '').split('/').pop()
+  const value = Object.hasOwn(apiReplies, method) ? apiReplies[method] : configReply
+  return { status: 200, json: async () => ({ ok: true, value }) }
 }
 
 /**
@@ -74,7 +82,19 @@ function loadBundle() {
 
 /** 记录注册动作的假客户端 ctx（与源仓库同形，另存下槽位组件）。 */
 function fakeClientCtx({ betterSidebar } = {}) {
-  const state = { registered: [], injected: [], effects: [], configFormIds: [], mutations: [] }
+  const state = {
+    registered: [],
+    injected: [],
+    effects: [],
+    configFormIds: [],
+    mutations: [],
+    /** 右键菜单贡献（`ctx.contextMenus.register` 的入参）。 */
+    menus: [],
+    /** `ctx.contextMenus.notify` 发出的提示。 */
+    notifications: [],
+    /** `sidebarRight.openTab` 收到的 kind。 */
+    openTabs: [],
+  }
   const tabs = {
     register: (definition) => (state.registered.push({ surface: 'sidebarRightTabs', definition }), () => {}),
   }
@@ -106,11 +126,22 @@ function fakeClientCtx({ betterSidebar } = {}) {
       return configForm
     },
   }
+  // 右键菜单服务：只实现本插件用到的 register / notify（打开弹窗的渲染不归这里管）。
+  const menus = {
+    register(contribution) {
+      state.menus.push(contribution)
+      return () => {}
+    },
+    notify(text, success) {
+      state.notifications.push({ text, success })
+    },
+  }
   const injectedStub = {
     get(name) {
       if (name === 'sidebarRightTabs') return tabs
-      if (name === 'sidebarRight') return { openTab: () => {} }
+      if (name === 'sidebarRight') return { openTab: (kind) => state.openTabs.push(kind) }
       if (name === 'betterSidebar') return betterSidebar
+      if (name === 'contextMenus') return menus
       return undefined
     },
   }
@@ -294,3 +325,160 @@ test('合并后的配置卡片：只注册一张（插件页 plugins.bundle.conf
   const options = tree.filter((node) => node.type === 'option').map((node) => node.props.value)
   assert.deepEqual(options, ['off', 'copy', 'move'])
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 统一右键菜单（DSH 0.2.2 起）：target = 'session' 的两项贡献
+//
+// 只验证「注册了什么、resolve 给出什么」：菜单弹窗的渲染由 context-menu 包负责，
+// 这里用假的 `contextMenus` 服务收注册项，再直接调 resolve。
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** 右键捕获的会话（原生 ContextMenuTargetMap.session 的形状）。 */
+const sessionTarget = { sessionId: 'session-abc12345', displayTitle: '示例会话' }
+
+/** 一个空闲、可搬的会话行（`/session-move/api/list` 的形状）。 */
+const moveListReply = (overrides = {}) => ({
+  root: '/tmp/dsh',
+  zstd: 'ok',
+  counts: { stored: 1, resident: 0, workspaces: 0 },
+  workspaces: [],
+  sessions: [
+    {
+      id: sessionTarget.sessionId,
+      cwd: '/Users/example/Documents/Code/Demo',
+      workspaceId: null,
+      workspaceTitle: null,
+      resident: false,
+      running: null,
+      movable: true,
+      createdAt: 1,
+      ...overrides,
+    },
+  ],
+})
+
+/** 预演「可删」的应答（`/session-admin/api/delete` 的 dryRun 形状）。 */
+const deleteProbeReply = (overrides = {}) => ({
+  dryRun: true,
+  removed: 1,
+  reclaimed: 0,
+  pruned: [],
+  results: [{ id: sessionTarget.sessionId, status: 'would-remove', bytes: 0 }],
+  ...overrides,
+})
+
+/** 把两个贡献的 resolve 结果合起来：这就是菜单里会出现的动作。 */
+async function resolveSessionMenu(menus) {
+  const signal = new AbortController().signal
+  const actions = []
+  for (const contribution of menus) actions.push(...(await contribution.resolve(sessionTarget, signal)))
+  return actions
+}
+
+test('右键菜单：两半各注册一个 target=session 的贡献，resolve 合起来两项（移动 / 删除）', async () => {
+  apiReplies = { delete: deleteProbeReply(), list: moveListReply() }
+  configReply = { headerDeleteButton: false }
+  const { state } = await mount()
+
+  // register 被调了两次，都挂在 session 目标上（同一 target 家族里 id 唯一）。
+  assert.equal(state.menus.length, 2, '两半各注册一个会话菜单贡献')
+  assert.deepEqual(state.menus.map((entry) => entry.target), ['session', 'session'])
+  assert.deepEqual(state.menus.map((entry) => entry.id).sort(), [
+    'session-toolbox.delete-session',
+    'session-toolbox.move-session',
+  ])
+
+  const actions = await resolveSessionMenu(state.menus)
+  assert.deepEqual(actions.map((action) => action.id).sort(), ['delete-session', 'move-session'], '菜单里是两项')
+  // 可删可搬时两项都可用；删除那项是 danger + footer（与原生「归档」同区）。
+  assert.ok(actions.every((action) => action.disabled !== true), '可删可搬时不该有 disabled')
+  const remove = actions.find((action) => action.id === 'delete-session')
+  assert.equal(remove.danger, true)
+  assert.equal(remove.afterContent, true)
+  // 图标走 contextMenu.icon 的 keyed slot，两个 key 都注册了。
+  const iconKeys = state.registered
+    .filter((entry) => entry.surface === 'contextMenu.icon')
+    .map((entry) => entry.options.key)
+    .sort()
+  assert.deepEqual(iconKeys, ['session-toolbox.delete-session', 'session-toolbox.move-session'])
+})
+
+test('菜单打开时给出 disabled 理由：运行中的会话既不能搬也不能删', async () => {
+  apiReplies = {
+    delete: {
+      dryRun: true,
+      removed: 0,
+      reclaimed: 0,
+      pruned: [],
+      results: [{ id: sessionTarget.sessionId, status: 'skipped', reason: 'running-session' }],
+    },
+    list: moveListReply({ running: 'running', movable: false }),
+  }
+  configReply = { headerDeleteButton: false }
+  const { state } = await mount()
+
+  const actions = await resolveSessionMenu(state.menus)
+  assert.equal(actions.length, 2, '被禁用的项仍出现在菜单里（带理由），不是默默消失')
+  for (const action of actions) {
+    assert.equal(action.disabled, true, `${action.id} 应当禁用`)
+    assert.equal(action.run, undefined, '禁用项不该带可执行回调')
+  }
+  const move = actions.find((action) => action.id === 'move-session')
+  const remove = actions.find((action) => action.id === 'delete-session')
+  assert.match(move.label, /运行中/)
+  assert.match(remove.label, /运行中/)
+})
+
+test('删除动作的 run 重新预演：打开菜单时能删、点下去时已跑起来，就不再删', async () => {
+  apiReplies = { delete: deleteProbeReply(), list: moveListReply() }
+  configReply = { headerDeleteButton: false }
+  const { state } = await mount()
+  const remove = (await resolveSessionMenu(state.menus)).find((action) => action.id === 'delete-session')
+  assert.equal(typeof remove.run, 'function')
+
+  // 菜单开着的时候会话跑起来了：run 里的预演必须把它拦下来（不弹确认框、不发真删除）。
+  apiReplies = {
+    delete: {
+      dryRun: true,
+      removed: 0,
+      reclaimed: 0,
+      pruned: [],
+      results: [{ id: sessionTarget.sessionId, status: 'skipped', reason: 'running-session' }],
+    },
+  }
+  fetched = []
+  await remove.run()
+  assert.equal(state.notifications.length, 1)
+  assert.equal(state.notifications[0].success, false)
+  assert.match(state.notifications[0].text, /运行中/)
+  assert.deepEqual(fetched, ['/session-admin/api/delete'], '只发了一次预演就停手')
+})
+
+test('移动动作的 run 重新读状态后打开既有搬迁面板（不重写搬迁逻辑）', async () => {
+  apiReplies = { delete: deleteProbeReply(), list: moveListReply() }
+  configReply = { headerDeleteButton: false }
+  const { state } = await mount()
+  const move = (await resolveSessionMenu(state.menus)).find((action) => action.id === 'move-session')
+  assert.equal(move.disabled, undefined)
+  assert.equal(state.openTabs.length, 0)
+
+  fetched = []
+  await move.run()
+  assert.deepEqual(fetched, ['/session-move/api/list'], 'run 里重新读一次状态')
+  assert.deepEqual(state.openTabs, ['dsh-session-move:panel'], '打开的是既有搬迁页签')
+  assert.equal(state.notifications.length, 0)
+})
+
+test('移动动作的 run 也重校验：菜单打开后会话跑起来了就只提示、不打开面板', async () => {
+  apiReplies = { delete: deleteProbeReply(), list: moveListReply() }
+  configReply = { headerDeleteButton: false }
+  const { state } = await mount()
+  const move = (await resolveSessionMenu(state.menus)).find((action) => action.id === 'move-session')
+
+  apiReplies = { list: moveListReply({ running: 'running', movable: false }) }
+  await move.run()
+  assert.equal(state.openTabs.length, 0, '运行中的会话不打开面板')
+  assert.equal(state.notifications.length, 1)
+  assert.match(state.notifications[0].text, /运行中/)
+})
+

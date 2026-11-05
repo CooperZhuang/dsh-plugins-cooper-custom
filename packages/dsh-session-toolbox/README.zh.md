@@ -58,6 +58,20 @@ key = 包名 `dsh-session-toolbox`，渲染在本组合包页面的「描述与�
 旋钮全在这一张卡上（删除 4 + 搬迁 3）。原来那处 `plugins.row.config`
 （key `dsh-session-toolbox#session-toolbox`）随之摘掉——同一份表单只留一处。
 
+### 会话右键菜单（内核 0.2.2 起）
+
+`dsh.client.inject` 里声明了 `@deepseek-ai/dsh-client-ui-context-menu`；两半各注册一个
+`target: 'session'` 的贡献，合起来是会话行右键 / Shift+F10 菜单里的两项：
+
+- 「移动会话到工作区…」：菜单里只判断能不能搬（运行中 / 没有 cwd / Host 配置拒绝）并把
+  理由写进标题；点下去时重新读一次 Host 状态，再打开既有「会话归位」面板并选中这条会话；
+- 「删除会话…」：与标题栏垃圾桶共用同一条流程（预演 → 二次确认 → 删除），`run` 里会再
+  预演一次；禁用理由同样写在标题里，位置与原生「归档」同区。
+
+图标挂在 `contextMenu.icon` 的 keyed slot（key 分别是 `session-toolbox.move-session` /
+`session-toolbox.delete-session`）。`contextMenus` 是**可选**注入：没有这个服务（0.2.1
+及更早的外壳）时只少这两项，其它入口照旧。
+
 ## 安全默认（一字未变）
 
 `headerDeleteButton=true`、`allowWorkspaceSessions=false`、`allowLiveSessions=false`、
