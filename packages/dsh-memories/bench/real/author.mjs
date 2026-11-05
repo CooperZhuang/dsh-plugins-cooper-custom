@@ -50,6 +50,8 @@ const AUTHOR_RULES = [
   '3. 问题要具体到能用短答案回答（名字/数字/命令/路径/一句话），不要问开放式的「怎么优化」。',
   '4. 每个问题给 required（1-3 条判分要点，语义判分）、forbidden（0-1 条明确错误说法，可为空数组）、quote（从节选逐字复制的一段证据，至少 8 个字符，不能改写或拼接）。',
   '5. 两个问题不要问同一个事实。',
+  '6. 只问耐久、不随时间变化的事实：决策及理由、命令、配置值、目录/路径约定、环境事实、踩过的坑、主人的偏好或边界。',
+  '7. 不要问具体构建号、commit、余额、行数、覆盖率、人数、会随部署变化的版本号；不要问「为什么」除非节选里明确写出了原因。如果节选自己说「这个会变、不要记」，绝不能出这道题。',
   '输出：{"questions":[{"question":"...","required":["..."],"forbidden":[],"quote":"..."}]}',
 ].join('\n')
 
@@ -78,12 +80,12 @@ async function verifyQuestion(chat, session, question) {
     { role: 'user', content: JSON.stringify({
       问题: question.question,
       节选: session.transcript,
-      要求: '只依据节选回答这个问题。若节选能直接、明确地回答它，返回 {"answerable":true,"answer":"一句话答案","evidence":"支持答案的原文片段（逐字）"}；若需要推断、缺信息、只能猜、或者节选只描述了现象没有原因，返回 {"answerable":false,"why":"为什么不能直接回答"}。不要用节选以外的知识。',
+      要求: '只依据节选回答这个问题，并判断题目是否耐久。若节选能直接、明确地回答它，answerable=true 并给出 answer 与逐字 evidence；若需要推断、缺信息、只能猜、或者节选只描述了现象没有原因，answerable=false。同时判断 stable：答案会不会随时间或部署变化（构建号、余额、行数、覆盖率、临时 commit 等都算不稳定），不稳定则 stable=false。返回 {"answerable":true|false,"stable":true|false,"answer":"...","evidence":"...","why":"..."}。不要用节选以外的知识。',
     }) },
   ], { json: true, numPredict: 300 })
   try {
     const value = JSON.parse(reply)
-    return { answerable: value.answerable === true, why: String(value.why ?? '') }
+    return { answerable: value.answerable === true, stable: value.stable !== false, why: String(value.why ?? '') }
   } catch {
     return { answerable: false, why: 'verifier reply was not JSON' }
   }
@@ -107,8 +109,12 @@ async function verifyBank({ chat, usage, provider, model }) {
     const questions = []
     for (const question of session.questions) {
       const verdict = await verifyQuestion(chat, candidate, question)
-      if (verdict.answerable) questions.push(question)
-      else dropped.push({ id: question.id, question: question.question, why: verdict.why })
+      if (verdict.answerable && verdict.stable) questions.push(question)
+      else dropped.push({
+        id: question.id,
+        question: question.question,
+        why: verdict.answerable ? `答案不稳定：${verdict.why}` : verdict.why,
+      })
     }
     if (questions.length > 0) kept.push({ ...session, questions })
   }
@@ -178,7 +184,7 @@ async function main() {
   }
   const cost = (usage.input / 1e6 * PRICE.input + usage.output / 1e6 * PRICE.output) * 0.5
   const bank = {
-    version: 'real-v1',
+    version: 'real-v2',
     generatedAt: new Date().toISOString(),
     provider,
     model,
