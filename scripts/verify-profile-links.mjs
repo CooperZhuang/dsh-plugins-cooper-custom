@@ -5,7 +5,7 @@
  * 为什么需要：pnpm 的 `file:` 目录依赖在本机是硬链接副本，`pnpm build` 会写穿
  * 已存在的文件，但**新增的源文件不会出现在 profile/node_modules 里**。宿主下次
  * 启动 import 新模块时直接 ERR_MODULE_NOT_FOUND（2026-11-05 的
- * dsh-memories/lib/raw-recall.js 就是这样坏的），而 `pnpm install` 对「清单没变」
+ * dsh-cross-memory/lib/raw-recall.js 就是这样坏的），而 `pnpm install` 对「清单没变」
  * 的 file: 依赖只报 Already up to date，不会自愈。
  *
  * 检查每个已安装包的 lib/ 子树：

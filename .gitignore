@@ -1,8 +1,7 @@
 node_modules/
-pnpm-lock.yaml
 *.log
 .DS_Store
 
 # bench artifacts: derived from the private memory store, never committed
-packages/dsh-memories/bench/data/
-packages/dsh-memories/bench/sensitivity.md
+packages/dsh-cross-memory/bench/data/
+packages/dsh-cross-memory/bench/sensitivity.md

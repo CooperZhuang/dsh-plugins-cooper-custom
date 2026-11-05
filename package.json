@@ -2,17 +2,16 @@
   "name": "dsh-plugins-cooper-custom",
   "private": true,
   "version": "0.0.0",
-  "description": "DeepSeek Harness 自研插件 monorepo：dsh-memories / dsh-rtk-slim / dsh-session-toolbox / dsh-session-store / dsh-folder-path / dsh-open-in-dsh",
-  "devDependencies": {
-    "dsh-session-store": "link:./packages/dsh-session-store"
-  },
+  "description": "DeepSeek Harness 自研插件 monorepo：dsh-cross-memory / dsh-session-ops / dsh-rtk-slim / dsh-folder-path / dsh-open-in-dsh",
+  "devDependencies": {},
   "scripts": {
-    "build:memories": "pnpm --dir packages/dsh-memories build",
-    "test:session-store": "pnpm --dir packages/dsh-session-store test",
-    "test:session-toolbox": "pnpm --dir packages/dsh-session-toolbox test",
+    "build": "pnpm --dir packages/dsh-cross-memory build",
+    "test": "pnpm run test:cross-memory && pnpm run test:session-ops && pnpm run test:folder-path && pnpm run test:rtk-slim && pnpm run test:open-in-dsh",
+    "test:cross-memory": "pnpm --dir packages/dsh-cross-memory test",
+    "test:session-ops": "pnpm --dir packages/dsh-session-ops test",
     "test:folder-path": "pnpm --dir packages/dsh-folder-path test",
-    "test:open-in-dsh": "pnpm --dir packages/dsh-open-in-dsh test",
     "test:rtk-slim": "pnpm --dir packages/dsh-rtk-slim test",
+    "test:open-in-dsh": "pnpm --dir packages/dsh-open-in-dsh test",
     "verify:profile": "node scripts/verify-profile-links.mjs"
   }
 }

@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: [24]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # dsh-cross-memory 的 lib/ 是构建产物（不入库），测试前先构建。
+      - run: pnpm run build
+
+      - run: pnpm run test
+
+      # 每个包都必须能被 npm 打包（发布前的最小门禁）。
+      - name: npm pack dry-run
+        run: |
+          set -e
+          for pkg in packages/*/; do
+            echo "== $pkg"
+            (cd "$pkg" && npm pack --dry-run --ignore-scripts >/dev/null)
+          done

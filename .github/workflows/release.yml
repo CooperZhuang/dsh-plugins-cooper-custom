@@ -1,0 +1,57 @@
+name: Release
+
+# 手动选择要发布的包（包名与版本取自该包 package.json）。
+# 需要仓库 secret NPM_TOKEN（npm automation token）。
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: 要发布到 npm 的包目录
+        required: true
+        type: choice
+        options:
+          - packages/dsh-cross-memory
+          - packages/dsh-session-ops
+          - packages/dsh-folder-path
+          - packages/dsh-rtk-slim
+          - packages/dsh-open-in-dsh
+      dry-run:
+        description: 只做 npm publish --dry-run，不真正发布
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - run: pnpm install --frozen-lockfile
+
+      # dsh-cross-memory 的 lib/ 是构建产物（不入库）；其他包的产物随仓库提交。
+      - run: pnpm run build
+
+      - name: publish (dry-run)
+        if: ${{ inputs.dry-run }}
+        run: pnpm --dir "${{ inputs.package }}" publish --access public --provenance --no-git-checks --dry-run
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: publish
+        if: ${{ !inputs.dry-run }}
+        run: pnpm --dir "${{ inputs.package }}" publish --access public --provenance --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
