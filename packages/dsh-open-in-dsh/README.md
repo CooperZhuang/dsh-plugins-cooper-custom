@@ -310,9 +310,8 @@ await ctx.uiWorkspace.openWorkspace(ws.workspaceId)       // 连接并打开它�
 macOS 的 Finder 用 `open -R` 揭示，其余 app 用 `open -a <名字> <路径>`；Terminal/Warp
 拿到文件时落在它所在目录，而不是把文件当脚本跑。
 
-菜单化之后**不再需要给 `app.asar` 打 QSpace 补丁**：早期用
-`scripts/patch-open-in-app-qspace.mjs` 补过的机器把补丁撤掉即可（撤补丁由维护者统一做，
-本包不含该脚本）。
+菜单化之后**不再需要给 `app.asar` 打 QSpace 补丁**：早期打过的 asar 补丁（脚本已从仓库
+删除）在各自机器上撤掉即可；本包不含该脚本。
 
 `clients` 与 `recent` 一起决定**冷启动**：没人跟随、而且最近也没人跟随过，才是真的
 「DSH 没开」。页面只是**正在重连**（插件重挂载、刷新页面）时 `recent` 为真，`dsh web`

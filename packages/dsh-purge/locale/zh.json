@@ -1,7 +1,0 @@
-{
-  "meta": {
-    "title": "破甲 / 红队补丁",
-    "description": "给宿主打红队补丁、提供预设与 Drill 控制台；当前未挂载（启用要点 Apply）。",
-    "detail": "docs/DETAIL.zh.md"
-  }
-}

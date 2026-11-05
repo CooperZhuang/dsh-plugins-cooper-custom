@@ -1,7 +1,0 @@
-{
-  "meta": {
-    "title": "Purge / red-team patches",
-    "description": "Red-team host patches, presets and a Drill console. Currently unmounted; enabling requires Apply.",
-    "detail": "docs/DETAIL.md"
-  }
-}

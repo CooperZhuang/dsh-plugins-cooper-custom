@@ -2,7 +2,7 @@
   "name": "dsh-plugins-cooper-custom",
   "private": true,
   "version": "0.0.0",
-  "description": "DeepSeek Harness 自研插件 monorepo：dsh-memories / dsh-rtk-slim / dsh-purge / dsh-session-toolbox / dsh-session-store / dsh-folder-path / dsh-open-in-dsh",
+  "description": "DeepSeek Harness 自研插件 monorepo：dsh-memories / dsh-rtk-slim / dsh-session-toolbox / dsh-session-store / dsh-folder-path / dsh-open-in-dsh",
   "devDependencies": {
     "dsh-session-store": "link:./packages/dsh-session-store"
   },
