@@ -83,6 +83,10 @@ export const CONSOLIDATE_JSON_SCHEMA = {
           title: { type: 'string' },
           body: { type: 'string' },
           tags: { type: 'array', items: { type: 'string' } },
+          // The prompt's reply template asks for `keys`; a schema that omits it
+          // (with `additionalProperties: false`) rejects every prompt-compliant
+          // answer, and the child's whole run ends as an error.
+          keys: { type: 'array', items: { type: 'string' } },
           appliesTo: { type: 'string' },
           durability: { type: 'string', enum: ['durable', 'snapshot'] },
           asOf: { type: 'string' },
@@ -195,18 +199,56 @@ export function renderConsolidationInput(
   return blocks.join('\n')
 }
 
+/**
+ * Try every `{` in a model reply as the start of a JSON object.
+ *
+ * A reply is not always pure JSON. A reasoning model sketches the reply shape
+ * before it answers ("{\"memories\":[...]}"), and prose around the answer can
+ * quote a brace too. Slicing from the FIRST `{` to the last `}` read that sketch
+ * as if it were the plan, the parse threw, and the pass reported "no plan" while
+ * the child had in fact returned one. Every opening brace is a candidate start
+ * instead; the first slice the caller accepts wins.
+ *
+ * @param text - the model's reply.
+ * @param accept - decodes one parsed candidate, or returns `undefined` to keep scanning.
+ * @returns the first accepted value, or `undefined` when no candidate is usable.
+ */
+function scanJsonObjects<T>(text: string, accept: (parsed: unknown) => T | undefined): T | undefined {
+  const trimmed = text.trim().replace(/^```(?:json)?\s*/iu, '').replace(/```$/u, '').trim()
+  const first = trimmed.indexOf('{')
+  const last = trimmed.lastIndexOf('}')
+  if (first < 0 || last <= first) return undefined
+  for (let start = first; start >= 0 && start < last; start = trimmed.indexOf('{', start + 1)) {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(trimmed.slice(start, last + 1))
+    } catch {
+      continue
+    }
+    const accepted = accept(parsed)
+    if (accepted !== undefined) return accepted
+  }
+  return undefined
+}
+
 /** Parse and validate the agent's JSON reply into a plan. */
 export function parsePlan(text: string, knownIds: ReadonlySet<string>, maxUpserts: number): ConsolidationPlan | undefined {
-  const trimmed = text.trim().replace(/^```(?:json)?\s*/iu, '').replace(/```$/u, '').trim()
-  const start = trimmed.indexOf('{')
-  const end = trimmed.lastIndexOf('}')
-  if (start < 0 || end <= start) return undefined
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(trimmed.slice(start, end + 1))
-  } catch {
-    return undefined
-  }
+  return scanJsonObjects(text, (parsed) => planFromReply(parsed, knownIds, maxUpserts))
+}
+
+/**
+ * Decode one parsed reply object into a validated plan.
+ *
+ * Split out from {@link parsePlan} so the brace scan can try more than one
+ * candidate: a slice that parses but carries no plan (an example the model
+ * quoted) must not stop the scan.
+ *
+ * @param parsed - one parsed JSON value from a candidate slice.
+ * @param knownIds - ids present in the reviewed page.
+ * @param maxUpserts - cap on returned memories.
+ * @returns the validated plan, or `undefined` when this value carries none.
+ */
+function planFromReply(parsed: unknown, knownIds: ReadonlySet<string>, maxUpserts: number): ConsolidationPlan | undefined {
   if (typeof parsed !== 'object' || parsed === null) return undefined
   const record = parsed as Record<string, unknown>
   const rawMemories = Array.isArray(record['memories']) ? record['memories'] : []
@@ -418,6 +460,15 @@ export interface ConsolidateRequest {
   readonly maxOutputTokens?: number
   /** Route the direct (no-subagent) path runs on. */
   readonly route?: { provider: string; model: string; reasoningEffort?: string }
+  /**
+   * Why this run produced no plan, when it did not.
+   *
+   * A pass that ends without a plan is a normal outcome (the child can fail, be
+   * cut short, or answer in a shape the parser cannot use), but it must not be
+   * silent: the caller logs this and reports it to the person who asked for the
+   * pass. Called at most once, and only on the no-plan branches.
+   */
+  readonly onSkip?: (reason: string) => void
   readonly signal: AbortSignal
 }
 
@@ -480,8 +531,22 @@ export interface ActivationSpec {
   }
 }
 
+/**
+ * One finished child run, as the seam reports it.
+ *
+ * `stopReason` is a string in the kernel ("completed", "error", "max-tokens",
+ * …); an older seam wrapped it as `{ kind }`. Both shapes are declared because
+ * the value only feeds a diagnostic line, and reading the wrong one must not
+ * turn a reportable failure into a `TypeError`.
+ */
+export interface ChildRunResult {
+  readonly output: readonly unknown[]
+  readonly structured?: unknown
+  readonly stopReason?: string | { kind: string }
+}
+
 export interface SubagentSeam {
-  startActivation?: (spec: ActivationSpec) => Promise<{ result: Promise<{ output: readonly unknown[]; structured?: unknown; stopReason?: { kind: string } }> }>
+  startActivation?: (spec: ActivationSpec) => Promise<{ result: Promise<ChildRunResult> }>
   start?: (name: string, request: {
     prompt: { type: 'text'; text: string }[]
     parent: Agent
@@ -491,7 +556,7 @@ export interface SubagentSeam {
     maxDepth?: number
     toolFilter?: { deny?: readonly string[]; allow?: readonly string[] }
     persona?: string
-  }) => Promise<{ result: Promise<{ output: readonly unknown[]; structured?: unknown; stopReason?: { kind: string } }> }>
+  }) => Promise<{ result: Promise<ChildRunResult> }>
 }
 
 /** Cap on skill drafts one pass may propose. */
@@ -560,9 +625,21 @@ export async function runConsolidation(seam: SubagentSeam, request: ConsolidateR
   const input = renderConsolidationInput(request.entries, request.projectLabel, request.persona)
   const timeout = AbortSignal.any([request.signal, AbortSignal.timeout(request.timeoutMs)])
   const prompt = [{ type: 'text' as const, text: `${CONSOLIDATE_SYSTEM}\n\n---\n\n${input}` }]
-  const reply = await runChild(seam, prompt, request, timeout)
-  if (reply === undefined) return undefined
-  return parsePlan(reply, known, request.maxUpserts)
+  const answer = await runChild(seam, prompt, request, timeout)
+  if (answer === undefined) {
+    request.onSkip?.('the subagent seam could not run a tool-free child')
+    return undefined
+  }
+  const plan = parsePlan(answer.text, known, request.maxUpserts)
+  // "No plan" is not one condition: the child may have answered not at all, or
+  // answered without the JSON. Naming which one, and how its run ended, is what
+  // turns a silent no-op into a diagnosable failure.
+  if (plan === undefined) {
+    request.onSkip?.(answer.text.trim().length === 0
+      ? `the child returned no text (stopReason: ${answer.stopReason ?? 'unknown'})`
+      : `the child's reply carried no plan (${answer.text.length} chars, stopReason: ${answer.stopReason ?? 'unknown'})`)
+  }
+  return plan
 }
 
 /**
@@ -615,8 +692,32 @@ export function buildActivationSpec(
   }
 }
 
+/** One child's answer, with enough of its ending to explain a missing plan. */
+interface ChildAnswer {
+  /** The text the plan is parsed from; empty when the child left none. */
+  readonly text: string
+  /** How the run ended, when the seam reported it. */
+  readonly stopReason?: string
+}
+
 /**
- * Ask the seam for one restricted child and return its answer as text.
+ * Read one child's ending as a single string.
+ *
+ * The kernel reports `stopReason` as a string ("completed", "error",
+ * "max-tokens", …); an older seam wrapped it as `{ kind }`. Both are read here
+ * because this value is only ever used for a diagnostic line.
+ *
+ * @param value - the raw `stopReason`.
+ * @returns the reason text, or `undefined` when the seam reported none.
+ */
+function stopReasonText(value: unknown): string | undefined {
+  if (typeof value === 'string') return value
+  if (typeof value === 'object' && value !== null && 'kind' in value && typeof value.kind === 'string') return value.kind
+  return undefined
+}
+
+/**
+ * Ask the seam for one restricted child and return its answer.
  *
  * The 0.2.1-rc.2 seam is preferred, but only with a preset: a child that names
  * no preset inherits the parent's composition, and the parent's tools are what
@@ -626,7 +727,7 @@ export function buildActivationSpec(
  * @param prompt - the child's single user message.
  * @param request - route, caps, and the preset name.
  * @param timeout - the child's deadline.
- * @returns the child's text, or `undefined` when the seam cannot run it.
+ * @returns the child's answer, or `undefined` when the seam cannot run it.
  */
 async function runChild(
   seam: SubagentSeam,
@@ -634,13 +735,14 @@ async function runChild(
   request: ConsolidateRequest,
   timeout: AbortSignal,
   outputSchema: unknown = CONSOLIDATE_JSON_SCHEMA,
-): Promise<string | undefined> {
+): Promise<ChildAnswer | undefined> {
   const agentOptions = request.provider !== undefined && request.model !== undefined
     ? { provider: request.provider, model: request.model }
     : undefined
   if (typeof seam.startActivation === 'function' && request.agentPreset !== undefined) {
     const run = await seam.startActivation(buildActivationSpec(request, prompt, timeout, outputSchema))
-    return textOf(await run.result)
+    const result = await run.result
+    return { text: textOf(result), ...stopReasonOf(result) }
   }
   if (typeof seam.start === 'function') {
     const run = await seam.start('spawn', {
@@ -654,9 +756,20 @@ async function runChild(
       // only output is the JSON plan it returns.
       toolFilter: { deny: request.denyTools },
     })
-    return textOf(await run.result)
+    const result = await run.result
+    return { text: textOf(result), ...stopReasonOf(result) }
   }
   return undefined
+}
+
+/**
+ * Pick the run's reported stop reason out of a finished child result.
+ * @param result - the child's finished run.
+ * @returns the optional `stopReason` property, or nothing when absent.
+ */
+function stopReasonOf(result: { stopReason?: unknown }): { stopReason?: string } {
+  const reason = stopReasonText(result.stopReason)
+  return reason === undefined ? {} : { stopReason: reason }
 }
 
 /**
@@ -664,13 +777,21 @@ async function runChild(
  *
  * A child that answered through the structured-output tool carries the plan in
  * `structured`; a child that answered in prose carries it in the text blocks.
+ *
+ * The kernel's `output` is the child's last assistant message *content*, which
+ * includes its reasoning blocks. A reasoning block also carries a `text` field,
+ * so reading every block that has one glues the child's scratchpad — full of
+ * example JSON braces — in front of the plan and the plan no longer parses.
+ * Only blocks the model sent as its answer count here.
+ *
  * @param result - the child's finished run.
  * @returns the text the plan is parsed from.
  */
 function textOf(result: { output: readonly unknown[]; structured?: unknown }): string {
   if (typeof result.structured === 'object' && result.structured !== null) return JSON.stringify(result.structured)
   return result.output
-    .map((block) => (typeof block === 'object' && block !== null && 'text' in block && typeof block.text === 'string' ? block.text : ''))
+    .map((block) => (typeof block === 'object' && block !== null && 'type' in block && block.type === 'text' && 'text' in block && typeof block.text === 'string' ? block.text : ''))
+    .filter((text) => text.length > 0)
     .join('\n')
 }
 
@@ -715,8 +836,13 @@ export async function runConsolidationDirect(llm: LlmRuntime, request: Consolida
     .filter((block): block is { type: 'text'; text: string } => block.type === 'text')
     .map((block) => block.text)
     .join('\n')
-  if (text.trim().length === 0) return undefined
-  return parsePlan(text, known, request.maxUpserts)
+  if (text.trim().length === 0) {
+    request.onSkip?.('the model returned an empty reply')
+    return undefined
+  }
+  const plan = parsePlan(text, known, request.maxUpserts)
+  if (plan === undefined) request.onSkip?.(`the model's reply carried no plan (${text.length} chars)`)
+  return plan
 }
 
 /**
@@ -1321,18 +1447,10 @@ export async function adjudicateDisputes(
   const prompt = [{ type: 'text' as const, text: `${ADJUDICATE_SYSTEM}\n\n---\n\n${renderAdjudicationInput(disputes)}` }]
   const reply = await runChild(seam, prompt, request, timeout, ADJUDICATE_JSON_SCHEMA)
   if (reply === undefined) return []
-  const trimmed = reply.trim().replace(/^```(?:json)?\s*/iu, '').replace(/```$/u, '').trim()
-  const start = trimmed.indexOf('{')
-  const end = trimmed.lastIndexOf('}')
-  if (start < 0 || end <= start) return []
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(trimmed.slice(start, end + 1))
-  } catch {
-    return []
-  }
-  if (typeof parsed !== 'object' || parsed === null) return []
-  const record0 = parsed as Record<string, unknown>
+  // The same brace scan the plan parse uses: the adjudicator's reply can be
+  // wrapped in prose or preceded by a quoted sketch just like the plan's.
+  const record0 = scanJsonObjects(reply.text, (parsed) => typeof parsed === 'object' && parsed !== null ? parsed as Record<string, unknown> : undefined)
+  if (record0 === undefined) return []
   const rows = Array.isArray(record0['decisions']) ? record0['decisions'] : []
   const known = new Set(disputes.map((dispute) => dispute.id))
   const verdicts: DisputeVerdict[] = []
