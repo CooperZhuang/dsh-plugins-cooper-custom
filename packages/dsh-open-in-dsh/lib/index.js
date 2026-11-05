@@ -43,7 +43,7 @@ import { createServer } from 'node:http'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import z from '@deepseek-ai/schemastery'
-import { dshHome, encodeSegment, readSessionHeader } from 'dsh-session-store'
+import { dshHome, encodeSegment, readSessionHeader } from 'dsh-session-ops/store'
 
 /** Cordis plugin name; the profile row's `id` is independent of it. */
 export const name = 'open-in-dsh'
@@ -859,8 +859,8 @@ export function createLiveCwdReader(ctx) {
  * The store is keyed by project directory, so an id alone does not name a
  * path: every project key is probed for `<root>/<projectKey>/<encodeSegment(id)>`
  * and the first header carrying a cwd wins. `encodeSegment` and
- * `readSessionHeader` come from `dsh-session-store`, the same header/frame
- * reader `dsh-session-toolbox` uses, so a storage-format change cannot make
+ * `readSessionHeader` come from `dsh-session-ops/store`, the same header/frame
+ * reader `dsh-session-ops` uses, so a storage-format change cannot make
  * the two plugins disagree.
  *
  * @param sessionId - the Session id the browser sent.

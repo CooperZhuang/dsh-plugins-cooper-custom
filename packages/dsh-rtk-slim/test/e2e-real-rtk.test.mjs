@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict'
-import { accessSync, constants, readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { Config, createPostExecuteHandler } from '../lib/index.js'
 
-const RTK = '/opt/homebrew/bin/rtk'
+// Resolve rtk from PATH (or an explicit RTK_BIN for a non-standard install), so
+// the suite runs on any machine instead of assuming one absolute install path.
+const RTK = process.env.RTK_BIN ?? 'rtk'
 const hasRtk = (() => {
   try {
-    accessSync(RTK, constants.X_OK)
+    execFileSync(RTK, ['--version'], { stdio: 'ignore' })
     return true
   } catch {
     return false

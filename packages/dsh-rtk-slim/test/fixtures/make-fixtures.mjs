@@ -47,11 +47,11 @@ const pytest = (result) => {
 
 const gitLog = () => {
   const subjects = [
-    '可观测性：摘要脚本 + 三条事后确认检索效果的行',
-    '搜索面按词法相关度排序，注入面保持按注意力',
-    '检索评测分成两个承诺来量：排名与闸门；并把「中文改写」那条查清',
-    '一跳的边加上稀有度规则，并用评测把 EXPAND_FACTOR 定在 0.4',
-    '真实库离线检索评测：并修掉它当场暴露的三个一跳错误',
+    'refactor: split the indexer into focused modules',
+    'fix: order search results by lexical score',
+    'test: cover ranking and gating separately',
+    'perf: cap one-hop expansion factor at 0.4',
+    'docs: add an offline retrieval evaluation',
   ]
   const lines = []
   for (let i = 0; i < 74; i += 1) {
@@ -66,10 +66,10 @@ const gitLog = () => {
 // rather than emitting one match per file.
 const grepRn = () => {
   const files = [
-    { path: '/Users/example/Documents/Code/some-repo/src/search/indexer.ts', lines: 24 },
-    { path: '/Users/example/Documents/Code/some-repo/src/search/ranker.ts', lines: 19 },
-    { path: '/Users/example/Documents/Code/some-repo/src/search/gate.ts', lines: 15 },
-    { path: '/Users/example/Documents/Code/some-repo/src/search/lexical.ts', lines: 12 },
+    { path: '/path/to/some-repo/src/search/indexer.ts', lines: 24 },
+    { path: '/path/to/some-repo/src/search/ranker.ts', lines: 19 },
+    { path: '/path/to/some-repo/src/search/gate.ts', lines: 15 },
+    { path: '/path/to/some-repo/src/search/lexical.ts', lines: 12 },
   ]
   const lines = []
   for (const [index, file] of files.entries()) {
@@ -84,7 +84,7 @@ const grepRn = () => {
 const lsLa = () => {
   const lines = ['total 96']
   for (let i = 0; i < 40; i += 1) {
-    lines.push(`drwx------@ ${String(i).padStart(3)} cooper  admin   ${String(96 + i).padStart(5)} Oct 16 12:0${i % 10} dir_${i}`)
+    lines.push(`drwx------@ ${String(i).padStart(3)} user  staff   ${String(96 + i).padStart(5)} Oct 16 12:0${i % 10} dir_${i}`)
   }
   return `${lines.join('\n')}\n`
 }

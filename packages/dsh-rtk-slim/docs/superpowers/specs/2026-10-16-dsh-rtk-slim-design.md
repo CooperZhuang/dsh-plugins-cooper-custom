@@ -9,7 +9,7 @@
 一个 DeepSeek Harness（DSH）宿主半边插件：把超大的命令输出交给 `rtk`（Rust Token Killer）精简后
 再交给模型，并且**任何一次精简都可追溯、任何一次失败都静默降级**。
 
-本仓库同时是本设计的实现仓库。仓库路径：`~/Documents/Code/dsh-rtk-slim`。
+本仓库同时是本设计的实现仓库。仓库路径：`/path/to/dsh-plugins-cooper-custom/packages/dsh-rtk-slim`。
 
 > 修订摘要见 §14。v3 只吸收评审 advisory，无阻塞项；评审第 2 轮结论为 Approved。
 
@@ -324,7 +324,7 @@ const ref = await ctx.get('spillStore').saveText({
 - `rtk`：stub 可执行文件覆盖 —— 正常、非零退出、超时（挂起）、超限输出、取消（AbortSignal）。
 - `spill`：注入假 `ctx.get('spillStore')`，覆盖成功、抛错、`spillStore` 缺失、会话 id 缺失。
 
-**端到端（真 rtk 0.49.0）**：用本机已固定的 8 份语料断言压缩结果与回退行为；
+**端到端（真 rtk 0.49.0）**：用固定的 8 份语料断言压缩结果与回退行为；
 stub rtk 二进制位于 `test/bin/rtk`（JS + shebang），通过临时 PATH 前置注入。
 
 **验收标准（可执行、可复现；标注各自使用的 `minBytes`）**
@@ -347,9 +347,9 @@ stub rtk 二进制位于 `test/bin/rtk`（JS + shebang），通过临时 PATH �
 1. 仓库即包：`package.json` 的 `main` 指向 `lib/index.js`，`dsh.bundle.patch` 指向 `cordis.patch.yml`。
 2. **依赖面（实测约束，务必照此写 `package.json`）**：
    - `dependencies`：仅 `@deepseek-ai/schemastery`（profile 已 hoist 3.18.4，与宿主 3.18.5-alpha.1
-     通过 profile 里 hoist 的 `@standard-schema/spec` 互通；`dsh-memories` 走的同一条路）。
+     通过 profile 里 hoist 的 `@standard-schema/spec` 互通；`dsh-cross-memory` 走的同一条路）。
    - **不声明 `@deepseek-ai/cordis` 为 dependency**：宿主为 `4.0.5-alpha.1`，运行时由宿主注入，
-     profile 里没有任何 cordis 拷贝。`dsh-memories` 其实把它写在 `peerDependencies` 里，只是 profile 的
+     profile 里没有任何 cordis 拷贝。`dsh-cross-memory` 其实把它写在 `peerDependencies` 里，只是 profile 的
      `autoInstallPeers: false` 让它没被安装；本插件更保守——**cordis 只进 `devDependencies`**（类型检查用），
      不声明 peer，避免将来某个 profile 打开 `autoInstallPeers` 时被装进第二份 cordis。
    - `devDependencies`：`@deepseek-ai/cordis@4.0.5-alpha.1`、`@deepseek-ai/dsh-tools@0.2.1-alpha.2`、
@@ -362,7 +362,7 @@ stub rtk 二进制位于 `test/bin/rtk`（JS + shebang），通过临时 PATH �
    cd "/Applications/DSH Desktop Beta.app/Contents/Resources/app"
    PNPM="<runtime-commands 下的 pnpm>"
    "$PNPM" --dir ~/.dsh/profiles/desktop add --ignore-scripts \
-     "dsh-rtk-slim@file:/Users/example/Documents/Code/dsh-rtk-slim"
+     "dsh-rtk-slim@file:/path/to/dsh-rtk-slim"
    ```
 
    必须走 pnpm 的真正原因是**锁文件与 `node_modules/.package-map.json` 的一致性**（Desktop 的 profile
@@ -416,7 +416,7 @@ stub rtk 二进制位于 `test/bin/rtk`（JS + shebang），通过临时 PATH �
 - **v3（评审第 2 轮后，结论 Approved）**：吸收 5 条 advisory —— ① §3.1/§12 把 `job_output` 定稿的
   实际行为改成"精简结果被保留、仅可能被 `outputLimitBytes` 截尾"（实测 `applyFinalContent` 与
   `boundSingleText` 语义）；② §11 修正必须走 pnpm 的理由（锁文件 + `.package-map.json` 一致性，
-  `nodeLinker: hoisted`），并说明 `dsh-memories` 其实把 cordis 写在 peer 里、只是 `autoInstallPeers: false`
+  `nodeLinker: hoisted`），并说明 `dsh-cross-memory` 其实把 cordis 写在 peer 里、只是 `autoInstallPeers: false`
   没装；③ 新增"严格变小"闸门与 `guard:expanded`（§4 枚举 / §6 / §8 / §10 / §12）；
   ④ §4/§8 明确 `exec.signal` 接到 `spawn`；⑤ §5 收紧 `grep` 匹配（要求路径样片段 + 行号）并补时间戳负例。
 - **v2（评审第 1 轮后）**：修正内容契约（`ContentBlock[]`，新增 `lib/content.js` 与 §3.1）；

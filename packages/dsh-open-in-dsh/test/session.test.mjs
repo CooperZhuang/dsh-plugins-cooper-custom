@@ -16,7 +16,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import zlib from 'node:zlib'
 
-import { encodeSegment, hasZstd } from 'dsh-session-store'
+import { encodeSegment, hasZstd } from 'dsh-session-ops/store'
 
 import {
   ROUTE_OPEN_SESSION,

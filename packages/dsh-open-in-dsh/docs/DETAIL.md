@@ -8,6 +8,7 @@ Wires "open with DSH" into the OS file manager and DSH context menus.
 
 ## Implementation notes
   - The host exposes an open-with route with an app allowlist; arbitrary commands are rejected.
+  - Handoff uses the plugin's own Unix socket (macOS) or the loopback HTTP route (Windows).
 
 ## Notes
   - No longer requires patching app.asar.

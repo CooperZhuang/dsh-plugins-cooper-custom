@@ -19,7 +19,7 @@
 
 ## 全局约定
 
-- 仓库根：`/Users/example/Documents/Code/dsh-rtk-slim`（下称「仓库根」）。所有相对路径都相对它。
+- 仓库根：`/path/to/dsh-rtk-slim`（下称「仓库根」）。所有相对路径都相对它。
 - 每个 Task 结束都要 commit；commit message 用 `feat:` / `test:` / `docs:` / `chore:` 前缀。
 - 单测跑法：`node --test test/*.test.mjs`（显式 glob，避免 `node --test test/` 把 `test/bin/` 下的 stub 当测试文件执行）。
 - 所有长度/阈值单位是**字节**，一律 `Buffer.byteLength(x, 'utf8')`，不用 `String.length`。
@@ -148,7 +148,7 @@ node_modules/
 
 Run:
 ```bash
-cd /Users/example/Documents/Code/dsh-rtk-slim
+cd /path/to/dsh-rtk-slim
 npm install --ignore-scripts
 node -e "import('@deepseek-ai/schemastery').then(m=>console.log('schemastery keys:', ['dict','union','const','string','boolean','number','array'].every(k=>k in m.default)))"
 ```
@@ -157,7 +157,7 @@ Expected: `schemastery keys: true`（若为 `false`，说明 schemastery 该版�
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Users/example/Documents/Code/dsh-rtk-slim
+cd /path/to/dsh-rtk-slim
 git add -A && git commit -m "chore: 插件骨架（package.json / jsconfig / bundle patch / gitignore）"
 ```
 
@@ -457,7 +457,7 @@ const gitLog = () => {
 const grepRn = () => {
   const lines = []
   for (let i = 0; i < 60; i += 1) {
-    lines.push(`/Users/example/Documents/Code/some-repo/src/module_${i}/index.ts:${10 + i}:export function handler${i}() {`)
+    lines.push(`/path/to/some-repo/src/module_${i}/index.ts:${10 + i}:export function handler${i}() {`)
   }
   return `${lines.join('\n')}\n`
 }
@@ -465,7 +465,7 @@ const grepRn = () => {
 const lsLa = () => {
   const lines = ['total 96']
   for (let i = 0; i < 40; i += 1) {
-    lines.push(`drwx------@ ${String(i).padStart(3)} cooper  admin   ${String(96 + i).padStart(5)} Oct 16 12:0${i % 10} dir_${i}`)
+    lines.push(`drwx------@ ${String(i).padStart(3)} user  staff   ${String(96 + i).padStart(5)} Oct 16 12:0${i % 10} dir_${i}`)
   }
   return `${lines.join('\n')}\n`
 }
@@ -1758,7 +1758,7 @@ DSH 宿主半边插件：把 `bash` / `job_output` 的超大输出交给 [rtk](h
 ```sh
 PNPM="$(dirname "$(command -v dsh)")/pnpm"   # 或直接用 Desktop 运行时目录下的 pnpm
 "$PNPM" --dir ~/.dsh/profiles/desktop add --ignore-scripts \
-  "dsh-rtk-slim@file:/Users/example/Documents/Code/dsh-rtk-slim"
+  "dsh-rtk-slim@file:/path/to/dsh-rtk-slim"
 ```
 
 再把 `dsh-rtk-slim` 追加到该 profile `package.json` 的 `dsh.profile.bundles`，然后重启宿主一次
@@ -1823,14 +1823,14 @@ Run:
 cp ~/.dsh/profiles/desktop/package.json /tmp/desktop-package.json.bak
 cat ~/.dsh/profiles/desktop/package.json
 ```
-Expected: 看到当前 `dependencies`（含 `dsh-memories`）与 `dsh.profile.bundles` 数组
+Expected: 看到当前 `dependencies`（含 `dsh-cross-memory`）与 `dsh.profile.bundles` 数组
 
 - [ ] **Step 2: 以 pnpm file: 依赖装入**
 
 Run:
 ```bash
-PNPM="/Users/example/Library/Application Support/DSH Desktop Beta/runtime-commands/generations/$(ls '/Users/example/Library/Application Support/DSH Desktop Beta/runtime-commands/generations' | head -1)/bin/pnpm"
-"$PNPM" --dir ~/.dsh/profiles/desktop add --ignore-scripts "dsh-rtk-slim@file:/Users/example/Documents/Code/dsh-rtk-slim"
+PNPM="/path/to/DSH Desktop Beta/runtime-commands/generations/$(ls '/path/to/DSH Desktop Beta/runtime-commands/generations' | head -1)/bin/pnpm"
+"$PNPM" --dir ~/.dsh/profiles/desktop add --ignore-scripts "dsh-rtk-slim@file:/path/to/dsh-rtk-slim"
 ```
 Expected: pnpm 报告新增 `dsh-rtk-slim`（如报 peer 冲突，先停下报告，不要 `--force`）
 
@@ -1844,7 +1844,7 @@ Expected: pnpm 报告新增 `dsh-rtk-slim`（如报 peer 冲突，先停下报�
       "bundles": [
         "@deepseek-ai/dsh-base",
         "@deepseek-ai/dsh-web-app",
-        "dsh-memories",
+        "dsh-cross-memory",
         "dsh-rtk-slim"
       ]
     }
@@ -1855,9 +1855,9 @@ Expected: pnpm 报告新增 `dsh-rtk-slim`（如报 peer 冲突，先停下报�
 
 Run:
 ```bash
-node -e "console.log(require.resolve('dsh-rtk-slim/package.json', { paths: ['/Users/example/.dsh/profiles/desktop'] }))"
+node -e "console.log(require.resolve('dsh-rtk-slim/package.json', { paths: ['~/.dsh/profiles/desktop'] }))"
 ```
-Expected: `/Users/example/.dsh/profiles/desktop/node_modules/dsh-rtk-slim/package.json`
+Expected: `~/.dsh/profiles/desktop/node_modules/dsh-rtk-slim/package.json`
 
 - [ ] **Step 5: 重启宿主（需要用户操作或应用内重启）**
 

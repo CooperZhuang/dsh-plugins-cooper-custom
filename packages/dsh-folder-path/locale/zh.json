@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "粘贴文件夹路径",
-    "description": "往输入框粘贴文件夹时不再尝试上传，而是插入本地路径。仅 Windows 有效。",
+    "description": "往输入框粘贴文件夹时不再尝试上传，而是插入本地路径（Windows / macOS）。",
     "detail": "docs/DETAIL.zh.md"
   }
 }

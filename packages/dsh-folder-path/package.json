@@ -2,6 +2,10 @@
   "name": "dsh-folder-path",
   "version": "0.1.0",
   "description": "DSH 插件：粘贴（复制来的）文件夹时不再尝试上传，而是把它的完整路径作为文本插入输入框（Windows / macOS）。Paste a copied folder and get its full path as text instead of a failed upload (Windows and macOS).",
+  "private": false,
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -13,14 +17,6 @@
     },
     "./package.json": "./package.json"
   },
-  "dsh": {
-    "bundle": {
-      "patch": "./cordis.patch.yml"
-    },
-    "client": {
-      "platform": "web"
-    }
-  },
   "files": [
     "lib/index.js",
     "lib/client.js",
@@ -29,6 +25,7 @@
     "cordis.patch.yml",
     "README.md",
     "README_EN.md",
+    "LICENSE",
     "icon.svg",
     "locale/*.json",
     "docs"
@@ -39,19 +36,40 @@
     "test": "node --check lib/index.js && node --check lib/client.js && node --test"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=24",
+    "dsh": "^0.2.1-rc.2 || ^0.2.2-alpha.2"
   },
   "keywords": [
     "dsh",
     "deepseek-harness",
     "dsh-plugin",
     "client-plugin",
+    "cordis-plugin",
     "paste",
     "folder",
+    "path",
     "clipboard",
     "macos",
     "windows"
   ],
   "license": "MIT",
-  "icon": "./icon.svg"
+  "icon": "./icon.svg",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CooperZhuang/dsh-plugins-cooper-custom.git",
+    "directory": "packages/dsh-folder-path"
+  },
+  "homepage": "https://github.com/CooperZhuang/dsh-plugins-cooper-custom/tree/main/packages/dsh-folder-path#readme",
+  "bugs": {
+    "url": "https://github.com/CooperZhuang/dsh-plugins-cooper-custom/issues"
+  },
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  }
 }

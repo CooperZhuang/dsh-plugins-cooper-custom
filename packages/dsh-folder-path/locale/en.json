@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "Paste folder path",
-    "description": "Pasting a folder into the composer inserts its local path instead of attempting an upload. Windows only.",
+    "description": "Pasting a folder into the composer inserts its local path instead of attempting an upload (Windows / macOS).",
     "detail": "docs/DETAIL.md"
   }
 }

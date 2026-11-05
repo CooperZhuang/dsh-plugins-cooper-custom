@@ -123,13 +123,12 @@ write_document() {
   #
   # The launcher is baked in as an absolute path (the shell Automator runs does
   # not necessarily share the user's PATH), so moving this checkout leaves the
-  # click pointing at nothing. Measured 2026-11-05 after moving the repository
-  # into Code/Dsh/: Finder showed the action, and clicking it popped Automator's
-  # bare 「操作“运行Shell脚本”遇到了错误 -: line 2: <path>: No such file or
-  # directory」. The guard names the missing launcher and says what to re-run;
-  # the path travels as argv so a path with spaces or quotes cannot break the
-  # AppleScript. Exit 0 after the alert so Automator does not add a second,
-  # less specific error dialog on top of it.
+  # click pointing at nothing: Finder still shows the action, and clicking it
+  # pops Automator's bare 「操作“运行Shell脚本”遇到了错误 -: line 2: <path>:
+  # No such file or directory」. The guard names the missing launcher and says
+  # what to re-run; the path travels as argv so a path with spaces or quotes
+  # cannot break the AppleScript. Exit 0 after the alert so Automator does not
+  # add a second, less specific error dialog on top of it.
   _wd_script="launcher=\"$launcher\"
 if [ ! -x \"\$launcher\" ]; then
   osascript -e 'on run argv' -e 'display alert \"无法通过 DSH 打开\" message (\"找不到启动器：\" & item 1 of argv & \"。这个 checkout 移动过的话，重跑 packages/dsh-open-in-dsh/scripts/macos/install-macos.sh install。\")' -e 'end run' \"\$launcher\" || {

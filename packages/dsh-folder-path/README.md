@@ -17,21 +17,44 @@ DSH（DeepSeek Harness）Web 插件：在输入框里**粘贴一个刚从资源�
 所以本插件由**宿主半边**去读系统剪贴板的文件列表——Windows 走 CF_HDROP，macOS 走 NSPasteboard 的文件 URL——
 再把真实全路径交回浏览器半边。
 
+## 平台要求
+
+Windows（剪贴板经 PowerShell 5.1 的 `System.Windows.Forms` 读取）或 macOS（系统自带 `osascript`）。
+其他平台宿主返回 `unsupported-platform`，粘贴行为退回原版。
+
 ## 安装
 
 ```sh
-dsh plugin --profile web add C:\code\dsh-folder-path    # 本地路径
-# dsh plugin --profile web add dsh-folder-path                    # 未来的 npm 版本
+dsh plugin --profile <profile> add dsh-folder-path
+```
+
+把 `<profile>` 换成目标 profile（例如桌面版 `desktop`、`dsh web` 用 `web`）。
+
+也可以从源码目录安装：
+
+```sh
+git clone https://github.com/CooperZhuang/dsh-plugins-cooper-custom.git
+dsh plugin --profile <profile> add ./dsh-plugins-cooper-custom/packages/dsh-folder-path
 ```
 
 安装后刷新页面即可。Desktop Beta 2.0.18-beta.1（内核 0.2.1-rc.2）起新增的 bundle 行通常能热挂载，
 宿主不必重启；**更早的版本必须重启 `dsh web`**，不确定时重启一次总是安全的。
 
-验证是否挂上：`dsh --profile web --dump-config` 里应出现 `# == dsh-folder-path` 层。
+验证是否挂上：`dsh --profile <profile> --dump-config` 里应出现 `# == dsh-folder-path` 层。
+
+### 卸载
+
+```sh
+dsh plugin --profile <profile> remove dsh-folder-path
+```
+
+删除后重启宿主一次。
 
 ## 兼容性
 
-已在 **DSH 0.2.1-rc.2**（npm `@deepseek-ai/dsh` 0.2.1-rc.2）上逐项核对过：安装、组合、宿主路由与浏览器半边都照旧可用。
+本包声明的兼容区间是 `engines.dsh: ^0.2.1-rc.2 || ^0.2.2-alpha.2`（Node.js `>=24`）。
+已在 **DSH 0.2.1-rc.2**（npm `@deepseek-ai/dsh` 0.2.1-rc.2）上逐项核对过安装、组合、宿主路由与浏览器半边；
+内核接口一旦变化，最坏结果是插件不再接管粘贴、行为退回原版，而不会破坏原有的粘贴/上传链路。
 本插件只用到内核的这几处：
 
 | 内核接口 | 用途 |

@@ -19,24 +19,47 @@ The clipboard, however, is process-wide: on the machine running the host, it hol
 list you just copied. So the **host half** reads the platform clipboard's file list — CF_HDROP on
 Windows, NSPasteboard file URLs on macOS — and hands the real absolute paths back to the browser half.
 
+## Requirements
+
+Windows (the clipboard is read through PowerShell 5.1 `System.Windows.Forms`) or macOS (system
+`osascript`). Other platforms answer `unsupported-platform` and stock paste behaviour applies.
+
 ## Install
 
 ```sh
-dsh plugin --profile web add C:\code\dsh-folder-path    # from a checkout
-# dsh plugin --profile web add dsh-folder-path                    # once published
+dsh plugin --profile <profile> add dsh-folder-path
+```
+
+Replace `<profile>` with the target profile name (for example `desktop` for the desktop app, `web` for `dsh web`).
+
+From a source checkout:
+
+```sh
+git clone https://github.com/CooperZhuang/dsh-plugins-cooper-custom.git
+dsh plugin --profile <profile> add ./dsh-plugins-cooper-custom/packages/dsh-folder-path
 ```
 
 Then refresh the page. Since Desktop Beta 2.0.18-beta.1 (core 0.2.1-rc.2) a newly added bundle row
 is usually hot-mounted, so the host needs no restart; **earlier versions require restarting
 `dsh web`**. Restarting once is always safe when in doubt.
 
-Check it mounted: `dsh --profile web --dump-config` should show a `# == dsh-folder-path` layer.
+Check it mounted: `dsh --profile <profile> --dump-config` should show a `# == dsh-folder-path` layer.
+
+### Uninstall
+
+```sh
+dsh plugin --profile <profile> remove dsh-folder-path
+```
+
+Restart the host once afterwards.
 
 ## Compatibility
 
-Checked item by item against **DSH 0.2.1-rc.2** (npm `@deepseek-ai/dsh` 0.2.1-rc.2): installing,
-composing, the host route and the browser half all work as before. The plugin touches exactly this
-much of the kernel:
+This package declares `engines.dsh: ^0.2.1-rc.2 || ^0.2.2-alpha.2` and Node.js `>=24`. It was checked
+item by item against **DSH 0.2.1-rc.2** (npm `@deepseek-ai/dsh` 0.2.1-rc.2): installing, composing,
+the host route and the browser half all work as before. If a kernel interface changes, the worst case is
+that the plugin stops taking over folder pastes and behaviour falls back to stock — the original
+paste/upload path is never broken. The plugin touches exactly this much of the kernel:
 
 | Kernel interface | Used for |
 |---|---|
