@@ -9,6 +9,7 @@
  *   POST /dsh-open-in-dsh/api/v1/open        a launcher hands over one folder path
  *   GET  /dsh-open-in-dsh/api/v1/events      the page follows requests over SSE
  *   POST /dsh-open-in-dsh/api/v1/open-with   a right-click action opens a file or directory in a whitelisted app
+ *   POST /dsh-open-in-dsh/api/v1/open-session a Session-scoped entry opens that Session's cwd (resolved from its header)
  *   GET  /dsh-open-in-dsh/api/v1/apps        which whitelisted apps this platform can actually launch
  *
  * On macOS the same open route is also served on a Unix domain socket
@@ -37,11 +38,12 @@
  * @module dsh-open-in-dsh
  */
 import { execFile } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, statSync, unlinkSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import z from '@deepseek-ai/schemastery'
+import { dshHome, encodeSegment, readSessionHeader } from 'dsh-session-store'
 
 /** Cordis plugin name; the profile row's `id` is independent of it. */
 export const name = 'open-in-dsh'
@@ -131,6 +133,18 @@ export const ROUTE_OPEN_WITH = '/dsh-open-in-dsh/api/v1/open-with'
  */
 export const ROUTE_APPS = '/dsh-open-in-dsh/api/v1/apps'
 
+/**
+ * The Session-scoped entries (the Conversation header button and the sidebar
+ * row menu) know a session id, never a directory: the browser half has the
+ * Session projection, not the stored header. This route is where the Host
+ * turns "session X" into "directory D" and launches D.
+ *
+ * The browser still only names an allowlisted app id plus a session id; the
+ * path never crosses the wire, so a forged request cannot open an arbitrary
+ * directory through this route.
+ */
+export const ROUTE_OPEN_SESSION = '/dsh-open-in-dsh/api/v1/open-session'
+
 /** How long an unanswered request stays replayable for a page that was closed. */
 const DEFAULT_BACKLOG_TTL_MS = 60_000
 
@@ -180,6 +194,9 @@ const DARWIN_APP_DIRS = Object.freeze(['/Applications', join(homedir(), 'Applica
 
 /** One path longer than this did not come from a right-click. */
 const MAX_PATH_LENGTH = 4096
+
+/** A Session id is one store-key segment; longer than this is not one. */
+const MAX_SESSION_ID_LENGTH = 256
 
 /** How long one launch may take before it is reported as failed. */
 const LAUNCH_TIMEOUT_MS = 10_000
@@ -306,6 +323,18 @@ export function apply(ctx, rawConfig = {}) {
           handler: createOpenWithHandler(ctx, allowNonLoopback),
         }),
       'dsh-open-in-dsh: open-with route',
+    )
+    host.effect(
+      () =>
+        host.webServer.register({
+          kind: 'exact',
+          path: ROUTE_OPEN_SESSION,
+          handler: createOpenSessionHandler(ctx, allowNonLoopback, {
+            resolveCwd: (sessionId) =>
+              resolveSessionCwd(sessionId, { live: createLiveCwdReader(ctx) }),
+          }),
+        }),
+      'dsh-open-in-dsh: open-session route',
     )
     // macOS 的交接通道：同一个 open handler，第二个传输层。
     host.effect(
@@ -776,6 +805,225 @@ export function createOpenWithHandler(ctx, allowNonLoopback = false, deps = {}) 
     }
     ctx.logger?.info?.('dsh-open-in-dsh: opened %s with %s', target.path, app)
     sendJson(response, 200, { ok: true, app, path: target.path, directory: target.directory })
+  }
+}
+
+/**
+ * Read a Session's cwd from the Host's in-memory projections, when one is live.
+ *
+ * Two in-memory sources, both authoritative while the Host runs:
+ *   - `workspaceRegistry.headers` — the header cache behind the sidebar's
+ *     Workspace membership;
+ *   - the resident Session object — the same header tools and the UI parse a
+ *     cwd from.
+ *
+ * Everything here is best-effort: a missing service, a service that throws, or
+ * a composition without either simply falls through to the stored header
+ * ({@link resolveSessionCwd}), which is the disk truth anyway.
+ *
+ * @param ctx - host plugin context.
+ * @returns a reader: session id -> cwd, or undefined when nothing is cached.
+ */
+export function createLiveCwdReader(ctx) {
+  const serviceOf = (key) => {
+    try {
+      return typeof ctx?.get === 'function' ? ctx.get(key) : undefined
+    } catch {
+      return undefined
+    }
+  }
+  const clean = (value) => (typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined)
+  return (sessionId) => {
+    try {
+      const cached = serviceOf('workspaceRegistry')?.headers?.get?.(sessionId)
+      const cwd = clean(cached?.cwd)
+      if (cwd !== undefined) return cwd
+    } catch {}
+    try {
+      const sessions = serviceOf('sessions')
+      const entity = typeof sessions?.get === 'function' ? sessions.get(sessionId) : undefined
+      const fromEntity = clean(entity?.header?.cwd)
+      if (fromEntity !== undefined) return fromEntity
+      const rows = typeof sessions?.list === 'function' ? sessions.list() : []
+      const row = Array.isArray(rows) ? rows.find((entry) => entry?.id === sessionId) : undefined
+      return clean(row?.cwd)
+    } catch {
+      return undefined
+    }
+  }
+}
+
+/**
+ * Read a Session's cwd out of the session store on disk.
+ *
+ * The store is keyed by project directory, so an id alone does not name a
+ * path: every project key is probed for `<root>/<projectKey>/<encodeSegment(id)>`
+ * and the first header carrying a cwd wins. `encodeSegment` and
+ * `readSessionHeader` come from `dsh-session-store`, the same header/frame
+ * reader `dsh-session-toolbox` uses, so a storage-format change cannot make
+ * the two plugins disagree.
+ *
+ * @param sessionId - the Session id the browser sent.
+ * @param deps - root/readdir/reader overrides, for tests.
+ * @returns the stored cwd, or undefined when no header carries one.
+ */
+export function findSessionCwdOnDisk(sessionId, deps = {}) {
+  const root = deps.sessionsRoot ?? join(deps.home ?? dshHome(), 'sessions')
+  const readdir = deps.readdir ?? readdirSync
+  const readHeader = deps.readSessionHeader ?? readSessionHeader
+  let segment
+  try {
+    segment = encodeSegment(sessionId)
+  } catch {
+    return undefined
+  }
+  let projects
+  try {
+    projects = readdir(root, { withFileTypes: true })
+  } catch {
+    return undefined
+  }
+  for (const project of projects) {
+    if (project?.isDirectory?.() !== true) continue
+    let header
+    try {
+      header = readHeader(join(root, project.name, segment))
+    } catch {
+      continue
+    }
+    const cwd = typeof header?.cwd === 'string' ? header.cwd.trim() : ''
+    if (cwd !== '') return cwd
+  }
+  return undefined
+}
+
+/**
+ * Resolve one Session id to its project directory: live projections first,
+ * stored header second.
+ * @param sessionId - the Session id.
+ * @param deps - `{live}` plus {@link findSessionCwdOnDisk}'s overrides.
+ * @returns the cwd, or undefined when this Host cannot name one.
+ */
+export function resolveSessionCwd(sessionId, deps = {}) {
+  if (typeof deps.live === 'function') {
+    let live
+    try {
+      live = deps.live(sessionId)
+    } catch {
+      live = undefined
+    }
+    if (typeof live === 'string' && live.trim() !== '') return live.trim()
+  }
+  return findSessionCwdOnDisk(sessionId, deps)
+}
+
+/**
+ * Build the Session-scoped launch route: resolve a session id to its cwd, then
+ * spawn the same allowlisted argv the open-with route uses.
+ *
+ * The request names an app id and a session id only. The directory never
+ * crosses the wire, so a forged request cannot turn this route into "open any
+ * path" — the worst it can do is open a directory the Host itself resolved.
+ *
+ * @param ctx - host plugin context, for logs.
+ * @param allowNonLoopback - whether a non-loopback peer may launch.
+ * @param deps - platform/stat/exec/resolver overrides, for tests.
+ * @returns the exact-route handler.
+ */
+export function createOpenSessionHandler(ctx, allowNonLoopback = false, deps = {}) {
+  const platform = deps.platform ?? process.platform
+  const stat = deps.stat ?? statSync
+  const exec = deps.exec ?? execFile
+  const resolveCwd =
+    typeof deps.resolveCwd === 'function' ? deps.resolveCwd : (sessionId) => resolveSessionCwd(sessionId)
+  return async (request, response) => {
+    if (request.method !== 'POST') {
+      sendJson(response, 405, { ok: false, reason: 'method-not-allowed' }, { allow: 'POST' })
+      return
+    }
+    if (!sameOrigin(request)) {
+      sendJson(response, 403, { ok: false, reason: 'cross-origin' })
+      return
+    }
+    if (!allowNonLoopback && !isLoopback(request)) {
+      sendJson(response, 403, { ok: false, reason: 'remote-not-supported' })
+      return
+    }
+
+    let body
+    try {
+      body = await readJsonBody(request)
+    } catch (error) {
+      sendJson(response, 400, { ok: false, reason: 'bad-request', message: messageOf(error) })
+      return
+    }
+
+    const app = typeof body?.app === 'string' ? body.app.trim() : ''
+    if (findOpenWithApp(platform, app) === undefined) {
+      sendJson(response, 400, { ok: false, reason: 'unknown-app', app, platform })
+      return
+    }
+
+    const claimed = typeof body?.sessionId === 'string' ? body.sessionId.trim() : ''
+    if (claimed === '') {
+      sendJson(response, 400, { ok: false, reason: 'missing-session-id' })
+      return
+    }
+    // A session id is a single path segment; these bounds keep a forged one
+    // from turning the store probe into a directory walk.
+    if (claimed.length > MAX_SESSION_ID_LENGTH || claimed.includes(String.fromCharCode(0)) || claimed.includes('/') || claimed.includes('\\')) {
+      sendJson(response, 400, { ok: false, reason: 'invalid-session-id' })
+      return
+    }
+
+    let cwd
+    try {
+      cwd = resolveCwd(claimed)
+    } catch (error) {
+      ctx.logger?.warn?.('dsh-open-in-dsh: session cwd lookup failed for %s: %s', claimed, messageOf(error))
+      sendJson(response, 500, { ok: false, reason: 'session-lookup-failed', message: messageOf(error) })
+      return
+    }
+    if (typeof cwd !== 'string' || cwd.trim() === '') {
+      sendJson(response, 404, { ok: false, reason: 'session-cwd-not-found', sessionId: claimed })
+      return
+    }
+
+    const target = existingPath(cwd, stat)
+    // A stored header can outlive its directory (a folder renamed behind DSH's
+    // back). That is still "this Session's cwd cannot be opened", not a bad
+    // request: the caller sent a perfectly valid session id.
+    if (target === null || target.directory !== true) {
+      sendJson(response, 404, { ok: false, reason: 'session-cwd-not-found', sessionId: claimed, cwd: cwd.trim() })
+      return
+    }
+
+    const command = openWithCommand(platform, app, { path: target.path, directory: true })
+    if (command === null) {
+      sendJson(response, 400, { ok: false, reason: 'unknown-app', app, platform })
+      return
+    }
+    try {
+      await runCommand(command, exec)
+    } catch (error) {
+      ctx.logger?.warn?.(
+        'dsh-open-in-dsh: open-session %s failed on %s: %s',
+        app,
+        target.path,
+        messageOf(error),
+      )
+      sendJson(response, 500, {
+        ok: false,
+        reason: 'launch-failed',
+        app,
+        sessionId: claimed,
+        path: target.path,
+        message: messageOf(error),
+      })
+      return
+    }
+    ctx.logger?.info?.('dsh-open-in-dsh: opened session %s cwd %s with %s', claimed, target.path, app)
+    sendJson(response, 200, { ok: true, app, sessionId: claimed, path: target.path, directory: true })
   }
 }
 

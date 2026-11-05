@@ -129,6 +129,18 @@ function mount(options = {}) {
       create: async () => 'session-2',
     },
     workspaces: { create: async () => ({ workspaceId: 'workspace-1' }) },
+    // The three Session-scoped entries are registered on slot declarations;
+    // this file only checks the context menus, so the registrations are
+    // recorded and otherwise ignored.
+    slots: {
+      inject(_key, callback) {
+        const disposer = callback()
+        return typeof disposer === 'function' ? disposer : () => {}
+      },
+      register() {
+        return () => {}
+      },
+    },
   }
   exports.apply(ctx)
   return { id, exports, contributions, dictionaries, sessions }
@@ -166,9 +178,13 @@ test('apply contributes one menu per target family and registers the labels', as
   await withMounted({}, hostFetch([], []), (mounted) => {
     assert.deepEqual(
       mounted.contributions.map((entry) => entry.target + ':' + entry.id).sort(),
-      ['directory:open-with.directory', 'file:open-with.file'],
+      ['directory:open-with.directory', 'file:open-with.file', 'session:open-with.session'],
     )
-    for (const entry of mounted.contributions) assert.equal(entry.order, 200)
+    // The file/directory menus keep their shared order; the Session row sits
+    // below the workspace plugin's own rows.
+    for (const entry of mounted.contributions) {
+      assert.equal(entry.order, entry.target === 'session' ? 510 : 200)
+    }
 
     const dictionaries = mounted.dictionaries['dsh-open-in-dsh']
     assert.equal(dictionaries.zh['menu.qspace'], '用 QSpace Pro 打开')

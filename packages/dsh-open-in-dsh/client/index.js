@@ -54,6 +54,16 @@ const ROUTE_OPEN_WITH = '/dsh-open-in-dsh/api/v1/open-with'
 const ROUTE_APPS = '/dsh-open-in-dsh/api/v1/apps'
 
 /**
+ * The Host's Session route; carried by hand in lib/index.js.
+ *
+ * The two Session-scoped entries (the Conversation header button and the
+ * sidebar row menu) only ever know a session id. This route is where the Host
+ * turns that id into a directory, so the browser half never guesses a cwd and
+ * never sends one.
+ */
+const ROUTE_OPEN_SESSION = '/dsh-open-in-dsh/api/v1/open-session'
+
+/**
  * Menu order. The Host reports the subset this platform can launch; this list
  * decides how the actions stack when it reports several.
  */
@@ -81,6 +91,143 @@ function resolveWorkspacePath(cwd, path) {
   if (typeof cwd !== 'string' || cwd === '') return null
   const separator = cwd.includes('\\') ? '\\' : '/'
   return cwd.replace(/[/\\]+$/, '') + separator + path.replace(/^(?:\.?[/\\])+/, '')
+}
+
+/**
+ * The directory that contains a file, in either path spelling.
+ *
+ * A document preview only knows the file it is showing, and an application
+ * launched with `open -a` on a file runs the file rather than showing its
+ * folder. The containing directory is therefore what the action opens.
+ *
+ * @param path - absolute or relative file path.
+ * @returns the containing directory, or null when there is none to name.
+ */
+function parentDirectory(path) {
+  if (typeof path !== 'string') return null
+  const text = path.trim().replace(/[/\\]+$/, '')
+  if (text === '') return null
+  const cut = Math.max(text.lastIndexOf('/'), text.lastIndexOf('\\'))
+  if (cut < 0) return null
+  // '/a.md' belongs to '/', not to ''.
+  if (cut === 0) return text.slice(0, 1)
+  const head = text.slice(0, cut)
+  // 'C:\a.md' belongs to 'C:\', not to 'C:'.
+  if (/^[A-Za-z]:$/.test(head)) return head + '\\'
+  return head
+}
+
+/**
+ * Read one external module the way the Client module table offers it.
+ *
+ * The bundle is loaded by `window.__ModuleLoader__`, whose `require` resolves
+ * the platform seed ('react' among them). Nothing is installed for this: the
+ * plugin declares no React dependency, and a composition whose seed cannot
+ * answer simply gets no rendered controls instead of a bundle that fails to
+ * load.
+ *
+ * @param require - the loader-provided require.
+ * @param id - the module id to read.
+ * @returns the module, or null when it is unavailable.
+ */
+function tryRequire(require, id) {
+  try {
+    const value = typeof require === 'function' ? require(id) : null
+    return value === null || value === undefined ? null : value
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Read the injected availability hook. A composition that did not bind it (a
+ * slot rendered outside this plugin's inject face) hides the control instead
+ * of crashing the entry.
+ * @param props - slot props.
+ * @returns true when QSpace can be launched here.
+ */
+function readAvailability(props) {
+  if (typeof props.useQspaceAvailable !== 'function') return false
+  return props.useQspaceAvailable((value) => value) === true
+}
+
+/** The element factory a usable React ships; null when the seed has none. */
+function elementFactory(React) {
+  return React !== null && typeof React.createElement === 'function' ? React.createElement : null
+}
+
+/** Shared look for the two buttons; DSH theme variables only, no stylesheet. */
+const QSPACE_BUTTON_STYLE = Object.freeze({
+  display: 'inline-flex',
+  alignItems: 'center',
+  flex: 'none',
+  height: '22px',
+  padding: '0 6px',
+  font: 'inherit',
+  fontSize: '11px',
+  lineHeight: '16px',
+  color: 'var(--dsw-alias-label-secondary)',
+  background: 'transparent',
+  border: '0.5px solid var(--dsw-alias-border-l4)',
+  borderRadius: 'var(--dsw-radius-sm, 4px)',
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+})
+
+/**
+ * Page-lifetime "is QSpace installed" answer, bound as a slot hook.
+ *
+ * The Host probes the bundle once per process life, so this store asks at most
+ * once: a failed answer is left unresolved and retried by the next mount,
+ * because one lost request must not hide the control for the whole page.
+ *
+ * @param read - the availability reader (see `createAppsReader`).
+ * @returns an observable source for `inject({ hooks: { qspaceAvailable } })`.
+ */
+function createAvailability(read) {
+  let state = null
+  let loading = null
+  const listeners = new Set()
+  const publish = (next) => {
+    if (next === state) return
+    state = next
+    for (const listener of [...listeners]) {
+      try {
+        listener()
+      } catch {
+        // A throwing subscriber is a renderer problem, not an availability one.
+      }
+    }
+  }
+  const refresh = () => {
+    if (state !== null) return loading ?? Promise.resolve()
+    if (loading === null) {
+      loading = Promise.resolve()
+        .then(read)
+        .then((ids) => {
+          if (Array.isArray(ids)) publish(ids.includes('qspace'))
+        })
+        .catch(() => {})
+        .finally(() => {
+          loading = null
+        })
+    }
+    return loading
+  }
+  return {
+    getSnapshot: () => state === true,
+    subscribe(listener) {
+      listeners.add(listener)
+      refresh()
+      return () => {
+        listeners.delete(listener)
+      }
+    },
+    refresh,
+    close() {
+      listeners.clear()
+    },
+  }
 }
 
 /**
@@ -140,14 +287,119 @@ function createMenuActions(options) {
   }))
 }
 
+/**
+ * Build the document-preview action: "open the folder that holds this file in
+ * QSpace".
+ *
+ * The component is a plain function of its slot props, with no state of its
+ * own: QSpace availability arrives as an injected hook (a snapshot source), so
+ * a render never starts a request, and a Host that cannot launch QSpace never
+ * shows the control at all.
+ *
+ * @param React - the seed React module (`require('react')`).
+ * @param deps - `{openWith, fail}`: the Host launcher and the failure toast.
+ * @returns the slot component for `sidebar.right.tab.document.actions`.
+ */
+function createDocumentAction(React, deps) {
+  const h = elementFactory(React)
+  /**
+   * @param props - slot props: `absolutePath`, `useQspaceAvailable`, `t`.
+   * @returns the action button, or null when there is nothing to open.
+   */
+  function QspaceDocumentAction(props) {
+    if (h === null) return null
+    const available = readAvailability(props)
+    const path = typeof props.absolutePath === 'string' ? props.absolutePath : ''
+    if (available !== true || path === '') return null
+    const directory = parentDirectory(path)
+    if (directory === null) return null
+    const label = props.t('menu.qspaceDocument')
+    return h(
+      'button',
+      {
+        type: 'button',
+        'data-dsh-open-in-dsh': 'document',
+        // The title says which folder, because the label has to stay short.
+        title: directory,
+        'aria-label': label,
+        style: QSPACE_BUTTON_STYLE,
+        onClick: () => {
+          Promise.resolve()
+            .then(() => deps.openWith('qspace', directory))
+            .catch(() => deps.fail())
+        },
+      },
+      label,
+    )
+  }
+  return QspaceDocumentAction
+}
+
+/**
+ * Build the Conversation-header button: "open this Session's working directory
+ * in QSpace".
+ *
+ * The session id is a strict Session-slot prop; the directory is the Host's
+ * business (`POST .../open-session`), so this half never guesses a cwd.
+ *
+ * @param React - the seed React module.
+ * @param deps - `{openSession, fail}`: the Host launcher and the failure toast.
+ * @returns the slot component for `conversation.session.header.actions`.
+ */
+function createHeaderAction(React, deps) {
+  const h = elementFactory(React)
+  /**
+   * @param props - slot props: `sessionId`, `useQspaceAvailable`, `t`.
+   * @returns the button, or null when QSpace is not launchable here.
+   */
+  function QspaceSessionHeaderAction(props) {
+    if (h === null) return null
+    const available = readAvailability(props)
+    const sessionId = typeof props.sessionId === 'string' ? props.sessionId : ''
+    if (available !== true || sessionId === '') return null
+    const label = props.t('menu.qspaceSession')
+    return h(
+      'button',
+      {
+        type: 'button',
+        'data-dsh-open-in-dsh': 'session-header',
+        title: label,
+        'aria-label': label,
+        style: QSPACE_BUTTON_STYLE,
+        onClick: () => {
+          Promise.resolve()
+            .then(() => deps.openSession('qspace', sessionId))
+            .catch(() => deps.fail())
+        },
+      },
+      props.t('menu.sessionHeader'),
+    )
+  }
+  return QspaceSessionHeaderAction
+}
+
 /** Test and troubleshooting surface; not part of the plugin API. */
-const __internals = { appIdsFrom, createMenuActions, resolveWorkspacePath, isAbsolutePath, MENU_APP_ORDER }
+const __internals = {
+  appIdsFrom,
+  createMenuActions,
+  resolveWorkspacePath,
+  isAbsolutePath,
+  parentDirectory,
+  createAvailability,
+  createDocumentAction,
+  createHeaderAction,
+  MENU_APP_ORDER,
+}
 
 /**
  * Build the browser plugin.
+ * @param require - the Client module table's require, for the platform seed
+ *   React the two rendered controls are built with (no dependency is added for
+ *   it; a composition without the seed simply renders no controls).
  * @returns the Cordis plugin export (`inject` + `apply`).
  */
-function createPlugin() {
+function createPlugin(require) {
+  const React = tryRequire(require, 'react')
   /** Hand-mirrored in `lib/index.js`; the two halves cannot import each other. */
   const EVENTS_PATH = '/dsh-open-in-dsh/api/v1/events'
 
@@ -284,6 +536,125 @@ function createPlugin() {
       'dsh-open-in-dsh: directory menu',
     )
 
+    /** One QSpace availability answer per page, shared by the rendered controls. */
+    const qspace = createAvailability(apps)
+    ctx.effect(() => () => qspace.close(), 'dsh-open-in-dsh: qspace availability')
+
+    /** The failure toast; the same string the menu actions use as `failureLabel`. */
+    const notifyFailure = () => {
+      try {
+        ctx.contextMenus.notify(t('menu.failed'))
+      } catch {
+        // No menu overlay in this composition; the rejection is already logged.
+      }
+    }
+
+    /**
+     * Ask the Host to open one Session's working directory.
+     *
+     * The session id is all this half sends: the Host owns the id-to-cwd
+     * resolution so the browser never invents a path for a Session it is not
+     * currently showing.
+     *
+     * @param app - allowlisted app id.
+     * @param sessionId - the Session to open.
+     * @returns completion; rejects when the Host has no cwd or cannot launch.
+     */
+    const openSession = async (app, sessionId) => {
+      const response = await fetch(ROUTE_OPEN_SESSION, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sessionId: sessionId, app: app }),
+      })
+      let payload = null
+      try {
+        payload = await response.json()
+      } catch {
+        payload = null
+      }
+      if (!response.ok || payload === null || payload.ok !== true) {
+        const reason = payload !== null && typeof payload.reason === 'string' ? payload.reason : 'http-' + String(response.status)
+        throw new Error('dsh-open-in-dsh: open-session ' + app + ' failed (' + reason + ')')
+      }
+    }
+
+    /**
+     * Resolve the Session row menu's contribution.
+     *
+     * Nothing is offered when QSpace cannot be launched; a Session the Client
+     * knows no cwd for still gets a row, disabled with the reason, because a
+     * disappearing item reads as a broken menu.
+     *
+     * @param target - the menu target value: `{sessionId, displayTitle}`.
+     * @param signal - the provider's cancellation signal.
+     * @returns the action array; empty when there is nothing to offer.
+     */
+    const resolveSessionActions = async (target, signal) => {
+      const sessionId =
+        target !== null && typeof target === 'object' && typeof target.sessionId === 'string' ? target.sessionId : ''
+      if (sessionId === '') return []
+      const ids = await apps()
+      if (signal?.aborted) return []
+      if (!ids.includes('qspace')) return []
+      const cwd = ctx.sessions.list.getSnapshot().byId[sessionId]?.cwd
+      if (typeof cwd !== 'string' || cwd === '') {
+        return [{ id: 'qspace', label: t('menu.sessionNoCwd'), disabled: true }]
+      }
+      return [
+        {
+          id: 'qspace',
+          label: t('menu.qspaceSession'),
+          failureLabel: t('menu.failed'),
+          run: () => openSession('qspace', sessionId),
+        },
+      ]
+    }
+
+    ctx.effect(
+      () =>
+        ctx.contextMenus.register({
+          id: 'open-with.session',
+          target: 'session',
+          // Below the workspace plugin's own rows, above its footer actions.
+          order: 510,
+          // A Session's cwd and the active locale both decide what this row
+          // says, so a row already on screen must not keep a stale answer.
+          observe: () => [ctx.sessions.list, ctx.locale],
+          resolve: resolveSessionActions,
+        }),
+      'dsh-open-in-dsh: session menu',
+    )
+
+    // The two rendered entries. `slots.inject` waits for the declaration, so a
+    // composition without the document preview or the Conversation header
+    // simply never asks for them.
+    const documentAction = createDocumentAction(React, { openWith: launch, fail: notifyFailure })
+    const headerAction = createHeaderAction(React, { openSession: openSession, fail: notifyFailure })
+    ctx.slots.inject('sidebar.right.tab.document.actions', () =>
+      ctx.slots.register(
+        {
+          name: 'sidebar.right.tab.document.actions',
+          id: 'open-with.qspace',
+          order: 10,
+          locale: NS,
+          inject: () => ({ hooks: { qspaceAvailable: qspace } }),
+        },
+        documentAction,
+      ),
+    )
+    ctx.slots.inject('conversation.session.header.actions', () =>
+      ctx.slots.register(
+        {
+          name: 'conversation.session.header.actions',
+          id: 'open-with.qspace',
+          order: 10,
+          locale: NS,
+          inject: () => ({ hooks: { qspaceAvailable: qspace } }),
+        },
+        headerAction,
+      ),
+    )
+
     /**
      * Apply one announced folder.
      *
@@ -377,5 +748,5 @@ function createPlugin() {
     }
   }
 
-  return { inject: ['workspaces', 'sessions', 'contextMenus', 'locale'], apply }
+  return { inject: ['workspaces', 'sessions', 'contextMenus', 'locale', 'slots'], apply }
 }

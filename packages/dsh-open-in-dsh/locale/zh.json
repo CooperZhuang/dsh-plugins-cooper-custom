@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "通过 DSH 打开",
-    "description": "在文件管理器里右键文件夹，直接作为 DSH 工作区打开；文件/目录右键菜单也提供「用 QSpace 等打开」。",
+    "description": "在文件管理器里右键文件夹，直接作为 DSH 工作区打开；文件/目录右键菜单也提供「用 QSpace 等打开」。会话头、会话菜单与文档预览另有「用 QSpace 打开」。",
     "detail": "docs/DETAIL.zh.md"
   },
   "menu": {
@@ -11,6 +11,10 @@
     "warp": "用 Warp 打开",
     "terminal": "在终端中打开",
     "explorer": "在资源管理器中显示",
+    "qspaceDocument": "用 QSpace 打开所在目录",
+    "qspaceSession": "用 QSpace 打开工作目录",
+    "sessionHeader": "QSpace 打开",
+    "sessionNoCwd": "会话没有工作目录",
     "failed": "无法打开，请重试"
   }
 }

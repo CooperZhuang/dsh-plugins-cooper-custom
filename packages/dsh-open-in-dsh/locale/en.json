@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "Open with DSH",
-    "description": "Open a folder from the file manager as a DSH workspace; file/directory context menus also offer open-with actions (QSpace, Finder, VS Code, …).",
+    "description": "Open a folder from the file manager as a DSH workspace; file/directory context menus also offer open-with actions (QSpace, Finder, VS Code, …). The Session header, Session menu and document preview add their own QSpace actions.",
     "detail": "docs/DETAIL.md"
   },
   "menu": {
@@ -11,6 +11,10 @@
     "warp": "Open in Warp",
     "terminal": "Open in Terminal",
     "explorer": "Show in Explorer",
+    "qspaceDocument": "Open folder in QSpace",
+    "qspaceSession": "Open workspace folder in QSpace",
+    "sessionHeader": "Open in QSpace",
+    "sessionNoCwd": "No workspace folder",
     "failed": "Could not open. Try again."
   }
 }
