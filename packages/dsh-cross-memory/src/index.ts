@@ -2859,7 +2859,9 @@ export class MemoriesRuntime {
       const proposed = await this.runConsolidationPass(parent, entries, root)
       if (proposed === undefined) {
         this.state.deleteJob(CONSOLIDATE_JOB)
-        this.consolidateSkip = 'the pass produced no plan; the warn line above names the reason'
+        // `onSkip` records the concrete reason; this is the fallback for a
+        // route that declined before it could name one.
+        this.consolidateSkip ??= 'the pass produced no plan'
         return undefined
       }
       // A scope is where a memory is injected from, so it is not something a pass
@@ -2970,6 +2972,9 @@ export class MemoriesRuntime {
       })
       this.noteLimitRefusal(error)
       this.log.warn('dsh-cross-memory: consolidation failed for session %s: %s', parent.session.id, message)
+      // The command reports `consolidateSkipReason`; without this the failure
+      // surfaced as "Nothing to consolidate: unknown reason".
+      this.consolidateSkip = `the pass failed: ${message}`
       return undefined
     }
   }
@@ -3407,6 +3412,15 @@ export class MemoriesRuntime {
       // extraction pass already uses: a plan for a full page of memories is the
       // same size of answer as a page of drafts.
       maxOutputTokens: this.settings.extractMaxOutputTokens,
+      // A pass that returns no plan is a normal outcome, but a silent one is
+      // not: without this the command reported a stale sentence about a "warn
+      // line above" that no code ever wrote, and the child's real ending (a
+      // failed structured-output capture, an empty answer, an unusable reply)
+      // was lost. The reason goes into the log AND into the command's report.
+      onSkip: (reason: string) => {
+        this.consolidateSkip = reason
+        this.log.warn('dsh-cross-memory: the consolidation pass produced no plan: %s', reason)
+      },
       signal: this.lifecycle.signal,
     }
     const seam = this.subagents
@@ -4524,7 +4538,7 @@ async function handleCommand(runtime: MemoriesRuntime, invocation: CommandInvoca
       const summary = await runtime.consolidateNow(invocation.agent, { apply: false, force: true })
       // The old fallback listed three causes and named the real one only by luck;
       // every silent path now records why it declined.
-      return { kind: 'success', text: summary ?? `Nothing to consolidate: ${runtime.consolidateSkipReason ?? 'unknown reason'}` }
+      return { kind: 'success', text: summary ?? `No consolidation plan was produced: ${runtime.consolidateSkipReason ?? 'unknown reason'}` }
     }
     case 'plan': {
       const pending = await runtime.pendingPlan()

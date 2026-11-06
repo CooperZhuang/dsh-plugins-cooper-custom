@@ -12,10 +12,11 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { assertObjectJsonSchema } from '@deepseek-ai/dsh-tools'
+import { assertObjectJsonSchema, validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
 import {
   CONSOLIDATE_DENY_TOOLS,
   CONSOLIDATE_JSON_SCHEMA,
+  CONSOLIDATE_SYSTEM,
   clearPendingPlan,
   classifyPlan,
   denyToolsFor,
@@ -30,7 +31,7 @@ import {
   runConsolidationDirect,
   writePendingPlan,
 } from '../consolidate.js'
-import type { ConsolidationPlan, ConsolidationTarget, SubagentSeam } from '../consolidate.js'
+import type { ConsolidateRequest, ConsolidationPlan, ConsolidationTarget, SubagentSeam } from '../consolidate.js'
 import type { MemoryDraft, MemoryEntry, MemoryScope } from '../types.js'
 import type { LlmRuntime } from '@deepseek-ai/dsh-llm'
 
@@ -478,4 +479,105 @@ test('an existing memory is pinned to its own scope; only new memories choose on
   const twinsResult = pinExistingScopes(twinPlan, twins)
   assert.equal(twinsResult.pinned.length, 0, 'naming the copy it lives in is not a move')
   assert.equal(twinsResult.plan.upserts[0]?.scope, 'project')
+})
+
+/** A request for the modern preset seam over two existing entries. */
+function modernRequest(overrides: Partial<ConsolidateRequest> = {}): ConsolidateRequest {
+  return {
+    parent: {} as never,
+    entries: [entry({ id: 'a', title: 'A', body: 'a' }), entry({ id: 'b', title: 'B', body: 'b' })],
+    projectLabel: 'project:x',
+    maxUpserts: 10,
+    denyTools: [...CONSOLIDATE_DENY_TOOLS],
+    agentPreset: 'memories-consolidator',
+    timeoutMs: 5_000,
+    signal: new AbortController().signal,
+    ...overrides,
+  }
+}
+
+test('a plan in the closing text survives the reasoning block in front of it', async () => {
+  // The kernel hands the plugin the child's last assistant message *content*,
+  // reasoning blocks included, and a reasoning model sketches the reply shape
+  // before it answers. Reading every block that carries a `text` field glued
+  // that sketch in front of the plan, the brace slice started inside the sketch,
+  // the parse threw, and the pass reported "no plan" while the child had in
+  // fact returned one (2026-11-06, /memories consolidate).
+  const replyText = JSON.stringify({
+    memories: [{ id: 'a', scope: 'global', kind: 'fact', title: 'A merged', body: 'a and b merged', tags: [], keys: ['a'], appliesTo: 'when', derivedFrom: ['b'] }],
+    retire: ['b'], skills: [], notes: 'merged A and B', persona: '',
+  })
+  const reasoning = 'The reply shape is {"memories":[...],"retire":[...]}, so ids must exist. Merge A and B.'
+  const seam: SubagentSeam = {
+    startActivation: async () => ({
+      // `stopReason` is a string in the kernel; the child never called
+      // structured_output, so the kernel forces 'error'.
+      result: Promise.resolve({ output: [{ type: 'reasoning', text: reasoning }, { type: 'text', text: replyText }], structured: undefined, stopReason: 'error' }),
+    }),
+  }
+  const plan = await runConsolidation(seam, modernRequest())
+  assert.ok(plan !== undefined, 'the plan in the closing text must be recovered')
+  assert.equal(plan.notes, 'merged A and B')
+  assert.deepEqual(plan.retire, ['b'])
+  assert.equal(plan.upserts[0]?.id, 'a')
+  assert.equal(plan.upserts[0]?.keys?.[0], 'a')
+})
+
+test('parsePlan still finds the plan when prose before it quotes JSON', () => {
+  const reply = '{"memories":[{"id":null,"scope":"global","kind":"fact","title":"t","body":"b","tags":[],"keys":[],"appliesTo":"when"}],"retire":[],"skills":[],"notes":"n"}'
+  const plan = parsePlan(`I could answer {"memories":[],"retire":[]} but the plan is:\n${reply}`, new Set(), 10)
+  assert.ok(plan !== undefined)
+  assert.equal(plan.upserts.length, 1)
+  assert.equal(plan.notes, 'n')
+})
+
+test('the output schema accepts every field the prompt template names', () => {
+  // The prompt's reply template is the child's contract. `additionalProperties:
+  // false` plus a field the schema omits makes a prompt-following answer
+  // unparseable by the kernel, which ends the whole child run as an error.
+  // `keys` was that hole: the template asked for it and the schema forbade it.
+  const template = CONSOLIDATE_SYSTEM.split('\n').find((line) => line.startsWith('{"memories"'))
+  if (template === undefined) throw new Error('the prompt must carry the reply template')
+  const named = new Set([...template.matchAll(/"([A-Za-z]+)":/gu)].flatMap((match) => match[1] === undefined ? [] : [match[1]]))
+  const allowed = new Set<string>()
+  const collect = (node: unknown): void => {
+    if (typeof node !== 'object' || node === null) return
+    const record = node as Record<string, unknown>
+    const properties = record['properties']
+    if (typeof properties === 'object' && properties !== null) {
+      for (const [name, sub] of Object.entries(properties)) {
+        allowed.add(name)
+        collect(sub)
+      }
+    }
+    if ('items' in record) collect(record['items'])
+  }
+  collect(CONSOLIDATE_JSON_SCHEMA)
+  for (const name of named) assert.ok(allowed.has(name), `the template names "${name}", the schema must allow it`)
+  // A reply that exercises the whole template — including `keys` — must pass.
+  const reply = {
+    memories: [{ id: null, scope: 'global', kind: 'fact', title: 't', body: 'b', tags: ['x'], keys: ['k'], appliesTo: 'when', durability: 'durable', derivedFrom: [] }],
+    retire: [],
+    skills: [{ name: 'n', description: 'd', steps: ['s'] }],
+    notes: 'n',
+    persona: 'p',
+  }
+  // `assertObjectJsonSchema` narrows the const to the asserted schema type the
+  // validator takes, so the same schema the child is held to is the one checked.
+  assertObjectJsonSchema(CONSOLIDATE_JSON_SCHEMA)
+  assert.deepEqual(validateJsonSchemaValue(CONSOLIDATE_JSON_SCHEMA, reply), [], 'a template-shaped reply must validate')
+})
+
+test('a child that answers without a plan names why the pass stopped', async () => {
+  const reasons: string[] = []
+  const seam: SubagentSeam = {
+    startActivation: async () => ({
+      result: Promise.resolve({ output: [{ type: 'text', text: 'I could not decide.' }], structured: undefined, stopReason: 'error' }),
+    }),
+  }
+  const plan = await runConsolidation(seam, modernRequest({ onSkip: (reason) => reasons.push(reason) }))
+  assert.equal(plan, undefined)
+  assert.equal(reasons.length, 1, 'the no-plan branch must report exactly once')
+  assert.match(reasons[0] ?? '', /carried no plan/u)
+  assert.match(reasons[0] ?? '', /stopReason: error/u, 'the child ending goes into the report')
 })
