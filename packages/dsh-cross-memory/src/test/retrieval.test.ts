@@ -12,7 +12,7 @@
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { suggestAliases, tokenize, termWeight, relevanceOf, relevanceOfOne, searchMemories, FIELD_WEIGHTS, TERM_WEIGHTS } from '../search.js'
+import { ALIAS_FLOOR_SHARE, matchCredit, suggestAliases, tokenize, termWeight, relevanceOf, relevanceOfOne, searchMemories, FIELD_WEIGHTS, TERM_WEIGHTS } from '../search.js'
 import { isSubstantiveTurn, queryMessages } from '../query.js'
 import type { MemoryEntry, MemoryKind } from '../types.js'
 
@@ -176,4 +176,38 @@ test('a query that finds nothing is answered with the aliases the store uses', (
   assert.equal(fallback.length, 3)
   assert.equal(fallback[0]?.matched, 0)
   assert.equal(suggestAliases([{ scope: 'global', label: 'global', entries: [] }], 'x', 5).length, 0)
+})
+
+test('the alias fallback credits one substantive alias term, and only when the entry files it', () => {
+  const floor = 9
+  const aliasFloor = floor * ALIAS_FLOOR_SHARE
+  const base = { id: 'probe', scope: 'global' as const, kind: 'fact' as const, title: '', body: '详情见项目文档。', tags: [] as string[], keys: [] as string[], createdAt: 0, updatedAt: 0, uses: 0, lastUsedAt: 0, lastSurfacedAt: 0, source: 'auto' as const }
+  const credit = (candidate: MemoryEntry, query: string) => ({
+    strict: matchCredit(candidate, query, floor, 2, {}).about,
+    alias: matchCredit(candidate, query, aliasFloor, 1, { fields: ['keys', 'appliesTo'] }).about,
+    relevance: matchCredit(candidate, query, aliasFloor, 1, { fields: ['keys', 'appliesTo'] }).relevance,
+  })
+
+  // The case the fallback exists for: the turn names the memory by its other
+  // name and shares exactly one term, which the two-term gate refuses.
+  const latin = credit({ ...base, title: '本仓是一个 pnpm 工作区', keys: ['monorepo'], appliesTo: '配置 monorepo 工作区时' }, 'monorepo 该怎么配')
+  assert.equal(latin.strict, false)
+  assert.equal(latin.alias, true)
+
+  // And the reason the floor is scaled rather than shared: one CJK alias term
+  // earns 6 here, below the normal 9, so the full floor would have made this
+  // pass fire for English turns and never for Chinese ones.
+  const cjk = credit({ ...base, title: '网关配置说明', keys: ['端口'], appliesTo: '排查端口冲突时' }, '端口被占用')
+  assert.equal(cjk.strict, false)
+  assert.equal(cjk.alias, true)
+  assert.ok(cjk.relevance < floor && cjk.relevance > aliasFloor)
+
+  // One filed field is not enough: the alias has to be recorded in two of them.
+  const keysOnly = credit({ ...base, title: '网关配置说明', keys: ['端口'], appliesTo: '排查冲突时' }, '端口被占用')
+  assert.equal(keysOnly.strict, false)
+  assert.equal(keysOnly.alias, false)
+
+  // A body mention is never an alias: a long memory mentions many things.
+  const bodyOnly = credit({ ...base, title: '读项目约定再动代码', body: '前缀缓存很脆弱，别动它。', appliesTo: '动手之前' }, '前缀缓存会不会被打断')
+  assert.equal(bodyOnly.alias, false)
 })

@@ -222,6 +222,42 @@ test('the delta byte budget bounds one block instead of dropping it', async (t) 
   assert.ok(listed < 8, 'and the budget stopped it short of the whole store')
 })
 
+test('a turn that shares only one alias still recalls, and says how it matched', async (t) => {
+  const { runtime } = await fixture(t)
+  const session = stubSession(process.cwd(), 'monorepo 该怎么配')
+  await runtime.write(session, {
+    scope: 'global',
+    title: '本仓是一个 pnpm 工作区',
+    body: '统一用 pnpm，不要跑 npm install。',
+    tags: [],
+    keys: ['monorepo'],
+    appliesTo: '配置 monorepo 工作区时',
+  }, 'tool')
+  const message = await runtime.recallFor(stubAgent(session))
+  const text = blockText(message)
+  // It fires at all: the two-term gate refused this turn (one shared term), so
+  // without the alias pass this would have been silence.
+  assert.match(text, /pnpm 工作区/u)
+  // And it announces the weaker match, because a one-word hit read as a strong
+  // one is exactly the misreading the annotation exists to prevent.
+  assert.match(text, /按别名/u)
+})
+
+test('a memory the turn only shares body words with is not recalled', async (t) => {
+  const { runtime } = await fixture(t)
+  const session = stubSession(process.cwd(), '前缀缓存会不会被打断')
+  await runtime.write(session, {
+    scope: 'global',
+    title: '读项目约定再动代码',
+    body: '前缀缓存很脆弱，别动它。',
+    tags: [],
+    appliesTo: '动手之前',
+  }, 'tool')
+  // The alias pass must not widen what counts as a match: body words are the
+  // weakest claim in the store and it never reads them.
+  assert.equal(await runtime.recallFor(stubAgent(session)), undefined)
+})
+
 test('a bare acknowledgement does not trigger a store scan', async (t) => {
   const { runtime } = await fixture(t, { recallMinQueryChars: 2 })
   const session = stubSession(process.cwd(), '好')

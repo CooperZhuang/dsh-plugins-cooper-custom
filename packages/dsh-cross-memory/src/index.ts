@@ -38,7 +38,7 @@ import type { MemoriesConfig, MemoriesSettings, ResolvedConfig } from './config.
 import { MemoryStore, projectSlug, slugify } from './storage.js'
 import type { OriginConflict } from './storage.js'
 import { StateStore, importLegacyState, statePath } from './state.js'
-import { browseMemories, EXPAND_SEEDS, hubTerms, matchCredit, prefilterEntries, QUALIFIED_SCORE_FACTOR, relatedHits, searchMemories, suggestAliases } from './search.js'
+import { ALIAS_FLOOR_SHARE, browseMemories, EXPAND_SEEDS, hubTerms, matchCredit, prefilterEntries, QUALIFIED_SCORE_FACTOR, relatedHits, searchMemories, suggestAliases } from './search.js'
 import type { MatchCredit, ScopeEntries } from './search.js'
 import { readFile } from 'node:fs/promises'
 import { isPersonaLocked, readPersona, renderPersonaBlock, writePersona } from './persona.js'
@@ -1359,6 +1359,27 @@ export class MemoriesRuntime {
     // Which words are too common in these scopes to prove anything. Computed
     // once for the turn and cached until the store changes.
     const hub = this.hubFor(states)
+    // Ranked by relevance first, and only then by the decayed score.
+    //
+    // It used to be the other way round, on the theory that recency and the
+    // entry's track record should break ties between equally relevant memories.
+    // A full sort by the decayed score is not a tie-break, though: importance
+    // multiplies by up to 5 and decay spans 4×, so the attention term does not
+    // nudge near-ties, it decides the order. Measured on 150 hand-written turns
+    // against this store (bench/ablate.mjs), sorting the credited candidates by
+    // the decayed score put the turn's own memory first 42% of the time and
+    // inside the four injected slots 75%; sorting by relevance first gives 80%
+    // and 91%. Every decay blend in between was worse than plain relevance, so
+    // the attention model is a tie-break here and nothing more. It still earns
+    // that much: entries the lexical path rates equally are ordered by what this
+    // conversation and recent sessions actually read.
+    //
+    // The seeds for the one-hop expansion are taken after this sort for the same
+    // reason: they used to be whichever three candidates the store listed first.
+    const byStrength = (left: Credited, right: Credited): number => right.relevance - left.relevance
+      || right.score - left.score
+      || right.entry.updatedAt - left.entry.updatedAt
+      || left.entry.title.localeCompare(right.entry.title)
     const eligible: Credited[] = []
     let near: { id: string; relevance: number; terms: number } | undefined
     for (const state of states) {
@@ -1387,6 +1408,61 @@ export class MemoriesRuntime {
       }
     }
     if (eligible.length === 0) {
+      // Alias fallback, before the archive is consulted.
+      //
+      // The strict gate asks for two pieces of evidence, and a turn that names a
+      // memory by its OTHER name often shares only one: 「monorepo 该怎么配」
+      // against an entry filed under `keys: [monorepo]` with
+      // `appliesTo: 配置 monorepo 工作区时` — one substantive term, so the strict
+      // gate refuses it. That single hit is real (`keys` exists to hold exactly
+      // that name) while a single title or body word is not, which is why this
+      // pass scores only `keys` and `appliesTo` and only runs after the strict
+      // gate found nothing. Live aliases beat a retired entry, so this runs
+      // before {@link archivedFor}.
+      const byAlias: Credited[] = []
+      // A scaled floor, not the shared one: see {@link ALIAS_FLOOR_SHARE} for the
+      // measurement. Keeping the full floor here made the pass fire for English
+      // turns and never for Chinese ones.
+      const aliasFloor = this.settings.recallMinScore * ALIAS_FLOOR_SHARE
+      for (const state of states) {
+        for (const entry of prefilterEntries(state.entries, query)) {
+          if (seen.has(entry.id)) continue
+          const why = matchCredit(entry, query, aliasFloor, 1, {
+            range: window ?? null,
+            fields: ['keys', 'appliesTo'],
+            ...hub === undefined ? {} : { hub },
+          })
+          if (why.about) byAlias.push({ entry, ...why })
+        }
+      }
+      if (byAlias.length > 0) {
+        byAlias.sort(byStrength)
+        const aliasPicked: Credited[] = []
+        // Two at most: this block is a widened gate, not a second recall budget.
+        for (const candidate of byAlias) {
+          if (aliasPicked.length >= Math.min(remaining, 2)) break
+          if (renderRecall([...aliasPicked, candidate].map((item) => item.entry), this.settings.recallMaxBytes) === undefined) break
+          aliasPicked.push(candidate)
+        }
+        const rendered = aliasPicked.length === 0
+          ? undefined
+          : renderRecall(aliasPicked.map((item) => item.entry), this.settings.recallMaxBytes)
+        if (rendered !== undefined) {
+          // The block says how these matched. A reader who does not know the
+          // match was on an alias will treat a one-word hit as a strong one.
+          const text = rendered.replace(RECALL_OPEN,
+            `${RECALL_OPEN}\n以下 ${aliasPicked.length} 条按别名（keys/appliesTo）匹配，只与当前提问共享一个词，请按背景参考对待：`)
+          this.recallCounts.set(session, used + aliasPicked.length)
+          await this.markSurfaced(session, aliasPicked.map((item) => item.entry))
+          this.recordInjection(session, aliasPicked.map((item) => item.entry.id))
+          this.log.info('dsh-cross-memory: session %s recalled %s by alias only (single shared term, keys/appliesTo)',
+            session.id, aliasPicked.map((item) => item.entry.id).join(', '))
+          return createUserMessage({
+            content: [{ type: 'text', text }],
+            source: { kind: MEMORY_SOURCE_KIND, form: 'recall' },
+          })
+        }
+      }
       // Nothing live answers this turn. An entry retired by the cap, folded by a
       // rewrite or aged out can still hold the answer, and "we used to say this"
       // costs one line where silence is a miss the reader never learns about.
@@ -1433,27 +1509,6 @@ export class MemoriesRuntime {
       }
       return undefined
     }
-    // Ranked by relevance first, and only then by the decayed score.
-    //
-    // It used to be the other way round, on the theory that recency and the
-    // entry's track record should break ties between equally relevant memories.
-    // A full sort by the decayed score is not a tie-break, though: importance
-    // multiplies by up to 5 and decay spans 4×, so the attention term does not
-    // nudge near-ties, it decides the order. Measured on 150 hand-written turns
-    // against this store (bench/ablate.mjs), sorting the credited candidates by
-    // the decayed score put the turn's own memory first 42% of the time and
-    // inside the four injected slots 75%; sorting by relevance first gives 80%
-    // and 91%. Every decay blend in between was worse than plain relevance, so
-    // the attention model is a tie-break here and nothing more. It still earns
-    // that much: entries the lexical path rates equally are ordered by what this
-    // conversation and recent sessions actually read.
-    //
-    // The seeds for the one-hop expansion are taken after this sort for the same
-    // reason: they used to be whichever three candidates the store listed first.
-    const byStrength = (left: Credited, right: Credited): number => right.relevance - left.relevance
-      || right.score - left.score
-      || right.entry.updatedAt - left.entry.updatedAt
-      || left.entry.title.localeCompare(right.entry.title)
     eligible.sort(byStrength)
     // The one-hop neighbours go in after the seeds and carry no lexical
     // relevance, so they can only fill slots the lexical path left empty — the

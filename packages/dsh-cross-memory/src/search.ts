@@ -355,38 +355,45 @@ function matchOne(
   entry: MemoryEntry,
   normalized: string,
   hub?: (term: string) => boolean,
+  only?: ReadonlySet<ScoreField>,
 ): { score: number; evidence: MatchEvidence } {
   const fields = searchable(entry)
+  /** Whether one field may be scored at all; an absent restriction allows all. */
+  const on = (field: ScoreField): boolean => only === undefined || only.has(field)
   let score = 0
   // The whole query as a phrase. CJK quirk: `tags`/`keys` hold several values in
   // one string, and Japanese/Chinese text has no word boundaries, so a phrase
   // test is meaningful there; for Latin fields it means the query is a phrase
   // in that field, which is exactly the strong signal it should be.
   let phrase = false
-  if (matches(fields.title, fields.titleWords, normalized)) {
+  if (on('title') && matches(fields.title, fields.titleWords, normalized)) {
     score += FIELD_WEIGHTS.title
     phrase = true
   }
-  if (matches(fields.keys, fields.keyWords, normalized)) {
+  if (on('keys') && matches(fields.keys, fields.keyWords, normalized)) {
     score += FIELD_WEIGHTS.keys
     phrase = true
   }
-  if (matches(fields.tags, fields.tagWords, normalized)) {
+  if (on('tags') && matches(fields.tags, fields.tagWords, normalized)) {
     score += FIELD_WEIGHTS.tags
     phrase = true
   }
-  if (matches(fields.appliesTo, fields.appliesWords, normalized)) {
+  if (on('appliesTo') && matches(fields.appliesTo, fields.appliesWords, normalized)) {
     score += FIELD_WEIGHTS.appliesTo
     phrase = true
   }
-  if (matches(fields.body, fields.bodyWords, normalized)) score += FIELD_WEIGHTS.body
+  if (on('body') && matches(fields.body, fields.bodyWords, normalized)) score += FIELD_WEIGHTS.body
   const strong = new Set<string>()
   // Only the strong fields feed the evidence count: a term in the BODY is
   // deliberately excluded, because a long memory mentions many things and a body
   // word is the weakest claim available.
   const queryRuns = cjkRuns(normalized)
   const cjkBacked = new Set<string>()
-  for (const field of [fields.title, fields.keys, fields.tags, fields.appliesTo]) {
+  const strongFields: readonly (readonly [ScoreField, string])[] = [
+    ['title', fields.title], ['keys', fields.keys], ['tags', fields.tags], ['appliesTo', fields.appliesTo],
+  ]
+  for (const [name, field] of strongFields) {
+    if (!on(name)) continue
     for (const run of sharedRuns(queryRuns, field, MIN_SHARED_RUN)) {
       // Every bigram of a shared run is marked, so a query sharing 插件日志的
       // counts 插件, 插件日, and 日志 rather than one anonymous run.
@@ -397,19 +404,19 @@ function matchOne(
     if (isNoise(term)) continue
     const weight = termWeight(term)
     let strongHit = false
-    if (matches(fields.title, fields.titleWords, term)) {
+    if (on('title') && matches(fields.title, fields.titleWords, term)) {
       score += (TERM_WEIGHTS.title + (CJK.test(term) ? 0 : occurrences(fields.title, term))) * weight
       strongHit = true
     }
-    if (matches(fields.keys, fields.keyWords, term)) {
+    if (on('keys') && matches(fields.keys, fields.keyWords, term)) {
       score += TERM_WEIGHTS.keys * weight
       strongHit = true
     }
-    if (matches(fields.tags, fields.tagWords, term)) {
+    if (on('tags') && matches(fields.tags, fields.tagWords, term)) {
       score += TERM_WEIGHTS.tags * weight
       strongHit = true
     }
-    if (matches(fields.appliesTo, fields.appliesWords, term)) {
+    if (on('appliesTo') && matches(fields.appliesTo, fields.appliesWords, term)) {
       score += TERM_WEIGHTS.appliesTo * weight
       strongHit = true
     }
@@ -420,7 +427,7 @@ function matchOne(
         strong.add(term)
       }
     }
-    score += Math.min(BODY_TERM_CAP, occurrences(fields.body, term)) * TERM_WEIGHTS.body * weight
+    if (on('body')) score += Math.min(BODY_TERM_CAP, occurrences(fields.body, term)) * TERM_WEIGHTS.body * weight
   }
   return { score, evidence: { strongTerms: strong.size, phrase } }
 }
@@ -460,14 +467,14 @@ interface TurnMatch {
 }
 
 /** Score every candidate query of a turn and keep the strongest. */
-function bestMatch(entry: MemoryEntry, query: string, hub?: (term: string) => boolean): TurnMatch {
+function bestMatch(entry: MemoryEntry, query: string, hub?: (term: string) => boolean, only?: ReadonlySet<ScoreField>): TurnMatch {
   const messages = queryMessages(query)
   let bestScore = 0
   let bestEvidence: MatchEvidence = { strongTerms: 0, phrase: false }
   let best = ''
   let mentions = 0
   for (const message of messages) {
-    const { score, evidence } = matchOne(entry, message, hub)
+    const { score, evidence } = matchOne(entry, message, hub, only)
     if (score > 0) mentions += 1
     if (score > bestScore || (score === bestScore && evidence.strongTerms > bestEvidence.strongTerms)) {
       bestScore = score
@@ -773,6 +780,9 @@ export interface MatchCredit {
   readonly evidence: MatchEvidence
 }
 
+/** One field a match may be scored against. */
+export type ScoreField = 'title' | 'keys' | 'tags' | 'appliesTo' | 'body'
+
 /** How strictly {@link matchCredit} applies its structural gate. */
 export interface CreditOptions {
   /**
@@ -810,6 +820,16 @@ export interface CreditOptions {
    * hatch untouched — this only changes what "two terms" means.
    */
   readonly hub?: (term: string) => boolean
+  /**
+   * Which fields may produce score and evidence; omitted means every field.
+   *
+   * The alias fallback passes `['keys', 'appliesTo']` so a relaxed single-term
+   * pass cannot be carried by a body word. A body mention is the weakest claim
+   * in the store — a long memory mentions many things — while a `keys` entry is
+   * a deliberate statement that this is another name for the memory. Widening
+   * the gate for the latter must not widen it for the former.
+   */
+  readonly fields?: readonly ScoreField[]
 }
 
 /**
@@ -852,7 +872,8 @@ export function matchCredit(
   const now = options.now ?? Date.now()
   const singleTerm = options.singleTerm ?? true
   const window = options.range === undefined ? parseTimeRange(query, now) : options.range ?? undefined
-  const match = bestMatch(entry, query, options.hub)
+  const only = options.fields === undefined ? undefined : new Set(options.fields)
+  const match = bestMatch(entry, query, options.hub, only)
   const distinctive = match.relevance >= minScore * QUALIFIED_SCORE_FACTOR
   const credited = match.evidence.phrase
     || match.evidence.strongTerms >= minTerms
@@ -867,6 +888,25 @@ export function matchCredit(
     score: match.relevance * importanceOf(entry) * decayOf(entry, now) * timeBoost(entry, window),
   }
 }
+
+/**
+ * The relevance floor an alias-only match must clear, as a share of the normal one.
+ *
+ * An alias pass scores `keys` and `appliesTo` only, so the full floor is
+ * unreachable by construction. Measured with `recallMinScore` 9 against this
+ * scorer: one CJK alias term scores 6 at most (7×0.5 in `keys` plus 5×0.5 in
+ * `appliesTo`) and one Latin word 12, while the strict gate needs 9 — so keeping
+ * the same number would have let the fallback fire for English turns and never
+ * for Chinese ones, the language most of this store is written in. That is the
+ * same "dead in practice" failure a keys-only search had, one layer down.
+ *
+ * Half the floor, and deliberately no lower: with one CJK term in `keys` alone
+ * the pass scores 3.5 and stays refused, so an alias has to be filed in two of
+ * the scored fields before it can carry a recall. The structural rule (a
+ * substantive term, meaning a CJK pair inside a shared run of three characters,
+ * or a Latin word of three) and the hub discount are unchanged.
+ */
+export const ALIAS_FLOOR_SHARE = 0.5
 
 /**
  * Query terms too common in one scope to count as evidence.
