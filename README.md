@@ -107,12 +107,14 @@ pnpm run verify:profile       # 校验 profile 里的硬链接安装与源码一
 
 ## 发布流程
 
-每个包独立版本、独立发布：
+每个包独立版本、独立发布，发布由 GitHub Actions 的 **npm Trusted Publishing（OIDC）** 自动完成，不需要 token，也不需要人工 2FA：
 
 1. 改版本号（`packages/<pkg>/package.json`）并跑测试；
-2. `npm publish --access public`（需要 npm 2FA；发布后版本约 1–2 分钟生效）；
-3. 打 tag：`git tag -a <pkg>@<version> -m "<pkg> <version> (npm)"` 并推送；
-4. 发布前先 `pnpm run build`（`dsh-cross-memory` 的 `lib/` 不入库；其余包的 `lib/` 随仓库提交，`prepare` 也会重新编译）；1024Store 目录会自动检测 npm 新版本。
+2. 打 tag 推送：`git tag -a <pkg>@<version> -m "<pkg> <version>" && git push origin <pkg>@<version>`；
+3. Actions 自动校验 tag 与 `package.json` 版本一致 → `pnpm run build` → `pnpm run test` → `npm publish --access public --provenance`；
+4. 发布后约 1–2 分钟生效；1024Store 目录会自动检测 npm 新版本。
+
+发版工作流见 `.github/workflows/release.yml`：tag 触发是主入口，`workflow_dispatch` 保留为手动预检（dry-run 默认开）。安全边界：只有 `dsh-*@*` 形式的 tag 会触发，且发布前会跑全量测试；可信发布者的配置在每个包 npm 页面的 Trusted publishers，工作流文件名必须固定为 `release.yml`。
 
 ## 隐私与安全
 

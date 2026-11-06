@@ -1,8 +1,18 @@
 name: Release
 
-# 手动选择要发布的包（包名与版本取自该包 package.json）。
-# 需要仓库 secret NPM_TOKEN（npm automation token）。
+# 两条入口，都发到 npm：
+#   - push tag `<pkg>@<version>`（推荐）：自动解析包和版本，校验后发布；
+#   - workflow_dispatch：手动选包预检（dry-run 默认 true），或强制发一次。
+#
+# 认证走 npm **Trusted Publishing**（OIDC），不需要 NPM_TOKEN，也不需要
+# 发布时的人工 2FA。前置条件是每个包在 npm 上登记了 trusted publisher：
+#   npm trust github <pkg> --file release.yml \
+#     --repo CooperZhuang/dsh-plugins-cooper-custom --allow-publish
+# 工作流文件名必须与登记时一致（release.yml），否则 npm 拒绝签发 OIDC。
 on:
+  push:
+    tags:
+      - 'dsh-*@*'
   workflow_dispatch:
     inputs:
       package:
@@ -21,12 +31,17 @@ on:
         type: boolean
         default: true
 
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -41,17 +56,50 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # dsh-cross-memory 的 lib/ 是构建产物（不入库）；其他包的产物随仓库提交。
+      # 从 tag 或手动输入解析出 packages/<name> 与版本；tag 推送时版本必须与
+      # package.json 一致，防止“打了 tag 却发错版本”。
+      - name: Resolve package and version
+        id: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            pkg="${{ inputs.package }}"
+            pkg="${pkg#packages/}"
+            dry="${{ inputs.dry-run }}"
+          else
+            tag="${GITHUB_REF_NAME}"
+            pkg="${tag%@*}"
+            dry="false"
+          fi
+          if [ ! -f "packages/${pkg}/package.json" ]; then
+            echo "::error::no package at packages/${pkg}"
+            exit 1
+          fi
+          version="$(node -p "require('./packages/${pkg}/package.json').version")"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            wanted="${tag##*@}"
+            if [ "${version}" != "${wanted}" ]; then
+              echo "::error::tag ${tag} disagrees with package version ${version}"
+              exit 1
+            fi
+          fi
+          {
+            echo "package=${pkg}"
+            echo "version=${version}"
+            echo "dry=${dry}"
+          } >> "${GITHUB_OUTPUT}"
+
       - run: pnpm run build
 
-      - name: publish (dry-run)
-        if: ${{ inputs.dry-run }}
-        run: pnpm --dir "${{ inputs.package }}" publish --access public --provenance --no-git-checks --dry-run
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - run: pnpm run test
 
-      - name: publish
-        if: ${{ !inputs.dry-run }}
-        run: pnpm --dir "${{ inputs.package }}" publish --access public --provenance --no-git-checks
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: npm publish --dry-run
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run }}
+        working-directory: packages/${{ steps.target.outputs.package }}
+        run: npm publish --access public --provenance --dry-run
+
+      - name: npm publish (Trusted Publishing / OIDC)
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry-run) }}
+        working-directory: packages/${{ steps.target.outputs.package }}
+        run: npm publish --access public --provenance
