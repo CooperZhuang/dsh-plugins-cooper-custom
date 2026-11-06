@@ -35,9 +35,10 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
 import { Config as ConfigSchema, consolidationRouteOf, DEFAULT_ROTATION_MAX_BYTES, readTunables, resolveConfig } from './config.js'
 import type { MemoriesConfig, MemoriesSettings, ResolvedConfig } from './config.js'
-import { MemoryStore, slugify } from './storage.js'
+import { MemoryStore, projectSlug, slugify } from './storage.js'
+import type { OriginConflict } from './storage.js'
 import { StateStore, importLegacyState, statePath } from './state.js'
-import { browseMemories, EXPAND_SEEDS, hubTerms, matchCredit, prefilterEntries, QUALIFIED_SCORE_FACTOR, relatedHits, searchMemories } from './search.js'
+import { browseMemories, EXPAND_SEEDS, hubTerms, matchCredit, prefilterEntries, QUALIFIED_SCORE_FACTOR, relatedHits, searchMemories, suggestAliases } from './search.js'
 import type { MatchCredit, ScopeEntries } from './search.js'
 import { readFile } from 'node:fs/promises'
 import { isPersonaLocked, readPersona, renderPersonaBlock, writePersona } from './persona.js'
@@ -56,9 +57,9 @@ import { findProjectRoot, isWithin } from './workspace.js'
 import { citationRoots, citationWarning, ignoredUnder, missingCitations } from './citations.js'
 import { planRetention, retentionKey } from './retention.js'
 import { MemoryLog, createFileSink, createLogExporter, pluginLogger } from './log.js'
-import { collectWindow, resolveLlmRoute, runExtraction } from './extract.js'
+import { collectExtractionWindow, collectWindow, resolveLlmRoute, runExtraction, selectKnownTitles } from './extract.js'
 import { collectExcerpts } from './raw-recall.js'
-import type { ExtractionRoute } from './extract.js'
+import type { ExtractionRoute, KnownTitleCandidate } from './extract.js'
 import { decodeSessionLog, findSessionLogs, parseSessionLog, planWindows, zstdAvailable } from './backfill.js'
 import type { BackfillLog, BackfillWindow } from './backfill.js'
 import { backgroundDelayMs, cappedBackoffMs, extractionDelayMs, formatDelay, parsePeakHours, peakDelayMs } from './schedule.js'
@@ -133,8 +134,23 @@ const KNOWN_TITLE_LIMIT = 80
 /** How many late-injection blocks one conversation may receive. */
 const DELTA_MAX_PER_CONVERSATION = 2
 
-/** Byte budget for one late-injection block. */
-const DELTA_MAX_BYTES = 800
+/**
+ * Most entries one late-injection block names.
+ *
+ * A count cap as well as the byte budget: a scope full of short entries would
+ * otherwise pack twenty titles into one block and turn a nudge into a list.
+ */
+const DELTA_MAX_ENTRIES = 6
+
+/**
+ * How long a project-slug conflict scan is trusted.
+ *
+ * The scan reads every project's descriptor and host files — cheap per file,
+ * but not something to repeat on every injection. An hour is short enough that
+ * a collision found today reaches the next session, long enough that a store
+ * with sixty projects pays for it once.
+ */
+const CONFLICT_SCAN_TTL_MS = 3_600_000
 
 /** Sessions one `/memories backfill` run mines unless `--limit` says otherwise. */
 const BACKFILL_DEFAULT_SESSIONS = 3
@@ -302,6 +318,10 @@ export class MemoriesRuntime {
   private consolidateSkip: string | undefined
   /** Hub-term predicates by store signature; see `hubFor`. */
   private readonly hubCache = new Map<string, (term: string) => boolean>()
+  /** Last project-slug conflict scan, with the time it ran. */
+  private conflictScan: { at: number; rows: readonly OriginConflict[] } | undefined
+  /** Whether the conflict scan has already logged its findings once. */
+  private conflictLogged = false
   /** Sessions whose conversation already carries the memory block. */
   private readonly injected = new WeakSet<Session>()
   /** Recall deltas already injected into each conversation. */
@@ -558,6 +578,27 @@ export class MemoriesRuntime {
     return browseMemories(this.groups(states), options)
   }
 
+  /**
+   * The vocabulary this store files memories under, for a query that found
+   * nothing.
+   *
+   * Search is lexical, so a query phrased in the user's words cannot reach a
+   * memory filed under the product's words. Returning the aliases and tags that
+   * share characters with the query is what lets the caller try again with the
+   * store's own terms instead of concluding the fact was never recorded.
+   *
+   * @param session - conversation asking.
+   * @param query - the query that returned nothing.
+   * @param limit - most terms to return.
+   * @returns shared terms first, then the most widely used ones.
+   */
+  async aliasHints(session: Session, query: string, limit = 12) {
+    const states = await this.allScopes(session)
+    const hints = suggestAliases(this.groups(states), query, limit)
+    this.log.decision('dsh-cross-memory: no hit for %s, offering %d alias hint(s)', JSON.stringify(query.slice(0, 60)), hints.length)
+    return hints
+  }
+
   /** Read one entry by scope and id, recording the hit. */
   async read(session: Session, scope: MemoryScope, id: string, record = true): Promise<MemoryEntry | undefined> {
     const root = scope === 'project' ? await this.projectRoot(session) : undefined
@@ -684,18 +725,24 @@ export class MemoriesRuntime {
    * cap. Extraction is otherwise blind to what is already known, which is how one
    * session's lesson ended up stored twice — once in Chinese, once in English.
    *
+   * The whole scope is returned, uncapped; the caller ranks it against the
+   * window with {@link selectKnownTitles} and only then cuts. Cutting here was
+   * the bug: on a store larger than the cap, every title past the cut was
+   * invisible to the extractor, which then re-derived those facts under new
+   * titles.
+   *
    * @param root - the session's project root, when it has one.
-   * @returns existing titles, capped for the prompt.
+   * @returns every candidate title with its write time.
    */
-  private async knownTitles(root: string | undefined): Promise<readonly string[]> {
-    const titles: string[] = []
+  private async knownTitleCandidates(root: string | undefined): Promise<readonly KnownTitleCandidate[]> {
+    const candidates: KnownTitleCandidate[] = []
     if (root !== undefined) {
       const project = await this.store.list('project', root).catch(() => [] as MemoryEntry[])
-      for (const entry of project) titles.push(entry.title)
+      for (const entry of project) candidates.push({ title: entry.title, updatedAt: entry.updatedAt })
     }
     const global = await this.store.list('global', undefined).catch(() => [] as MemoryEntry[])
-    for (const entry of global) titles.push(entry.title)
-    return titles.slice(0, KNOWN_TITLE_LIMIT)
+    for (const entry of global) candidates.push({ title: entry.title, updatedAt: entry.updatedAt })
+    return candidates
   }
 
   /** Delete one entry. */
@@ -777,7 +824,7 @@ export class MemoriesRuntime {
       (await readLoops(this.store.memoriesDir).catch(() => ({ version: 1 as const, loops: [] as const }))).loops,
       { now: Date.now() },
     )
-    const note = [await this.draftNote(), loopNote]
+    const note = [await this.conflictNote(await this.projectRoot(session)), await this.draftNote(), loopNote]
       .filter((part): part is string => part !== undefined && part.trim().length > 0)
       .join('\n\n')
     // Check the citations of what is about to be shown, not of the whole store:
@@ -943,6 +990,42 @@ export class MemoriesRuntime {
       this.log.warn('dsh-cross-memory: applying the waiting decisions failed: %s', message)
       return `Applying them failed and the store was rolled back: ${message}`
     }
+  }
+
+  /**
+   * A warning when this workspace's memory directory is shared with another
+   * repository of the same name.
+   *
+   * `projectSlug` keys a project by its basename, which is what lets one
+   * repository checked out at two paths on two machines share one memory
+   * directory. The accepted cost is that two unrelated repositories called
+   * `backend` also share one — and the failure is silent and confusing: each
+   * project's memories are injected into the other's sessions, with nothing
+   * saying why. The store already records every host's git origin; two
+   * different origins for one slug is the proof. This surfaces it once per
+   * injected conversation, in the block the model actually reads.
+   *
+   * @param root - the session's project root, when it has one.
+   * @returns the warning line, or `undefined` when there is no collision.
+   */
+  private async conflictNote(root: string | undefined): Promise<string | undefined> {
+    if (root === undefined) return undefined
+    const now = Date.now()
+    if (this.conflictScan === undefined || now - this.conflictScan.at >= CONFLICT_SCAN_TTL_MS) {
+      const rows = await this.store.originConflicts().catch(() => [] as readonly OriginConflict[])
+      this.conflictScan = { at: now, rows }
+      // Logged once per process rather than once per scan: the finding does not
+      // change between scans, and a line every hour reads as a new problem.
+      if (rows.length > 0 && !this.conflictLogged) {
+        this.conflictLogged = true
+        this.log.warn('dsh-cross-memory: %d project memory director%s shared by more than one repository: %s',
+          rows.length, rows.length === 1 ? 'y is' : 'ies are',
+          rows.map((row) => `${row.slug} (${row.origins.join(' vs ')})`).join('; '))
+      }
+    }
+    const row = (this.conflictScan?.rows ?? []).find((item) => item.slug === projectSlug(root))
+    if (row === undefined) return undefined
+    return `⚠ 本项目记忆目录 projects/${row.slug} 被 ${row.origins.length} 个不同仓库共用（${row.origins.join(' / ')}），本会话的项目记忆可能混入另一个仓库的内容。`
   }
 
   /**
@@ -1500,8 +1583,8 @@ export class MemoriesRuntime {
    * later is invisible until the model thinks to search for it. This path names
    * only entries whose `updated` stamp is newer than the last injection, and
    * only those the conversation has not already been shown, so it is a short
-   * paragraph rather than a second summary. Two per conversation, 800 bytes
-   * each: the block is a nudge, not a channel.
+   * paragraph rather than a second summary. Two per conversation, at
+   * `deltaMaxBytes` each: the block is a nudge, not a channel.
    *
    * @param agent - the agent whose next step is being prepared.
    * @returns the message to append, or `undefined` when nothing new is worth it.
@@ -1512,6 +1595,8 @@ export class MemoriesRuntime {
     if (this.sessionOff(session)) return undefined
     const used = this.deltaCounts.get(session) ?? 0
     if (used >= DELTA_MAX_PER_CONVERSATION) return undefined
+    const maxBytes = this.settings.deltaMaxBytes
+    if (maxBytes <= 0) return undefined
     const record = this.state.getInjection(session.id)
     if (record === undefined) return undefined
     const shown = new Set<string>(record.ids)
@@ -1532,12 +1617,12 @@ export class MemoriesRuntime {
       || left.title.localeCompare(right.title))
     const picked: MemoryEntry[] = []
     for (const entry of fresh) {
-      if (picked.length >= 3) break
-      if (renderRecall([...picked, entry], DELTA_MAX_BYTES) === undefined) break
+      if (picked.length >= DELTA_MAX_ENTRIES) break
+      if (renderRecall([...picked, entry], maxBytes) === undefined) break
       picked.push(entry)
     }
     if (picked.length === 0) return undefined
-    const rendered = renderRecall(picked, DELTA_MAX_BYTES)
+    const rendered = renderRecall(picked, maxBytes)
     if (rendered === undefined) return undefined
     const text = rendered.replace(RECALL_OPEN,
       `${RECALL_OPEN}\n这 ${picked.length} 条记忆是在本次会话开始之后新增或更新的，只作背景参考：`)
@@ -2439,11 +2524,14 @@ export class MemoriesRuntime {
     try {
       const watermark = this.state.getSession(key)
       const afterSeq = watermark?.lastSeq ?? 0
-      const window = collectWindow(session, afterSeq, this.settings.extractWindowMessages, this.settings.extractMaxInputChars)
+      const window = collectExtractionWindow(session, afterSeq, this.settings.extractWindowMessages, this.settings.extractMaxInputChars)
       if (window.lastSeq === undefined || window.text.trim().length === 0) return { stored: 0, reason: 'empty' }
       const root = await this.projectRoot(session)
       const projectLabel = root === undefined ? NO_PROJECT_LABEL : this.store.target('project', root).label
-      const knownTitles = await this.knownTitles(root)
+      // Ranked against the window rather than cut in time order: on a store
+      // bigger than the prompt's title budget, the titles past a time-order cut
+      // were invisible, so the extractor re-derived facts it already had.
+      const knownTitles = selectKnownTitles(await this.knownTitleCandidates(root), window.text, KNOWN_TITLE_LIMIT)
       // A settle-window pass deliberately does NOT inherit the plugin lifecycle
       // signal: the plugin is disposed as the process shuts down, and tying the
       // pass to that signal would abort exactly the pass a one-shot run needs.
@@ -2535,6 +2623,14 @@ export class MemoriesRuntime {
           // merely less productive.
           this.log.info('dsh-cross-memory: dropped %d candidate(s) from session %s whose evidence quote did not appear verbatim in the transcript',
             outcome.unsupported, key)
+          // Which ones, and why. The count alone cannot be acted on: "no quote at
+          // all" and "quote invented" are different fixes (prompt vs route), and
+          // neither is visible from a number.
+          for (const item of outcome.droppedEvidence ?? []) {
+            this.log.decision('dsh-cross-memory: dropped "%s" from session %s (%s), quote so far: %s',
+              item.title, key, item.reason,
+              item.quotePreview.length === 0 ? '(none)' : `"${item.quotePreview}…"`)
+          }
         }
       }
       // Only a completed extraction may consume the transcript window. A capped
@@ -2671,12 +2767,15 @@ export class MemoriesRuntime {
         : await findProjectRoot(log.cwd, this.deployment.projectRootMarkers).catch(() => undefined)
       const projectRoot = found !== undefined && !isCatchAllDirectory(found, this.deployment.dshHome) ? found : undefined
       const projectLabel = projectRoot === undefined ? NO_PROJECT_LABEL : this.store.target('project', projectRoot).label
-      const titles = await this.knownTitles(projectRoot)
+      // Ranked per window, not once per session: each backfilled window is a
+      // different piece of the transcript, so the titles worth showing it differ.
+      const titleCandidates = await this.knownTitleCandidates(projectRoot)
       // A log is not a live Session: the extractor needs the id for provenance
       // only, and the route is passed explicitly so no session header is read.
       const stub = { id: log.sessionId, requestHeader: () => undefined } as unknown as Session
       let lastSeq = this.state.getSession(log.sessionId)?.lastSeq ?? 0
       for (const window of item.windows.slice(0, BACKFILL_MAX_WINDOWS_PER_SESSION)) {
+        const titles = selectKnownTitles(titleCandidates, window.text, KNOWN_TITLE_LIMIT)
         try {
           const outcome = await runExtraction(llm, {
             session: stub,
@@ -3906,7 +4005,7 @@ export class MemoriesRuntime {
       `auto-extract: ${this.settings.autoExtract ? `on (every ${formatDelay(this.settings.extractIntervalMinutes * 60_000)}${this.settings.minIdleHours > 0 ? ` + ${formatDelay(extractionDelayMs(this.settings))} quiet to settle` : ''}, ≤${this.settings.maxAgeDays}d old)` : 'off'}`,
       `peak-hours: ${this.peakLine()}`,
       `recall: ${this.settings.recallMode} (relevance ≥${this.settings.recallMinScore} plus ${this.settings.recallMinTerms} terms or a shared run, ≤${this.settings.recallMaxPerConversation} memories and ≤${this.settings.recallMaxBytes}B per conversation)`,
-      `late memories: ${this.settings.injectDelta ? 'on (≤2 blocks, ≤800B each, new or updated entries only)' : 'off'}`,
+      `late memories: ${this.settings.injectDelta ? `on (≤2 blocks, ≤${this.settings.deltaMaxBytes}B each, new or updated entries only)` : 'off'}`,
       `rotation: ${this.settings.rotationEntries > 0 ? `${this.settings.rotationEntries} titles/session` : 'off'}`,
       `projects: ${await this.projectLine()}`,
       `summary: ≤${this.settings.maxSummaryEntries} per scope with ${this.settings.summaryFreshSlots} reserved for never-listed memories`,

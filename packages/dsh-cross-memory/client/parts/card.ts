@@ -109,7 +109,12 @@ const FIELDS = [
   {
     field: 'injectDelta', kind: 'boolean',
     label: { zh: '会后补注新记忆', en: 'Announce late memories' },
-    hint: { zh: '摘要注入之后才写入的记忆（例如后台抽取、合并的结果）在下一步用一个很小的块补一次：每个会话最多两次、每次 800 字节，只列新增或更新的条目。', en: 'Memories written after the summary was shown (background extraction, consolidation) get one small block on the next step: at most twice per conversation, 800 bytes each, new or updated entries only.' },
+    hint: { zh: '摘要注入之后才写入的记忆（例如后台抽取、合并的结果）在下一步用一个很小的块补一次：每个会话最多两次，只列新增或更新的条目。', en: 'Memories written after the summary was shown (background extraction, consolidation) get one small block on the next step: at most twice per conversation, new or updated entries only.' },
+  },
+  {
+    field: 'deltaMaxBytes', kind: 'number', min: 0, step: 100,
+    label: { zh: '补注块字节上限', en: 'Late-memory block bytes' },
+    hint: { zh: '每个补注块的字节预算。一条完整条目约 200–350 字节，旧的 800 只装得下一两条；默认 1600 装得下四到六条，才够覆盖一次话题切换。0 关闭补注。', en: 'Byte budget per late-memory block. One complete entry costs 200-350 bytes, so the old 800 admitted one or two; 1600 admits four to six, which is a topic shift rather than a single note. 0 disables the block.' },
   },
   {
     field: 'rotationEntries', kind: 'number', min: 0, step: 1,

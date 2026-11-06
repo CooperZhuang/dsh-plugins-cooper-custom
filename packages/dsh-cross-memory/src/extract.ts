@@ -16,6 +16,7 @@ import type { Session } from '@deepseek-ai/dsh-session'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
 import { MEMORY_SOURCE_KIND, toMemoryKind } from './types.js'
 import type { MemoryDraft, MemoryScope } from './types.js'
+import { tokenize } from './search.js'
 
 /** Model-facing transcript line budget for one extraction window. */
 export interface ExtractWindow {
@@ -35,6 +36,70 @@ export interface ExtractWindow {
    * the message body.
    */
   readonly sources: readonly { readonly seq: number; readonly text: string }[]
+  /**
+   * Unmined prose messages this window left out.
+   *
+   * Non-zero means the transcript grew faster than the window cap: the newest
+   * window would then step over everything in the middle, and the watermark
+   * would skip it forever. The caller reads this as "there is a backlog" and
+   * mines the oldest contiguous window instead, so no message is ever skipped.
+   */
+  readonly skipped: number
+}
+
+/**
+ * One stored title offered to the extractor for deduplication.
+ *
+ * `updatedAt` is only the tie-break: when the window shares no vocabulary with
+ * any stored title, the newest titles are still the ones most likely to be
+ * re-derived.
+ */
+export interface KnownTitleCandidate {
+  /** The stored title, exactly as it will be shown to the extractor. */
+  readonly title: string
+  /** When the entry it belongs to was last written. */
+  readonly updatedAt: number
+}
+
+/**
+ * Pick the known titles most worth showing one extraction window.
+ *
+ * The list used to be taken in time order and cut at a fixed cap, which on a
+ * store larger than the cap hid every older title from the extractor: it could
+ * not recognise a fact it had already recorded, and wrote a second entry under
+ * a re-worded title. Ranking by overlap with the window fixes that within the
+ * same budget — the titles the window is actually about are the ones it might
+ * re-derive — while the recency tie-break keeps a representative sample when
+ * nothing overlaps.
+ *
+ * @param candidates - every title in the scopes this pass may write to.
+ * @param windowText - the transcript window about to be mined.
+ * @param limit - most titles to return; `0` returns none.
+ * @returns the selected titles, most relevant first.
+ */
+export function selectKnownTitles(
+  candidates: readonly KnownTitleCandidate[],
+  windowText: string,
+  limit: number,
+): string[] {
+  if (limit <= 0) return []
+  if (candidates.length <= limit) return candidates.map((candidate) => candidate.title)
+  const queryTerms = new Set(tokenize(windowText))
+  const scored = candidates.map((candidate, index) => {
+    const seen = new Set<string>()
+    let overlap = 0
+    for (const term of tokenize(candidate.title)) {
+      if (seen.has(term)) continue
+      seen.add(term)
+      if (queryTerms.has(term)) overlap += 1
+    }
+    return { title: candidate.title, overlap, updatedAt: candidate.updatedAt, index }
+  })
+  scored.sort((left, right) =>
+    right.overlap - left.overlap
+    || right.updatedAt - left.updatedAt
+    || left.index - right.index)
+  return scored.slice(0, limit).map((item) => item.title)
 }
 
 /**
@@ -234,14 +299,18 @@ function blockText(content: readonly ContentBlock[]): string {
  * @param session - session to read.
  * @param afterSeq - last surface seq already mined (exclusive).
  * @param maxMessages - message cap.
- * @param maxChars - transcript character cap; the newest messages win.
- * @returns the rendered window and the highest included seq.
+ * @param maxChars - transcript character cap.
+ * @param order - which end of the backlog to keep. `newest` (the default) is
+ *   the right window for a session that is nearly caught up; `oldest` is the
+ *   contiguous one, and it is the only order that cannot skip a message.
+ * @returns the rendered window, the highest included seq, and how much it left out.
  */
 export function collectWindow(
   session: Session,
   afterSeq: number,
   maxMessages: number,
   maxChars: number,
+  order: 'newest' | 'oldest' = 'newest',
 ): ExtractWindow {
   const floor = SessionSeq(Math.max(0, Math.trunc(afterSeq)))
   const lines: { seq: number; role: 'user' | 'assistant'; text: string }[] = []
@@ -257,24 +326,71 @@ export function collectWindow(
     if (text.length === 0) continue
     lines.push({ seq, role: message.role === 'user' ? 'user' : 'assistant', text })
   }
-  const selected = lines.slice(-maxMessages)
+  // `newest` keeps the tail and admits lines backwards from it; `oldest` keeps
+  // the head and admits forward. Both keep at least one line even when that line
+  // alone blows the character budget: a window that is empty for budget reasons
+  // would stall the watermark on the same message forever.
+  const selected = order === 'oldest' ? lines.slice(0, maxMessages) : lines.slice(-maxMessages)
   const kept: { seq: number; role: 'user' | 'assistant'; text: string }[] = []
   let used = 0
-  for (let index = selected.length - 1; index >= 0; index -= 1) {
-    const line = selected[index]
-    if (line === undefined) continue
-    const cost = `${line.role === 'user' ? 'USER' : 'ASSISTANT'}: ${line.text}`.length + 1
-    if (used + cost > maxChars && kept.length > 0) break
-    used += cost
-    kept.unshift(line)
+  if (order === 'oldest') {
+    let admitted = 0
+    for (const line of selected) {
+      const cost = `${line.role === 'user' ? 'USER' : 'ASSISTANT'}: ${line.text}`.length + 1
+      if (used + cost > maxChars && admitted > 0) break
+      used += cost
+      admitted += 1
+      kept.push(line)
+    }
+  } else {
+    for (let index = selected.length - 1; index >= 0; index -= 1) {
+      const line = selected[index]
+      if (line === undefined) continue
+      const cost = `${line.role === 'user' ? 'USER' : 'ASSISTANT'}: ${line.text}`.length + 1
+      if (used + cost > maxChars && kept.length > 0) break
+      used += cost
+      kept.unshift(line)
+    }
   }
-  const lastSeq = selected.at(-1)?.seq
+  // The highest seq the window actually covers. For `newest` that is the newest
+  // line; for `oldest` it is the newest line of the contiguous head, which is
+  // what lets the watermark advance one backlog chunk at a time.
+  const lastSeq = kept.at(-1)?.seq
   return {
     text: kept.map((line) => `${line.role === 'user' ? 'USER' : 'ASSISTANT'}: ${line.text}`).join('\n\n'),
     lastSeq,
     messages: kept.length,
     sources: kept.map((line) => ({ seq: line.seq, text: line.text })),
+    skipped: lines.length - kept.length,
   }
+}
+
+/**
+ * The window one extraction pass should mine, preferring contiguity.
+ *
+ * The newest window is what a session that is nearly caught up wants: it is the
+ * most recent material. It cannot be the only order, because the message cap
+ * silently drops everything between the watermark and the tail — measured on a
+ * long session, one 400-message gap left 340 messages never mined while the
+ * watermark stepped over all of them. So: take the newest window, and when it
+ * reports a backlog, take the oldest contiguous one instead. The pass cadence
+ * then drains the backlog chunk by chunk and nothing is skipped.
+ *
+ * @param session - session to read.
+ * @param afterSeq - last surface seq already mined (exclusive).
+ * @param maxMessages - message cap per window.
+ * @param maxChars - character cap per window.
+ * @returns the window to mine.
+ */
+export function collectExtractionWindow(
+  session: Session,
+  afterSeq: number,
+  maxMessages: number,
+  maxChars: number,
+): ExtractWindow {
+  const newest = collectWindow(session, afterSeq, maxMessages, maxChars)
+  if (newest.skipped === 0) return newest
+  return collectWindow(session, afterSeq, maxMessages, maxChars, 'oldest')
 }
 
 /**
@@ -415,12 +531,31 @@ function squash(value: string): string {
   return value.replace(/\s+/gu, ' ').trim()
 }
 
+/**
+ * One candidate the evidence check threw away, kept so the loss is readable.
+ *
+ * The count alone was the only trace of this path, and a count cannot answer
+ * the question a reader actually has: was the model paraphrasing (a prompt or
+ * route problem) or did it invent a plausible sentence? The title says what was
+ * lost; the quote preview says why.
+ */
+export interface DroppedDraft {
+  /** Title the model proposed. */
+  readonly title: string
+  /** First characters of the quote, or empty when none was offered. */
+  readonly quotePreview: string
+  /** Why it failed: no quote at all, a quote too short, or one the transcript lacks. */
+  readonly reason: 'no-quote' | 'quote-too-short' | 'not-in-transcript'
+}
+
 /** What {@link bindEvidence} made of one reply. */
 export interface EvidenceBinding {
   /** Drafts that carry a quote found verbatim in the window's messages. */
   readonly drafts: readonly MemoryDraft[]
   /** Drafts dropped because the quote was missing, too short, or not in the transcript. */
   readonly unsupported: number
+  /** The dropped candidates, described well enough to log and diagnose. */
+  readonly dropped: readonly DroppedDraft[]
 }
 
 /**
@@ -443,21 +578,30 @@ export function bindEvidence(
   sources: readonly { readonly seq: number; readonly text: string }[],
 ): EvidenceBinding {
   const verified: MemoryDraft[] = []
+  const dropped: DroppedDraft[] = []
   let unsupported = 0
   for (const draft of drafts) {
     const quote = draft.quote === undefined ? '' : squash(draft.quote)
+    const preview = quote.slice(0, 60)
+    if (quote.length === 0) {
+      unsupported += 1
+      dropped.push({ title: draft.title, quotePreview: '', reason: 'no-quote' })
+      continue
+    }
     if (quote.length < MIN_QUOTE_CHARS) {
       unsupported += 1
+      dropped.push({ title: draft.title, quotePreview: preview, reason: 'quote-too-short' })
       continue
     }
     const source = sources.find((candidate) => squash(candidate.text).includes(quote))
     if (source === undefined) {
       unsupported += 1
+      dropped.push({ title: draft.title, quotePreview: preview, reason: 'not-in-transcript' })
       continue
     }
     verified.push({ ...draft, evidenceSeq: source.seq })
   }
-  return { drafts: verified, unsupported }
+  return { drafts: verified, unsupported, dropped }
 }
 
 /** The user's local calendar date, as `YYYY-MM-DD`, for resolving relative times. */
@@ -537,6 +681,14 @@ export type ExtractionOutcome =
      * an unusually quiet extractor.
      */
     readonly unsupported: number
+    /**
+     * The candidates that check rejected, when there were any.
+     *
+     * Carried out of the call so the caller can log what was lost instead of
+     * only how much: a bare count cannot distinguish a paraphrasing model from
+     * an inventive one.
+     */
+    readonly droppedEvidence?: readonly DroppedDraft[]
     readonly route: ExtractionRoute
     /**
      * Whether the reply was cut short by the output cap and salvaged.
@@ -658,6 +810,7 @@ export async function runExtraction(llm: LlmRuntime, request: ExtractionRequest)
         summary: salvaged.summary,
         dropped: salvaged.dropped,
         unsupported: bound.unsupported,
+        ...bound.dropped.length === 0 ? {} : { droppedEvidence: bound.dropped },
         route,
         truncated: true,
         ...usage === undefined ? {} : { usage },
@@ -674,7 +827,7 @@ export async function runExtraction(llm: LlmRuntime, request: ExtractionRequest)
   if (bound.drafts.length === 0) {
     return { kind: 'none', reason: 'unsupported-evidence', route, ...usage === undefined ? {} : { usage } }
   }
-  return { kind: 'memories', drafts: bound.drafts, loops: parsed.loops, summary: parsed.summary, dropped: parsed.dropped, unsupported: bound.unsupported, route, ...usage === undefined ? {} : { usage } }
+  return { kind: 'memories', drafts: bound.drafts, loops: parsed.loops, summary: parsed.summary, dropped: parsed.dropped, unsupported: bound.unsupported, ...bound.dropped.length === 0 ? {} : { droppedEvidence: bound.dropped }, route, ...usage === undefined ? {} : { usage } }
 }
 
 /**

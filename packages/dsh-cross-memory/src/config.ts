@@ -62,6 +62,17 @@ export const DEFAULT_MAX_SUMMARY_ENTRIES = 12
 export const DEFAULT_INJECT_DELTA = true
 
 /**
+ * Byte budget for one delta block.
+ *
+ * 800 was the first guess and it is too tight to be useful: a complete entry
+ * renders at 200-350 bytes once the title, kind, tags and a body preview are
+ * in, so the block admitted two entries at most and often one. A late
+ * conversation that changed topic then got almost nothing. 1600 fits four to
+ * six, which is the size of a topic shift rather than of a single note.
+ */
+export const DEFAULT_DELTA_MAX_BYTES = 1600
+
+/**
  * How many additional memories one conversation lists by title only.
  *
  * The summary can only name a dozen entries and reserves at most a third of its
@@ -410,6 +421,8 @@ export const Config = z.object({
    * the `memory` tool and the on-demand recall path still work.
    */
   injectDelta: z.boolean().default(DEFAULT_INJECT_DELTA).description('Inject a small block when memories are written after the summary was already shown (at most twice per conversation). Off keeps the summary as the only automatic block.').volatile(),
+  /** Byte budget for one delta block. */
+  deltaMaxBytes: z.number().default(DEFAULT_DELTA_MAX_BYTES).description('Byte budget for one late-injection delta block. One complete entry costs 200-350 bytes, so 800 admitted one or two; raise it for a longer block, lower it to spend fewer bytes per conversation. 0 disables the delta entirely.').volatile(),
   /**
    * How many extra memories one conversation lists by title only.
    *
@@ -542,6 +555,8 @@ export interface MemoriesSettings {
   recallMinTerms: number
   /** Whether memories written after the summary are announced as a delta. */
   injectDelta: boolean
+  /** Byte budget for one delta block (0 disables the delta). */
+  deltaMaxBytes: number
   /** How many extra memories one conversation lists by title only (0 disables). */
   rotationEntries: number
   /** User turns between rotation blocks inside one long conversation (0 = once). */
@@ -639,6 +654,7 @@ export const MEMORIES_SETTINGS_DEFAULTS: MemoriesSettings = {
   recallMinQueryChars: DEFAULT_RECALL_MIN_QUERY_CHARS,
   recallMinTerms: DEFAULT_RECALL_MIN_TERMS,
   injectDelta: DEFAULT_INJECT_DELTA,
+  deltaMaxBytes: DEFAULT_DELTA_MAX_BYTES,
   rotationEntries: DEFAULT_ROTATION_ENTRIES,
   rotationEveryTurns: DEFAULT_ROTATION_EVERY_TURNS,
   maxEntriesPerScope: DEFAULT_MAX_ENTRIES_PER_SCOPE,
@@ -798,6 +814,7 @@ export function normalizeSettings(input: Partial<MemoriesSettings> | undefined):
     recallMinQueryChars: positive(value.recallMinQueryChars, DEFAULT_RECALL_MIN_QUERY_CHARS, 0),
     recallMinTerms: positive(value.recallMinTerms, DEFAULT_RECALL_MIN_TERMS, 0),
     injectDelta: value.injectDelta ?? DEFAULT_INJECT_DELTA,
+    deltaMaxBytes: positive(value.deltaMaxBytes, DEFAULT_DELTA_MAX_BYTES, 0),
     rotationEntries: positive(value.rotationEntries, DEFAULT_ROTATION_ENTRIES, 0),
     rotationEveryTurns: positive(value.rotationEveryTurns, DEFAULT_ROTATION_EVERY_TURNS, 0),
     maxEntriesPerScope: positive(value.maxEntriesPerScope, DEFAULT_MAX_ENTRIES_PER_SCOPE),

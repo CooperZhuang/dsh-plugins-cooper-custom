@@ -1222,6 +1222,61 @@ export function searchMemories(
 }
 
 /**
+ * The aliases and tags a store files memories under, ranked against one query.
+ *
+ * The main search is lexical, so a query written in the user's words finds
+ * nothing when the store was filed under the product's words: the model then
+ * reports "no memories match" and stops, although the memory exists under a
+ * name it did not guess. Re-running the search with different words is the
+ * only fix, and this is what makes that possible without a model call —
+ * `keys` and `tags` already hold every other name for every memory.
+ *
+ * A hint, never a result: the terms it returns are vocabulary, not claims, so
+ * a caller must not present them as matches.
+ *
+ * @param groups - per-scope entry lists.
+ * @param query - the query that found nothing.
+ * @param limit - most terms to return.
+ * @returns shared terms first, then the most widely used ones.
+ */
+export function suggestAliases(
+  groups: readonly ScopeEntries[],
+  query: string,
+  limit = 12,
+): { term: string; carriers: number; matched: number }[] {
+  if (limit <= 0) return []
+  const counts = new Map<string, number>()
+  for (const group of groups) {
+    for (const entry of group.entries) {
+      for (const value of [...entry.keys, ...entry.tags]) {
+        const term = value.trim().toLowerCase()
+        if (term.length === 0) continue
+        counts.set(term, (counts.get(term) ?? 0) + 1)
+      }
+    }
+  }
+  if (counts.size === 0) return []
+  const queryTerms = [...new Set(tokenize(query))]
+  const scored: { term: string; carriers: number; matched: number }[] = []
+  for (const [term, carriers] of counts) {
+    let matched = 0
+    for (const item of queryTerms) {
+      // Character-level containment, deliberately: an alias is usually longer
+      // than one query token ("日志轮转" against the bigram 日志), and that
+      // partial overlap is exactly what tells the caller to retry.
+      if (item.length > 0 && term.includes(item)) matched += 1
+    }
+    scored.push({ term, carriers, matched })
+  }
+  const overlapping = scored.filter((item) => item.matched > 0)
+  const pool = overlapping.length > 0 ? overlapping : scored
+  pool.sort((left, right) => right.matched - left.matched
+    || right.carriers - left.carriers
+    || left.term.localeCompare(right.term))
+  return pool.slice(0, limit)
+}
+
+/**
  * Select entries without a text query — used by `memory_search`'s browse mode
  * and by the injector.
  * @param groups - per-scope entry lists, broadest first.

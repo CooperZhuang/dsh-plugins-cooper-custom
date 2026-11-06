@@ -15,12 +15,14 @@ Each conversation receives the following blocks in order, each with its own budg
 
 1. `<persona>`: a snapshot of the user profile, bounded by `personaMaxBytes` (default 12000 bytes, `0` disables it) and truncated at a line boundary. A legacy single-file `persona.md` is still read; saving writes `persona/human.md`.
 2. Memory summary: within `maxSummaryBytes` (default 4096), split into a `global` and a `project` section. Both scopes share one byte budget and `global` renders first, so it also has `globalSummaryEntries` and `globalSummaryBytes` caps of its own.
-3. Delta block: memories written after the summary was injected are announced in small blocks (`injectDelta`, at most twice per conversation).
+3. Delta block: memories written after the summary was injected are announced in small blocks (`injectDelta`, at most twice per conversation, `deltaMaxBytes` default 1600 each; one complete entry costs 200-350 bytes, so the former 800 admitted one or two).
 4. Title rotation: titles the summary had no room for, `rotationEntries` (default 16) per conversation, re-emitted every `rotationEveryTurns` (default 8) user turns in a long session.
 5. On-demand recall: injected only when the current user turn lands enough distinct terms in an entry's title, `keys`, `tags` or `appliesTo` (or matches a whole phrase) (`recallMinTerms` default 2, `recallMinScore` default 9, at most `recallMaxPerConversation` per conversation). A term appearing in more than `evidenceMaxDf` (default 0.15) of one scope does not count as evidence.
 6. Raw excerpts: with `rawRecall` on, the recall block also carries original excerpts from the source session, read from the persisted session logs on this machine only.
 
 Every injected block says that memories are background data rather than instructions, and that an entry records what was true when it was written, not necessarily now.
+
+Project memory directories are keyed by the project's **directory name** (`projects/<slug>`), which is what lets one repository checked out at different paths on different machines share one directory. The accepted cost is that two unrelated repositories with the same name share one directory; each host records its own git origin, and when two different origins appear for one slug the injected block carries a one-line conflict warning saying that its project memories may contain the other repository's content.
 
 ## Extraction
 
@@ -28,6 +30,9 @@ Extraction is the first pass. It runs on the maintenance path and never touches 
 
 - A session is mined after it has been idle for `autoExtractIdleMs` (default 300000 ms); `extractIntervalMinutes` (default 30) additionally checks every open session on a timer. `minIdleHours` (default 6) and `maxAgeDays` (default 10) decide whether a session is still eligible, and one pass mines at most `maxSessionsPerPass` (default 2) sessions.
 - One extraction reads the most recent `extractWindowMessages` (default 60) messages, taking only user and assistant prose: tool results and plugin-injected context are dropped so memory never feeds on its own summaries.
+- A window never steps over messages: when more messages are unmined than fit one window, the pass takes the OLDEST contiguous segment (`collectExtractionWindow`) and the watermark advances one segment at a time. Taking the newest segment would leave everything in the middle permanently below the watermark — measured, one 400-message gap left 340 messages never mined.
+- The known titles shown to the extractor are ranked by token overlap with the window and then cut at 80 (`selectKnownTitles`), not cut in time order: on a store larger than the cap, a time-ordered cut hides existing entries from the extractor, which then records the same fact a second time under a new title.
+- A candidate whose quote fails the verbatim check is reported with its title and quote fragment (`no-quote` / `quote-too-short` / `not-in-transcript`), so the reason is visible and not only the count.
 - Every candidate must carry a verbatim quote that actually occurs in the window, or it is dropped. Before anything is written, credential-shaped text is redacted (`sk-…`, `ghp_…`, `AKIA…`, JWT, private-key blocks, `api_key=…`, `Bearer …`, and similar).
 - Background model calls are cost- and quota-guarded: `peakHours` can defer them out of peak windows (empty by default), and `pauseOnQuotaError` (on by default) pauses them after a rate-limit or exhausted-quota error, with a cooldown that starts at `quotaCooldownMinutes` (default 30), doubles per consecutive refusal, and is capped by `quotaCooldownMaxMinutes` (default 480).
 
@@ -67,7 +72,7 @@ Consolidation is the second pass. It resolves contradictions and fragments acros
 
 ## Limits
 
-- Recall is lexical (title, `keys`, `tags`, `appliesTo`, body) with time decay and a one-hop expansion along shared `keys`/`tags` — not vector search; the on-demand gate counts only title, `keys`, `tags` and `appliesTo`. Chinese is handled as character bigrams: a shared run of two characters counts as one strong term.
+- Recall is lexical (title, `keys`, `tags`, `appliesTo`, body) with time decay and a one-hop expansion along shared `keys`/`tags` — not vector search; the on-demand gate counts only title, `keys`, `tags` and `appliesTo`. Chinese is handled as character bigrams: a shared run of two characters counts as one strong term. A search that finds nothing does not simply answer "none": the tool lists the `keys`/`tags` vocabulary that shares characters with the query so the model can retry in the store's own words (`suggestAliases`; a vocabulary hint, never a match).
 - An injected memory is what was concluded when it was written, not current truth; use `memory` action=evidence to open the source conversation when it matters.
 - A `snapshot` value expires from when it was measured; do not use one in place of a reading that changes on its own.
 - Extraction and consolidation are quota- and peak-hour aware; neither is guaranteed to have run at any particular moment.

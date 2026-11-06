@@ -215,10 +215,18 @@ export function registerMemoryTool(ctx: Context, runtime: MemoriesRuntime): () =
             ? await runtime.browse(session, filters)
             : await runtime.search(session, query, filters)
           if (hits.length === 0) {
+            // Search is lexical, so a miss can mean "filed under another name"
+            // rather than "not recorded". Handing back the aliases and tags the
+            // store actually uses lets the caller retry with its vocabulary
+            // instead of concluding the fact is absent.
+            const hints = query.length === 0 ? [] : await runtime.aliasHints(session, query, 12).catch(() => [])
+            const vocabulary = hints.length === 0
+              ? ''
+              : ` The store files memories under these aliases/tags: ${hints.map((hint) => hint.term).join(', ')}. Retry with one of those words.`
             return {
               ok: true,
               action: args.action,
-              message: query.length === 0 ? 'No memories stored yet.' : `No memories match ${JSON.stringify(query)}.`,
+              message: query.length === 0 ? 'No memories stored yet.' : `No memories match ${JSON.stringify(query)}.${vocabulary}`,
               results: [],
             }
           }

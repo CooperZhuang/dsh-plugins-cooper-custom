@@ -89,7 +89,7 @@ dsh plugin --profile <profile> add /path/to/packages/dsh-cross-memory
     # logFile: /custom/path/log         # 默认 $DSH_HOME/logs/dsh-cross-memory.log；显式写空串关闭文件日志
 ```
 
-**可调项**（64 项，都是 `.volatile()` 字段）：修改后立即生效，不需要重启，也不会重挂插件实例。可以在设置 → 记忆 → 配置里改，也可以直接改当前 profile 的 patch。常用项如下：
+**可调项**（65 项，都是 `.volatile()` 字段）：修改后立即生效，不需要重启，也不会重挂插件实例。可以在设置 → 记忆 → 配置里改，也可以直接改当前 profile 的 patch。常用项如下：
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
@@ -103,6 +103,7 @@ dsh plugin --profile <profile> add /path/to/packages/dsh-cross-memory
 | `recallMinTerms` | `2` | 补注所需的实词数，防止只共享一个常见词就触发 |
 | `recallMaxPerConversation` | `4` | 一个会话最多按需补注多少条记忆；`0` 关闭 |
 | `injectDelta` | `true` | 摘要注入后新写入的记忆以增量块补发，每会话最多两次 |
+| `deltaMaxBytes` | `1600` | 每个增量块的字节预算；一条完整条目约 200–350 字节，`0` 关闭增量块 |
 | `rotationEntries` | `16` | 每会话额外列出多少个未出现过的标题；`0` 关闭标题轮转 |
 | `rotationEveryTurns` | `8` | 同一个长会话里每隔多少个用户轮重新发一次标题轮转块；`0` 只发一次 |
 | `rawRecall` | `false` | 补注块是否附带来源会话的原文片段（默认关闭） |

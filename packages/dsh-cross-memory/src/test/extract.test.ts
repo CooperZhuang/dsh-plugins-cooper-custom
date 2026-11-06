@@ -16,7 +16,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { MemoriesRuntime } from '../index.js'
 import type { MemoryEntry } from '../types.js'
-import { EXTRACT_JSON_SCHEMA, bindEvidence, collectWindow, parseExtraction, redactSecrets, runExtraction } from '../extract.js'
+import { EXTRACT_JSON_SCHEMA, bindEvidence, collectExtractionWindow, collectWindow, parseExtraction, redactSecrets, runExtraction, selectKnownTitles } from '../extract.js'
 import { normalizeSettings } from '../config.js'
 import { peakDelayMs } from '../schedule.js'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -322,7 +322,7 @@ test('runExtraction reports an empty window and a missing route without calling 
   const session = stubSession('C:\\work', [{ seq: 1, role: 'user', text: 'hi' }])
   const empty = await runExtraction(fakeLlm('{}') as never, {
     session,
-    window: { text: '', lastSeq: undefined, messages: 0, sources: [] },
+    window: { text: '', lastSeq: undefined, messages: 0, sources: [], skipped: 0 },
     projectLabel: 'project:work',
     maxOutputTokens: 128,
     maxMemories: 1,
@@ -1089,4 +1089,61 @@ test('the exit flush still mines what arrived after a periodic pass', async (t) 
   assert.equal(await runtime.flushExit(5_000), 1, 'new material is not skipped by a per-process flag')
   assert.equal(runtime.state.getSession('extract-session')?.lastSeq, 2)
   t.after(() => rm(dir, { recursive: true, force: true }))
+})
+test('bindEvidence names what it dropped, not just how many', () => {
+  const bound = bindEvidence([
+    { scope: 'global', title: 'kept', body: 'b', tags: [], quote: 'I always deploy with pnpm run ship.' },
+    { scope: 'global', title: 'no quote', body: 'b', tags: [] },
+    { scope: 'global', title: 'too short', body: 'b', tags: [], quote: 'pnpm' },
+    { scope: 'global', title: 'invented', body: 'b', tags: [], quote: 'The moon is made of cheese.' },
+  ], [{ seq: 7, text: 'I always deploy with pnpm run ship.' }])
+  assert.deepEqual(bound.drafts.map((draft) => draft.title), ['kept'])
+  assert.equal(bound.unsupported, 3)
+  // The reason is the actionable half: "no quote at all" is a prompt problem,
+  // "quoted something the transcript does not contain" is an invention.
+  assert.deepEqual(bound.dropped.map((item) => [item.title, item.reason]), [
+    ['no quote', 'no-quote'],
+    ['too short', 'quote-too-short'],
+    ['invented', 'not-in-transcript'],
+  ])
+  assert.equal(bound.dropped[2]?.quotePreview, 'The moon is made of cheese.')
+})
+
+test('selectKnownTitles ranks the window over every stored title, not the newest 80', () => {
+  // 120 titles, only the OLDEST one shares vocabulary with the window: a
+  // time-ordered cut would hide exactly the title the extractor needs.
+  const candidates = Array.from({ length: 120 }, (_, index) => ({
+    title: index === 0 ? '日志轮转用 xz 归档' : `无关条目 ${index}`,
+    updatedAt: 1_000 + index,
+  }))
+  const selected = selectKnownTitles(candidates, '那个日志轮转是怎么做的', 10)
+  assert.equal(selected.length, 10)
+  assert.equal(selected[0], '日志轮转用 xz 归档')
+  // With nothing overlapping, the newest still win — a representative sample.
+  const unrelated = selectKnownTitles(candidates, 'zzz', 2)
+  assert.deepEqual(unrelated, ['无关条目 119', '无关条目 118'])
+  // Under the cap the whole set passes through untouched.
+  assert.deepEqual(selectKnownTitles(candidates.slice(0, 3), 'zzz', 10), ['日志轮转用 xz 归档', '无关条目 1', '无关条目 2'])
+})
+
+test('a backlog is mined from the oldest end, so no message can be skipped', () => {
+  const events = Array.from({ length: 20 }, (_, index) => ({ seq: index + 1, role: 'user' as const, text: `line ${index}` }))
+  const session = stubSession('C:\\work', events)
+  // Newest-first steps over lines 2..17 and the watermark would jump past them.
+  const newest = collectWindow(session, 0, 3, 100_000)
+  assert.equal(newest.skipped, 17)
+  const window = collectExtractionWindow(session, 0, 3, 100_000)
+  assert.equal(window.skipped, 17)
+  assert.equal(window.lastSeq, 3, 'a backlog window ends on the contiguous head')
+  assert.match(window.text, /line 0/u)
+  // Walking the watermark forward reaches every message exactly once.
+  const seen: number[] = []
+  let after = 0
+  for (let pass = 0; pass < 20; pass += 1) {
+    const next = collectExtractionWindow(session, after, 3, 100_000)
+    if (next.lastSeq === undefined) break
+    for (const source of next.sources) seen.push(source.seq)
+    after = next.lastSeq
+  }
+  assert.deepEqual(seen, events.map((event) => event.seq))
 })

@@ -53,6 +53,16 @@ export interface BackfillWindow {
   readonly messages: number
   /** Message bodies behind `text`, for the extraction quote check. */
   readonly sources: readonly { readonly seq: number; readonly text: string }[]
+  /**
+   * Always zero: a backfill window is planned from a whole log, so the planner
+   * already splits the log into contiguous windows and nothing is skipped.
+   *
+   * Declared because the window is handed to {@link runExtraction}, which takes
+   * an {@link ExtractWindow}. The live path uses the field to detect a backlog
+   * and re-window from the oldest end; the backfill path has no backlog to
+   * detect.
+   */
+  readonly skipped: number
 }
 
 /** zstd frame magic bytes; a session log is a concatenation of frames. */
@@ -238,6 +248,7 @@ export function planWindows(
       lastSeq,
       messages: current.length,
       sources: current.map((entry) => ({ seq: entry.seq, text: entry.text })),
+      skipped: 0,
     })
     current = []
     cost = 0

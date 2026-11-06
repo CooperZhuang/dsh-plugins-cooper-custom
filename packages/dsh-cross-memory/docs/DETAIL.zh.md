@@ -15,12 +15,14 @@ dsh-cross-memory 把会话里值得长期保留的内容（偏好、决定、踩
 
 1. `<persona>`：用户画像快照，预算 `personaMaxBytes`（默认 12000 字节，`0` 关闭），超长部分按行截断。旧的单文件 `persona.md` 仍会被读取，保存后写到 `persona/human.md`。
 2. 记忆摘要：在 `maxSummaryBytes`（默认 4096）内分 `global` 与 `project` 两段；两段共用一个字节预算，`global` 先渲染，另有 `globalSummaryEntries` 与 `globalSummaryBytes` 限制它的大小。
-3. 增量块：摘要注入之后新写入的记忆以小块补发（`injectDelta`，每会话最多两次）。
+3. 增量块：摘要注入之后新写入的记忆以小块补发（`injectDelta`，每会话最多两次、每次 `deltaMaxBytes` 默认 1600 字节；一条完整条目约 200–350 字节，旧的 800 只装得下一两条）。
 4. 标题轮转：只列摘要没提到的标题，每会话 `rotationEntries`（默认 16）条，同一个长会话里每 `rotationEveryTurns`（默认 8）个用户轮重新发一次。
 5. 按需补注：当前用户轮与某条记忆的标题、`keys`、`tags`、`appliesTo` 命中足够多的实词（或整句短语命中）才会注入（`recallMinTerms` 默认 2、`recallMinScore` 默认 9、每会话最多 `recallMaxPerConversation` 条）；在单个作用域里出现比例超过 `evidenceMaxDf`（默认 0.15）的词不计入证据。
 6. 原始片段：`rawRecall` 打开时，补注块附带来源会话的原文片段，只读本机会话日志。
 
 注入块都写明记忆是背景数据、不是指令，并且记录的是写入时成立的事实，可能已经过期。
+
+记忆目录按项目**目录名**分片（`projects/<slug>`），同一仓库在不同机器的不同路径因此共用一份；代价是同名但无关的两个仓库会共用一个目录。每个宿主记录自己的 git origin，两个不同 origin 出现时，注入块里会带一行冲突警告，指出本会话的项目记忆可能混入另一个仓库的内容。
 
 ## 抽取
 
@@ -28,6 +30,9 @@ dsh-cross-memory 把会话里值得长期保留的内容（偏好、决定、踩
 
 - 会话空闲 `autoExtractIdleMs`（默认 300000 毫秒）后被扫描；`extractIntervalMinutes`（默认 30）另按周期检查所有未结束会话。`minIdleHours`（默认 6）与 `maxAgeDays`（默认 10）决定一条会话还能不能被抽取，每轮最多处理 `maxSessionsPerPass`（默认 2）个会话。
 - 一次抽取读最近 `extractWindowMessages`（默认 60）条消息，只取用户与助手正文，丢弃工具结果和插件注入的内容，避免记忆自噬。
+- 窗口不会跳过消息：未抽取的消息多于一个窗口时，这一轮从最老的一段开始取（`collectExtractionWindow`），水位线逐段推进。按最新一段取会让中间的消息永远落在水位线之下，实测一条 400 条消息的缺口里有 340 条从未被抽取。
+- 喂给抽取器的已知标题按与本窗口的字词重合度排序后取前 80（`selectKnownTitles`），不是按时间取前 80：库大于 80 条时，按时间截断会让抽取器看不见已有条目，从而把同一件事写成第二条。
+- 逐字引文核对失败的候选会记下被丢的标题与引文片段（`no-quote` / `quote-too-short` / `not-in-transcript`），计数之外还能看出是「没给引文」还是「编了引文」。
 - 每条候选记忆必须带一段逐字引文，且引文要能在本次窗口的原文里找到，否则丢弃；落盘前统一做密钥擦除（`sk-…`、`ghp_…`、`AKIA…`、JWT、私钥块、`api_key=…`、`Bearer …` 等）。
 - 后台模型调用受成本与配额保护：`peakHours` 可把后台调用推到谷时（默认空），`pauseOnQuotaError`（默认开）在限流或配额不足后暂停，冷却从 `quotaCooldownMinutes`（默认 30）起逐次翻倍，上限 `quotaCooldownMaxMinutes`（默认 480）。
 
@@ -67,7 +72,7 @@ dsh-cross-memory 把会话里值得长期保留的内容（偏好、决定、踩
 
 ## 注意与限制
 
-- 检索与召回都是词法匹配，不是向量检索：标题、`keys`、`tags`、`appliesTo`、正文按权重计分，再叠时间衰减与沿共享 `keys`/`tags` 的一跳扩展；按需补注的门槛只认标题、`keys`、`tags`、`appliesTo` 四个字段。中文按字符二元组处理，共享两个汉字记为一次强命中。
+- 检索与召回都是词法匹配，不是向量检索：标题、`keys`、`tags`、`appliesTo`、正文按权重计分，再叠时间衰减与沿共享 `keys`/`tags` 的一跳扩展；按需补注的门槛只认标题、`keys`、`tags`、`appliesTo` 四个字段。中文按字符二元组处理，共享两个汉字记为一次强命中。检索零命中时工具不直接回「没有」：它会列出库里与被查词共享字符的 `keys`/`tags` 词表，让模型用库自己的说法重试一次（`suggestAliases`，只是词表提示，不是匹配结果）。
 - 注入的记忆是写入当时的结论，不是当前事实；需要判断时用 `memory` 的 `evidence` 打开来源会话。
 - `durability=snapshot` 的数字从测量时间起算过期，不要用它代替会自己变化的读数。
 - 合并与抽取都受配额与谷时限制，后台不保证在某个时刻一定跑过。

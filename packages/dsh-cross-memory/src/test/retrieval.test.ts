@@ -12,7 +12,7 @@
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { tokenize, termWeight, relevanceOf, relevanceOfOne, searchMemories, FIELD_WEIGHTS, TERM_WEIGHTS } from '../search.js'
+import { suggestAliases, tokenize, termWeight, relevanceOf, relevanceOfOne, searchMemories, FIELD_WEIGHTS, TERM_WEIGHTS } from '../search.js'
 import { isSubstantiveTurn, queryMessages } from '../query.js'
 import type { MemoryEntry, MemoryKind } from '../types.js'
 
@@ -159,4 +159,21 @@ test('a turn with no letters, digits, or ideographs is not worth a scan', () => 
   assert.equal(isSubstantiveTurn('ok'), true)
   assert.equal(isSubstantiveTurn('  ...  '), false)
   assert.equal(isSubstantiveTurn(''), false)
+})
+
+test('a query that finds nothing is answered with the aliases the store uses', () => {
+  // Filed under the product's words, not the user's: the search cannot bridge
+  // that gap, so the useful answer names the vocabulary instead of nothing.
+  const aliased = entry('prompt-cache', '先读项目约定再动代码', '动手之前先看约定，别直接改。', { keys: ['前缀缓存'], tags: ['prompt'] })
+  const groups = [{ scope: 'global' as const, label: 'global', entries: [...CORPUS, aliased] }]
+  assert.equal(suggestAliases(groups, '完全无关的一句话', 5)[0]?.term !== undefined, true)
+  const shared = suggestAliases(groups, '前缀缓存会不会被打断', 5)
+  assert.equal(shared[0]?.term, '前缀缓存')
+  assert.ok(shared[0].matched > 0)
+  // With no overlap at all the most widely carried terms are still offered:
+  // a hint is vocabulary, not a claim, so a fallback list is not a false match.
+  const fallback = suggestAliases(groups, 'zzz', 3)
+  assert.equal(fallback.length, 3)
+  assert.equal(fallback[0]?.matched, 0)
+  assert.equal(suggestAliases([{ scope: 'global', label: 'global', entries: [] }], 'x', 5).length, 0)
 })
