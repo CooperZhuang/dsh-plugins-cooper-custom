@@ -1,6 +1,6 @@
 {
   "name": "dsh-folder-path",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "DSH 插件：粘贴（复制来的）文件夹时不再尝试上传，而是把它的完整路径作为文本插入输入框（Windows / macOS）。Paste a copied folder and get its full path as text instead of a failed upload (Windows and macOS).",
   "private": false,
   "publishConfig": {
