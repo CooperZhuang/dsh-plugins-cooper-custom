@@ -115,3 +115,26 @@ DeepSeek 的 key 从环境变量 `DEEPSEEK_API_KEY` 或 `~/.dsh/.credentials.yam
 - 当前口径（bank v2 + 判分器 v5）：memory 53/53、rag 52/53、closed 0/53。memory 不输给「把整段原文塞进去」，而且上下文约 4KB，rag 是整段对话。
 - 和 companion-memory「六轮优化仍没赢 RAG」对照：它的 RAG 是上限参照且用了同样的原文；我们这里 memory 略高 1 题，但样本只有 53、单次采样，不能当成普遍优势，只能说「没有明显落后」。
 - 不能说明：真实长期会话上的效果、53 题之外的泛化、判分器残余误判（前后至少 5 处单题误判，全靠逐点判分和人工复核兜住）。判分与生成同家族模型、单次采样、无多票。
+
+## 数字来源与复算
+
+上面五轮表的数字有一部分还能查，跑一条命令即可：
+
+```bash
+node bench/verify-doc.mts
+```
+
+三份 bench 文档共用这一份判定：脚本只读 `bench/data/`、`scenarios*.mts` 与预算常量，逐项打印 `PASS` / `MISMATCH` / `UNVERIFIABLE`，有 `MISMATCH` 时退出码非 0。当前 123 项里 PASS 99 项、UNVERIFIABLE 24 项、无 `MISMATCH`。
+
+可复算：题库 23 + 30 = 53，bank v2 哈希 `23876acceb0e…`，轮 4（bank v1 + 判分器 v3）、4′（判分器 v4）、轮 5 的题库与费用、5′（判分器 v5 逐点）的三臂分数与费用，以及第五轮逐题复核里的单题结论。
+
+下面这些数字没有可用的结果文件，原因都是结果被后续运行覆盖或从未留存，不要当成可验证的结论引用：
+
+- 第 1–3 轮与 3′ 的三臂分数和费用：`bench/data/e2e-results.json` 现在是 2 场景冒烟（哈希 `06c48e219535…`），这四轮的结果没有留存；
+- 3′、4′、5′ 的「约 ¥0.10」重判费用：`--regrade` 沿用原 `usage`、只写分数，重判调用量没有单独记账；
+- 轮 5 在判分器 v4 下的逐题结果：已被 5′ 的 `e2e-results-regraded.json` 覆盖，现存文件是 v5 口径；
+- 轮 5 与 5′ 那两处相反的单题判决（`snapshot-latency`、`branch-strategy`）：需要 bank v2 的 v4 原件做对照，该文件没有留存；
+- 「53 个场景全量抽取约 ¥0.27」：抽取账目没有留存，现存结果都是 `--reuse-store` 或重判；
+- 第 1 轮那 23 题的字节一致性：题面改动前的题库没有留存，无法逐字节比对。
+
+bank v1 的哈希 `9cece6602e01…` 只能用 `bench/data/e2e-results-bankv1.json` 里的记录值核对；bank v2 已按主体拆开 `rabbitmq-vhost-queue`，v1 题库本身没有留存，不能用当前题库重算。

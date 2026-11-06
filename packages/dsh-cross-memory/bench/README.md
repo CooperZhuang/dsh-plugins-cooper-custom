@@ -4,7 +4,7 @@
 
 ```
 node bench/export-corpus.mts            # 导出 ~/.dsh/memories 的 global 作用域 + 抽样 150 条
-node bench/run-bench.mts                # 四条对照臂：出厂打分 / BM25 / dense / RRF
+node bench/run-bench.mts                # 六条排名臂：current / relevance / BM25 / dense，另加 hybrid 与 hybrid+current 两条 RRF 融合臂
 node bench/ablate.mts                   # 复刻打分函数后逐项拆解：idf、长度、饱和、注入排序
 node bench/analyze.mts                  # 字段贡献、闸门拒绝原因、按 kind 的召回
 node bench/sensitivity.mts              # BM25 的 k1×b×字段重复 64 格敏感性
@@ -30,3 +30,17 @@ node bench/real/sample.mts               # 真实会话取样 → 出题 → 三
 - 语料是 global 作用域 732 条。项目作用域的 150 个目标只命中 2 条，无法用同一套查询做第二语料验证；要做得另生成查询。
 - 查询是让模型按记忆条目写的「将来会话会怎么问」，与实际会话分布仍有差距；防泄漏只做到「不照抄原文」，标题里的专有名词和版本号会自然复现。
 - dense 臂用本地 ollama 的 `qwen3-embedding:0.6b`（1024 维）。换模型要重跑，缓存按文本哈希存在 `bench/data/emb-*.json`。
+
+## 数字来源与复算
+
+检索基准的数字可以用一条命令核对：
+
+```bash
+node bench/verify-doc.mts
+```
+
+三份 bench 文档共用这一份判定：脚本只读 `bench/data/` 与题库源码，逐项打印 `PASS` / `MISMATCH` / `UNVERIFIABLE`，有 `MISMATCH` 时退出码非 0。当前 123 项里 PASS 99 项、UNVERIFIABLE 24 项、无 `MISMATCH`。
+
+可复算：语料 732 条、`queries-a` / `queries-b` 各 75 条、`queries-a` 上出厂打分 R@1 = 75/75、dense 缓存的模型 `qwen3-embedding:0.6b` 与 1024 维。
+
+不能复算：「项目作用域的 150 个目标只命中 2 条」对应的命中比对没有留存产物，`bench/data/sample.json` 只有 150 条抽样，不要把 2 条这个数当成可验证的结论引用。
