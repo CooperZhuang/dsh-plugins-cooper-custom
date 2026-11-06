@@ -120,7 +120,9 @@ pnpm run verify:profile       # 校验 profile 里的硬链接安装与源码一
 
 ```bash
 npm trust github <pkg> --file release.yml --repo CooperZhuang/dsh-plugins-cooper-custom --allow-publish -y
-```安全边界：只有 `dsh-*@*` 形式的 tag 会触发，且发布前会跑全量测试；可信发布者的配置在每个包 npm 页面的 Trusted publishers，工作流文件名必须固定为 `release.yml`。
+```
+
+安全边界：只有 `dsh-*@*` 形式的 tag 会触发，且发布前会跑全量测试；可信发布者的配置在每个包 npm 页面的 Trusted publishers，工作流文件名必须固定为 `release.yml`。
 
 ## 隐私与安全
 
