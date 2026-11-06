@@ -35,10 +35,10 @@ If Len(Trim(path)) = 0 Then WScript.Quit 0
 script = fso.GetParentFolderName(WScript.ScriptFullName) & "\open-in-dsh.ps1"
 If Not fso.FileExists(script) Then WScript.Quit 1
 
-' The Desktop shell's own port (dsh-desktop-host starts the profile with
-' `--port 19387`). Kept in step with $DesktopPort in open-in-dsh.ps1 and with
-' the installer by test/scripts.test.ts.
-port = "19387"
+' 0 means "resolve the port in the launcher": the Desktop shell starts the
+' profile with `--port 0`, so its port differs on every launch and cannot be
+' baked into this file. An explicit number still wins.
+port = "0"
 If args.Count >= 2 Then
   If IsNumeric(args(1)) Then port = Trim(args(1))
 End If

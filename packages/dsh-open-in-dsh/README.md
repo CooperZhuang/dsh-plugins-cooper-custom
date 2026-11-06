@@ -43,7 +43,7 @@ pwsh -File "$env:USERPROFILE\.dsh\profiles\<profile>\node_modules\dsh-open-in-ds
 ```
 
 - `-Action status`：只查看当前注册与解析结果；`-Action uninstall`：移除。
-- 不带 `-Port` / `-App` 就是自动：检测到桌面版就注册桌面版端口与应用，否则退回 `dsh web` + 浏览器 URL。也可以显式钉住：`-Port 3080 -App <exe 路径>`。
+- 不带 `-Port` / `-App` 就是自动：桌面版只把「每次点击时现场发现端口」这件事写进动词（存的是 `0`），并记住应用路径；没有桌面版时退回 `dsh web`（3080）+ 浏览器 URL。也可以显式钉住：`-Port 3080 -App <exe 路径>`。
 - 写入两个 HKCU 动词：`Directory\shell\DSHOpen`（右键文件夹）与 `Directory\Background\shell\DSHOpen`（右键文件夹空白处）。
 - 装完重启一次资源管理器：Explorer 按进程缓存右键菜单，不重启看不到新条目。
 
@@ -171,6 +171,8 @@ Chrome 会把后台页面的定时器节流到每分钟一次，而刚点完右�
 - 宿主半边改代码要重启宿主才生效；桌面版必须整个退出再打开。
 - macOS：快速操作在子菜单里，不是顶层条目（顶层需要 Finder Sync 扩展 + Xcode 工程 + 签名）；右键文件夹空白处没有入口（服务总要有选中项）；移动 checkout 后启动器绝对路径会失效，重跑一次 `install-macos.sh install`——`status` 会打印 `STALE` 并以非 0 退出。
 - 宿主重启后插件重新绑定套接字/路由；套接字不在时启动器明确报错并写日志，不会假装成功。
+- Windows 桌面版的端口**每次启动都变**（桌面壳用 --port 0）。动词里存的是  ，启动器每次现场发现：从 DSH 进程的 loopback 连接反推端口，再用 /dsh-open-in-dsh/api/v1/status 确认（这版 Windows 上监听套接字不在 
+etstat 表里，所以只能靠连接反推）。发现失败会回落到 19387 / 3080，并照旧弹窗报错。
 
 ## 验证（开发）
 

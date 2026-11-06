@@ -19,12 +19,14 @@
   Two deployments run the same script, and the presence of a Desktop app
   decides which one this is:
 
-    * **DSH 桌面版** (profile `desktop`, port 19387). The host is the Electron
-      app itself, so "nothing is listening" means "the app is closed", and
-      starting the app is the only thing that can help. There is deliberately
-      no browser fallback here: the Desktop host serves every page at the
-      authenticated URL the shell owns, and a bare
-      `http://127.0.0.1:19387/` answers
+    * **DSH 桌面版** (profile `desktop`, OS-assigned port). The host is the
+      Electron app itself, so "nothing is listening" means "the app is closed",
+      and starting the app is the only thing that can help. The shell starts the
+      profile with `--port 0`, so the port differs on every launch and is
+      discovered from the live loopback connections (`-Port 0`, the default).
+      There is deliberately no browser fallback here: the Desktop host serves
+      every page at the authenticated URL the shell owns, and a bare
+      `http://127.0.0.1:<port>/` answers
       `401 dsh web authentication required`. Opening that URL would give the
       user an error page instead of their folder.
 
@@ -89,11 +91,12 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# The two ports that exist in the wild. 19387 is the Desktop shell's own
-# hard-coded port (`dsh-desktop-host` starts the profile with
-# `--no-open --port 19387`); 3080 is the historical `dsh web` port this
-# repository's README was written around. Mirrored in `install-menu.ps1` and
-# asserted against the scripts by `test/scripts.test.ts`.
+# The two ports that exist in the wild. 3080 is the historical `dsh web` port
+# this repository's README was written around; 19387 is the Desktop shell's old
+# hard-coded port — it is no longer where the shell listens (0.2.2 starts the
+# profile with `--port 0`), so it is kept only as a probe candidate for a stale
+# install. Mirrored in `install-menu.ps1` and asserted against the scripts by
+# `test/scripts.test.ts`.
 $DesktopPort = 19387
 $WebPort = 3080
 
@@ -192,38 +195,90 @@ function Resolve-DshApp([string]$Explicit) {
 }
 
 <# GET the side-effect-free follower count; $null when nothing answers. #>
-function Test-HostAlive([int]$HostPort) {
+function Test-HostAlive([int]$HostPort, [int]$TimeoutSec = 3) {
   try {
-    return (Invoke-RestMethod -Uri "http://127.0.0.1:$HostPort/dsh-open-in-dsh/api/v1/status" -Method Get -TimeoutSec 2)
+    return (Invoke-RestMethod -Uri "http://127.0.0.1:$HostPort/dsh-open-in-dsh/api/v1/status" -Method Get -TimeoutSec $TimeoutSec)
   } catch {
     return $null
   }
 }
 
+<#
+  Ports worth probing, most likely first.
+
+  DSH 0.2.2's Desktop shell starts the profile with `--port 0`, so the OS picks
+  a port in the dynamic range (1024-15000 here) on every launch, and nothing
+  writes it to disk. The listener itself is not in this build's `netstat`
+  table, but the shell's own loopback connections are — so the port shows up as
+  the far end of a connection owned by a DSH process. Those candidates are
+  confirmed by the route itself, which only the real host answers.
+
+  @returns candidate ports, de-duplicated, in probe order.
+#>
+function Get-CandidateHostPorts {
+  $ports = New-Object System.Collections.Generic.List[int]
+  $dshPids = @(Get-Process -Name 'DeepSeek Harness' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id)
+  try {
+    foreach ($line in (netstat -ano -p tcp 2>$null)) {
+      if ($line -match '127\.0\.0\.1:(\d+)\s+127\.0\.0\.1:(\d+)\s+ESTABLISHED\s+(\d+)\s*$') {
+        $owner = [int]$Matches[3]
+        if ($dshPids -contains $owner) {
+          $ports.Add([int]$Matches[1])
+          $ports.Add([int]$Matches[2])
+        }
+      }
+    }
+  } catch {
+    # No netstat output: only the known ports are left to try.
+  }
+  $ports.Add($DesktopPort)
+  $ports.Add($WebPort)
+  $ports | Where-Object { $_ -gt 0 -and $_ -le 65535 } | Select-Object -Unique
+}
+
+<#
+  The live host port, or 0 when no host answers.
+
+  A short timeout is enough: a host on loopback answers in milliseconds, and a
+  closed or filtered port is the slow case.
+#>
+function Find-LiveHostPort {
+  foreach ($candidate in (Get-CandidateHostPorts)) {
+    if ($null -ne (Test-HostAlive ([int]$candidate) 1)) { return [int]$candidate }
+  }
+  return 0
+}
+
 $desktopApp = ''
 if (-not $NoAppLaunch) { $desktopApp = Resolve-DshApp $App }
 
-# No explicit port: prefer the Desktop host when the Desktop app exists. That
-# is the whole point of the check — with the app installed, a `dsh web` left
-# running on 3080 must not capture the right-click.
-if ($Port -le 0) {
-  if ($desktopApp -ne '') { $Port = $DesktopPort } else { $Port = $WebPort }
+# No explicit port: discover the live host first. The Desktop shell picks a new
+# port on every launch, so a port baked into the verb would be wrong the moment
+# the app restarts. The two historical ports are the fallback for a cold start,
+# where there is no connection to read the port from.
+$portWasExplicit = $Port -gt 0
+if (-not $portWasExplicit) {
+  $Port = Find-LiveHostPort
+  if ($Port -le 0) {
+    if ($desktopApp -ne '') { $Port = $DesktopPort } else { $Port = $WebPort }
+  }
 }
 
-# Which deployment this run is: the Desktop one only when the Desktop port was
-# resolved *and* an app exists to start. Pinning `-Port 3080` on a machine that
-# also has the Desktop app therefore keeps the `dsh web` behaviour instead of
-# launching the wrong thing — and an explicit `-App` still works there as the
-# old `-AppShortcut` did: the window to open when nobody is following.
-$desktopMode = ($desktopApp -ne '') -and ($Port -eq $DesktopPort)
+# Which deployment this run is: the Desktop one whenever an app exists to start
+# *and* the port in hand is not the `dsh web` default — pinning `-Port 3080` on a
+# machine that also has the Desktop app therefore keeps the `dsh web` behaviour
+# instead of launching the wrong thing, and an explicit `-App` still works there
+# as the old `-AppShortcut` did: the window to open when nobody is following.
+$desktopMode = ($desktopApp -ne '') -and ($Port -ne $WebPort)
 
 if ($Probe) {
   $status = Test-HostAlive $Port
   $report = [ordered]@{
-    port   = $Port
-    app    = $desktopApp
-    mode   = if ($desktopMode) { 'desktop' } else { 'web' }
-    host   = ($null -ne $status)
+    port    = $Port
+    auto    = (-not $portWasExplicit)
+    app     = $desktopApp
+    mode    = if ($desktopMode) { 'desktop' } else { 'web' }
+    host    = ($null -ne $status)
     clients = if ($null -ne $status) { [int]$status.clients } else { $null }
   }
   [pscustomobject]$report | ConvertTo-Json -Compress
@@ -236,21 +291,28 @@ if ($null -eq $target) {
   exit 0
 }
 
-$endpoint = "http://127.0.0.1:$Port/dsh-open-in-dsh/api/v1/open"
 $payload = @{ path = $target } | ConvertTo-Json -Compress
+$script:lastError = ''
+
+<# POST the folder; $null when nothing accepted it. #>
+function Send-Open([int]$HostPort) {
+  try {
+    return (Invoke-RestMethod -Uri "http://127.0.0.1:$HostPort/dsh-open-in-dsh/api/v1/open" `
+        -Method Post -ContentType 'application/json' -Body $payload -TimeoutSec 5)
+  } catch {
+    $script:lastError = $_.Exception.Message
+    return $null
+  }
+}
 
 $reply = $null
-$lastError = ''
-try {
-  $reply = Invoke-RestMethod -Uri $endpoint -Method Post -ContentType 'application/json' -Body $payload -TimeoutSec 5
-} catch {
-  $lastError = $_.Exception.Message
-}
+if ($Port -gt 0) { $reply = Send-Open $Port }
 
 # Nothing answered. In the Desktop deployment that is not an error, it is the
 # cold start: the host *is* the app, so the app has to come up first and the
-# announcement has to wait for it. In the `dsh web` deployment the host is a
-# service the user starts, and there is nothing to launch.
+# announcement has to wait for it. The port is discovered again on every round,
+# because the app that just started picked its own. In the `dsh web` deployment
+# the host is a service the user starts, and there is nothing to launch.
 $launched = $false
 if ($null -eq $reply -and $desktopMode) {
   try {
@@ -264,20 +326,26 @@ if ($null -eq $reply -and $desktopMode) {
   $deadline = (Get-Date).AddSeconds($WaitSeconds)
   while ($null -eq $reply -and (Get-Date) -lt $deadline) {
     Start-Sleep -Milliseconds 700
-    try {
-      $reply = Invoke-RestMethod -Uri $endpoint -Method Post -ContentType 'application/json' -Body $payload -TimeoutSec 3
-      $lastError = ''
-    } catch {
-      $lastError = $_.Exception.Message
+    if ($portWasExplicit) {
+      $reply = Send-Open $Port
+    } else {
+      $live = Find-LiveHostPort
+      if ($live -gt 0) {
+        $Port = $live
+        $reply = Send-Open $Port
+      }
     }
   }
+  if ($null -ne $reply) { $script:lastError = '' }
 }
+
+$endpoint = "http://127.0.0.1:$Port/dsh-open-in-dsh/api/v1/open"
 
 if ($null -eq $reply) {
   if ($desktopMode) {
-    Show-Failure "已启动 DSH 桌面版，但在 $WaitSeconds 秒内没能连上它（$endpoint）。`n`n请确认 DSH 已正常打开后重试。`n`n$lastError"
+    Show-Failure "已启动 DSH 桌面版，但在 $WaitSeconds 秒内没能连上它（$endpoint）。`n`n请确认 DSH 已正常打开后重试。`n`n$($script:lastError)"
   } else {
-    Show-Failure "无法连接 DSH（$endpoint）。`n`n请确认 dsh web 正在运行，然后重试。`n`n$lastError"
+    Show-Failure "无法连接 DSH（$endpoint）。`n`n请确认 dsh web 正在运行，然后重试。`n`n$($script:lastError)"
   }
   exit 1
 }

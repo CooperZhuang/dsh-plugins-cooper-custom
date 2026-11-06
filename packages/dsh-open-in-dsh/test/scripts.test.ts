@@ -60,19 +60,30 @@ test('the browser half carries the open-with routes the host half serves', () =>
   assert.ok(!launcher.includes(ROUTE_OPEN_WITH), 'the launcher must not call the open-with route')
 })
 
-test('every script agrees on which port the Desktop host listens on', () => {
+test('every script agrees on how the Desktop port is resolved', () => {
   const desktopPort = powershellNumber(launcher, 'DesktopPort')
   const webPort = powershellNumber(launcher, 'WebPort')
 
-  // `dsh-desktop-host` starts the Desktop profile with a hard-coded
-  // `--no-open --port 19387`; this is the one place the number is written down
-  // outside that package, and the assertion is what keeps it honest.
-  assert.equal(desktopPort, 19387, 'the Desktop host hard-codes 19387')
+  // The Desktop shell starts the profile with `--port 0`, so 19387 is no longer
+  // where it listens — it survives as the fallback probe candidate for a stale
+  // install, and the constant stays the one place the number is written down.
+  assert.equal(desktopPort, 19387, 'the legacy Desktop port is still the fallback candidate')
   assert.equal(webPort, 3080, 'the historical `dsh web` port')
 
+  // The verb host must NOT bake a port: 0 means "resolve it on every click", and
+  // the launcher is the only implementation of that resolution.
   const vbsDefault = verbHost.match(/^port = "(\d+)"/m)
   assert.ok(vbsDefault, 'open-in-dsh.vbs has no default port')
-  assert.equal(Number(vbsDefault[1]), desktopPort, 'the verb host default port drifted')
+  assert.equal(Number(vbsDefault[1]), 0, 'the verb host must defer the port to the launcher')
+  assert.match(launcher, /function Find-LiveHostPort/, 'the launcher must discover the live port')
+  assert.ok(
+    launcher.includes('DSH_OPEN_PORT') && launcher.includes('$portWasExplicit'),
+    'an explicit port or DSH_OPEN_PORT must still win over discovery',
+  )
+  // The installer stores 0 in desktop mode, so a click never depends on the port
+  // that happened to be live when the verb was registered.
+  assert.match(installer, /\$verbPortAuto/, 'install-menu.ps1 must bake 0 in desktop mode')
+  assert.match(installer, /if \(\$verbPortAuto\) \{ \$verbPort = 0 \}/, 'the installer must store the auto marker')
 })
 
 test('the installer resolves the target through the launcher instead of guessing', () => {

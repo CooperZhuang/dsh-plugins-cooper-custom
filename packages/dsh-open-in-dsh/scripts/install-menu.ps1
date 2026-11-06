@@ -191,6 +191,12 @@ New-MenuIcon $iconPath
 # on detection succeeding twice.
 $resolution = (& $launcher -Probe -Port $Port -App $App) | ConvertFrom-Json
 $verbPort = [int]$resolution.port
+# The Desktop shell starts the profile with `--port 0`, so its port changes on
+# every launch. Baking the port that happens to be live right now would be wrong
+# after the next restart: store 0 instead, and every click resolves the live
+# port (the launcher's default when no port is passed).
+$verbPortAuto = ($Port -le 0) -and ($resolution.auto -eq $true) -and ($resolution.mode -eq 'desktop')
+if ($verbPortAuto) { $verbPort = 0 }
 $verbApp = [string]$resolution.app
 
 $appArg = ''
@@ -208,7 +214,7 @@ Write-Output "registered '$VerbText' on:"
 Write-Output "  $($verbKeys[0])   (right-click a folder)"
 Write-Output "  $($verbKeys[1])   (right-click inside a folder)"
 Write-Output "  host:        $wscript -> $verbHost   (no console window)"
-Write-Output "  target:      $($resolution.mode) host, port $verbPort"
+Write-Output "  target:      $($resolution.mode) host, port $($verbPort)$(if ($verbPortAuto) { ' (auto: resolved on every click)' } else { '' })"
 if ($verbApp -ne '') {
   Write-Output "  app:         $verbApp   (cold start + window raise)"
 } else {
