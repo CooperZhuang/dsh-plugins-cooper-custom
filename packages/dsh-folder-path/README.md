@@ -1,26 +1,20 @@
 # dsh-folder-path
 
-DSH（DeepSeek Harness）Web 插件：在输入框里**粘贴一个刚从资源管理器 / Finder 复制来的文件夹**时，
-不再尝试把它当成附件上传（原版会显示「上传失败，点击重试」），而是把它的**完整路径**作为文本插进输入框。
+DSH（DeepSeek Harness）Web 插件：在输入框里粘贴刚从资源管理器或 Finder 复制的文件夹时，不再尝试把它当成附件上传（原版会显示「上传失败，点击重试」），而是把完整路径作为文本插入输入框。
 
-- 复制一个文件夹 → `Ctrl+V`（macOS `Cmd+V`）→ 输入框出现 `D:\项目\数据\2026Q1` / `/Users/me/项目/数据`
-- 复制多个文件夹 → 每行一条
-- 普通文本、图片、真实文件的粘贴**完全不受影响**（插件只在粘贴载荷里出现目录时才接管）
+- 复制一个文件夹，按 `Ctrl+V`（macOS `Cmd+V`），输入框出现 `D:\项目\数据\2026Q1` 或 `/Users/me/项目/数据`
+- 复制多个文件夹，每行一条
+- 普通文本、图片、真实文件的粘贴完全不受影响（插件只在粘贴载荷里出现目录时才接管）
 
-## 它解决的是什么问题
+## 它解决什么问题
 
-浏览器是沙盒：网页 JavaScript 拿不到本地文件的磁盘路径。把一个文件夹粘进网页时，
-浏览器交出的是一个 `size: 0`、`type: ''` 的 `File`——字节不可读，因此 DSH 原版的上传链路必然失败；
-而路径也根本不在粘贴载荷里（`File.name` 只有文件夹名）。
+浏览器是沙盒：网页 JavaScript 拿不到本地文件的磁盘路径。把文件夹粘进网页时，浏览器交出的是一个 `size: 0`、`type: ''` 的 `File`，字节不可读，因此 DSH 原版的上传链路必然失败；路径也不在粘贴载荷里（`File.name` 只有文件夹名）。
 
-但剪贴板是**进程级**的：运行宿主的那台机器上，剪贴板里此刻装的正是你刚复制的那份文件列表。
-所以本插件由**宿主半边**去读系统剪贴板的文件列表——Windows 走 CF_HDROP，macOS 走 NSPasteboard 的文件 URL——
-再把真实全路径交回浏览器半边。
+剪贴板是进程级的：运行宿主的那台机器上，剪贴板里此刻装的正是刚复制的那份文件列表。本插件由宿主半边去读系统剪贴板的文件列表（Windows 走 CF_HDROP，macOS 走 NSPasteboard 的文件 URL），再把真实全路径交回浏览器半边。
 
 ## 平台要求
 
-Windows（剪贴板经 PowerShell 5.1 的 `System.Windows.Forms` 读取）或 macOS（系统自带 `osascript`）。
-其他平台宿主返回 `unsupported-platform`，粘贴行为退回原版。
+Windows（剪贴板经 PowerShell 5.1 的 `System.Windows.Forms` 读取）或 macOS（系统自带 `osascript`）。其他平台宿主返回 `unsupported-platform`，客户端提示，路径不插入。
 
 ## 安装
 
@@ -37,8 +31,7 @@ git clone https://github.com/CooperZhuang/dsh-plugins-cooper-custom.git
 dsh plugin --profile <profile> add ./dsh-plugins-cooper-custom/packages/dsh-folder-path
 ```
 
-安装后刷新页面即可。Desktop Beta 2.0.18-beta.1（内核 0.2.1-rc.2）起新增的 bundle 行通常能热挂载，
-宿主不必重启；**更早的版本必须重启 `dsh web`**，不确定时重启一次总是安全的。
+安装后刷新页面即可。Desktop Beta 2.0.18-beta.1（内核 0.2.1-rc.2）起新增的 bundle 行通常能热挂载，宿主不必重启；更早的版本必须重启 `dsh web`，不确定时重启一次总是安全的。
 
 验证是否挂上：`dsh --profile <profile> --dump-config` 里应出现 `# == dsh-folder-path` 层。
 
@@ -52,10 +45,7 @@ dsh plugin --profile <profile> remove dsh-folder-path
 
 ## 兼容性
 
-本包声明的兼容区间是 `engines.dsh: ^0.2.1-rc.2 || ^0.2.2-alpha.2`（Node.js `>=24`）。
-已在 **DSH 0.2.1-rc.2**（npm `@deepseek-ai/dsh` 0.2.1-rc.2）上逐项核对过安装、组合、宿主路由与浏览器半边；
-内核接口一旦变化，最坏结果是插件不再接管粘贴、行为退回原版，而不会破坏原有的粘贴/上传链路。
-本插件只用到内核的这几处：
+本包声明的兼容区间是 `engines.dsh: ^0.2.1-rc.2 || ^0.2.2-alpha.2`（Node.js `>=24`）。已在 DSH 0.2.1-rc.2（npm `@deepseek-ai/dsh` 0.2.1-rc.2）上逐项核对过安装、组合、宿主路由与浏览器半边；内核接口一旦变化，最坏结果是插件不再接管粘贴、行为退回原版，而不会破坏原有的粘贴与上传链路。本插件只用到内核的这几处：
 
 | 内核接口 | 用途 |
 |---|---|
@@ -65,42 +55,35 @@ dsh plugin --profile <profile> remove dsh-folder-path
 | `package.json` 的 `dsh.bundle.patch` 与 `dsh.client.platform` | bundle 补丁层与浏览器半的模块登记 |
 | `exports['./client']` + `window.__ModuleLoader__.load({ id, factory })` | 浏览器半的加载方式 |
 
-插件**不涉及子代理**，所以内核 0.2.1-rc.2 的子代理约定（`startActivation({provider, request})`、Agent Preset）
-不改变它的任何行为。`test/manifest.test.js` 与 `test/client.test.js` 把上面这份清单钉在测试里。
+插件不涉及子代理，所以内核 0.2.1-rc.2 的子代理约定（`startActivation({provider, request})`、Agent Preset）不改变它的任何行为。`test/manifest.test.ts` 与 `test/client.test.ts` 把上面这份清单钉在测试里。
 
 ## 使用
 
-1. 在资源管理器（Windows）或 Finder（macOS）里选中一个或多个文件夹，`Ctrl+C`（macOS `Cmd+C`）
-2. 回到 DSH Web 输入框，`Ctrl+V`（macOS `Cmd+V`）
-3. 路径作为文本出现在草稿里；解析失败时右下角出现一条提示，草稿不动
+1. 在资源管理器（Windows）或 Finder（macOS）里选中一个或多个文件夹，按 `Ctrl+C`（macOS `Cmd+C`）
+2. 回到 DSH Web 输入框，按 `Ctrl+V`（macOS `Cmd+V`）
+3. 路径作为文本出现在草稿里；解析失败时输入框上方出现一条提示，草稿不动
 
 ## 工作原理
 
 | 半边 | 位置 | 职责 |
 |---|---|---|
 | Host 半 `lib/index.js` | 宿主进程（`webServer` 服务） | 精确路由 `POST /dsh-folder-path/api/v1/clipboard-paths`：读系统剪贴板的文件列表（Windows CF_HDROP / macOS NSPasteboard）、按浏览器报来的文件夹名匹配、返回真实全路径 |
-| Client 半 `lib/client.js` | 浏览器（`__ModuleLoader__` bundle） | document 捕获阶段拦截 `paste`，只有载荷里含**目录**时才接管；向宿主取路径，再把文本按 DSH 自己的粘贴通路插进 composer |
+| Client 半 `lib/client.js` | 浏览器（`__ModuleLoader__` bundle） | document 捕获阶段拦截 `paste`，只有载荷里含目录时才接管；向宿主取路径，再把文本按 DSH 自己的粘贴通路插进 composer |
 
-插入不是直接改 DOM：客户端补发一个只带 `text/plain` 的合成 `paste` 事件，
-走的是 DSH 编辑器**原生的文本粘贴命令**（草稿状态、命令菜单、撤销历史、已有 chip 都不受影响）；
-引擎不允许构造带数据的 `ClipboardEvent` 时，退化为 `document.execCommand('insertText')`。
+插入不是直接改 DOM：客户端补发一个只带 `text/plain` 的合成 `paste` 事件，走的是 DSH 编辑器原生的文本粘贴命令（草稿状态、命令菜单、撤销历史、已有 chip 都不受影响）；引擎不允许构造带数据的 `ClipboardEvent` 时，退化为 `document.execCommand('insertText')`。
 
-宿主按平台读剪贴板：Windows 用 PowerShell（`System.Windows.Forms.Clipboard`，输出 **base64(UTF-8 JSON)**，
-中文/空格路径不会被重定向进程的代码页破坏）；macOS 用 `osascript -l JavaScript` 读 NSPasteboard 的
-`public.file-url` 条目，并合并 Finder 的旧格式 `NSFilenamesPboardType` 列表，避免多选文件夹被折叠成一条。
-目录还是文件由宿主进程自己 `stat` 判断。同一时刻的多次粘贴会合并成一次探测。
+宿主按平台读剪贴板：Windows 用 PowerShell（`System.Windows.Forms.Clipboard`，输出 base64(UTF-8 JSON)，中文与空格路径不会被重定向进程的代码页破坏）；macOS 用 `osascript -l JavaScript` 读 NSPasteboard 的 `public.file-url` 条目，并合并 Finder 的旧格式 `NSFilenamesPboardType` 列表，避免多选文件夹被折叠成一条。目录还是文件由宿主侧判断（macOS 用 `stat`，Windows 由 PowerShell 脚本判断）。同一时刻的多次粘贴会合并成一次探测。
 
 ## 配置
 
-插件的配置写在 profile 的补丁层里（`~/.dsh/profiles/web/cordis.patch.yml` 或本包自带的
-`cordis.patch.yml` 会被 `dsh plugin add` 接入），全部可选：
+插件的配置写在 profile 的补丁层里（`~/.dsh/profiles/web/cordis.patch.yml` 或本包自带的 `cordis.patch.yml` 会被 `dsh plugin add` 接入），全部可选：
 
 ```yaml
 - insert:
     - id: folder-path
       name: dsh-folder-path
       config:
-        enabled: true          # false = 宿主半边空转（客户端因此不再接管，行为退回原版）
+        enabled: true          # false = 宿主半边空转：路由不注册，粘贴文件夹时客户端只提示、不插入
         timeoutMs: 5000        # 单次剪贴板探测预算
         powershell: powershell.exe   # 也可用环境变量 DSH_FOLDER_PATH_POWERSHELL 覆盖
         osascript: /usr/bin/osascript # 也可用环境变量 DSH_FOLDER_PATH_OSASCRIPT 覆盖
@@ -109,21 +92,19 @@ dsh plugin --profile <profile> remove dsh-folder-path
 
 ## 安全边界
 
-- **只读**：路由只读剪贴板，从不打开、复制或上传文件
-- **只接受环回**：默认拒绝非环回对端（`remote-not-supported`）——否则远程浏览器会被喂**宿主机**的路径
-- **同源**：带 `Origin` 的请求必须与 `Host` 一致，否则 403
-- **不猜路径**：宿主报回的文件夹名必须与剪贴板条目对上；对不上就明确失败，绝不返回一个"看起来像"的路径
-- **不缓存**：响应 `cache-control: no-store`
+- 只读：路由只读剪贴板，从不打开、复制或上传文件
+- 只接受环回：默认拒绝非环回对端（`remote-not-supported`），否则远程浏览器会被喂宿主机的路径
+- 同源：带 `Origin` 的请求必须与 `Host` 一致，否则 403
+- 不猜路径：宿主报回的文件夹名必须与剪贴板条目对上；对不上就返回 `no-match`，绝不返回一个「看起来像」的路径
+- 不缓存：响应 `cache-control: no-store`
 
 ## 已知限制
 
-- **只支持 Windows 与 macOS**。其它平台宿主返回 `unsupported-platform`，客户端给出提示，行为退回原版。
-- **只处理粘贴，不处理拖放**。浏览器拖放载荷里同样没有磁盘路径，本插件不猜；把文件夹拖进窗口仍是原版行为。
-- **远程访问时读不到你的剪贴板**。通过局域网 IP、端口转发或跳板机访问 `dsh web` 时，剪贴板属于**运行宿主的那台机器**。
-  默认直接拒绝；`allowNonLoopback: true` 会读宿主机的剪贴板（只有"浏览器和宿主在同一台机器、但用局域网 IP 打开"时才该打开它）。
+- 只支持 Windows 与 macOS。其它平台宿主返回 `unsupported-platform`，客户端给出提示，路径不插入。
+- 只处理粘贴，不处理拖放。浏览器拖放载荷里同样没有磁盘路径，本插件不猜；把文件夹拖进窗口仍是原版行为。
+- 远程访问时读不到你的剪贴板。通过局域网 IP、端口转发或跳板机访问 `dsh web` 时，剪贴板属于运行宿主的那台机器。默认直接拒绝；`allowNonLoopback: true` 会读宿主机的剪贴板（只有「浏览器和宿主在同一台机器、但用局域网 IP 打开」时才该打开它）。
 - Windows 依赖 PowerShell 5.1 的 `System.Windows.Forms`；被安全策略挡住时返回 `clipboard-error` 并提示。
-- macOS 依赖系统自带的 `osascript`（读粘贴板不需要 TCC 授权，也不会弹「允许访问剪贴板」）；
-  只认标准文件复制格式（`public.file-url` / `NSFilenamesPboardType`），自造私有剪贴板格式的 App 读不到。
+- macOS 依赖系统自带的 `osascript`（读粘贴板不需要 TCC 授权，也不会弹「允许访问剪贴板」）；只认标准文件复制格式（`public.file-url` / `NSFilenamesPboardType`），自造私有剪贴板格式的 App 读不到。
 
 ## 开发
 
@@ -132,8 +113,7 @@ npm run build   # tsc: src/index.ts -> lib/index.js，client/index.ts -> .client
 npm test        # 先 build，再跑宿主路由 / 浏览器半契约 / 清单契约测试（node --test，无需 DSH 服务器）
 ```
 
-宿主半边源码在 `src/index.ts`（TypeScript，`lib/index.js` 与 `lib/types/` 是 tsc 产物，随仓库提交）；
-浏览器半边是 `client/index.ts`（`.client-build/index.js` 是 tsc 产物），由构建脚本包成 `lib/client.js`。
+宿主半边源码在 `src/index.ts`（TypeScript，`lib/index.js` 与 `lib/types/` 是 tsc 产物，随仓库提交）；浏览器半边是 `client/index.ts`（`.client-build/index.js` 是 tsc 产物），由构建脚本包成 `lib/client.js`。
 
 浏览器侧调试钩子（devtools 控制台）：
 
@@ -142,19 +122,13 @@ await __dshFolderPath.probe(['文件夹名'])   // 直接问宿主要路径
 __dshFolderPath.insert(document.querySelector('[contenteditable]'), '文本')   // 直接试插入
 ```
 
-改**浏览器半边**后：`npm run build`，然后刷新页面即可，**不必重启宿主**——
-`dsh-client-hmr` 每 500 ms 轮询各客户端产物，重建后重算 revision 并推给页面。
-只有**新增**客户端模块才需要重启宿主（启动时的扫描决定「有哪些客户端模块」）。
+改浏览器半边后：`npm run build`，然后刷新页面即可，不必重启宿主——`dsh-client-hmr` 每 500 ms 轮询各客户端产物，重建后重算 revision 并推给页面。只有新增客户端模块才需要重启宿主（启动时的扫描决定「有哪些客户端模块」）。
 
-改**宿主半边**后：必须**重启宿主进程**（宿主走 Node 的 ESM 缓存，运行中的那份代码不会跟着变）。
-Desktop 版要把应用**完全退出**再打开——关窗口不算退出。
+改宿主半边后：必须重启宿主进程（宿主走 Node 的 ESM 缓存，运行中的那份代码不会跟着变）。Desktop 版要把应用完全退出再打开，关窗口不算退出。
 
 ## 致谢
 
-架构参考了同类的 macOS 插件 [jhuanxx44/dsh-paste-path](https://github.com/jhuanxx44/dsh-paste-path)
-（Finder 复制 → 宿主读粘贴板 → Ctrl+V 插路径）：环回/同源校验、宿主侧读取系统剪贴板、
-"宿主属于运行 dsh 的那台机器"这条边界都沿用它的判断；本插件把同一思路落到 Windows 剪贴板，
-并把触发方式改为**粘贴事件驱动的目录识别**（Windows 上无粘贴板变更计数可供廉价轮询）。
+架构参考了同类的 macOS 插件 [jhuanxx44/dsh-paste-path](https://github.com/jhuanxx44/dsh-paste-path)（Finder 复制 → 宿主读粘贴板 → Ctrl+V 插路径）：环回与同源校验、宿主侧读取系统剪贴板、「宿主属于运行 dsh 的那台机器」这条边界都沿用它的判断；本插件把同一思路落到 Windows 剪贴板，并把触发方式改为粘贴事件驱动的目录识别（Windows 上无粘贴板变更计数可供廉价轮询）。
 
 ## License
 

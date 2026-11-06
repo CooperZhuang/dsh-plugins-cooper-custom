@@ -5,7 +5,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "description": "Session operations for DeepSeek Harness: really delete persisted sessions (workspace/archive/subagent filters, running-session guards) and move sessions between workspaces (log relocation, header.cwd rewrite, workspace registry follow). Ships the shared session-store primitives (project-directory keys, jsonl.zstd frames, workspace registry, host/HTTP plumbing) as lib/store. One host entry with two HTTP prefixes and two model tools, one browser bundle with two right-pane tabs and a merged config card.",
+  "description": "Session operations for DeepSeek Harness: really delete persisted sessions (ungrouped/temp/archive/subagent filters, running-session guards) and move sessions between workspaces (log relocation, header.cwd rewrite, workspace registry follow). Ships the shared session-store primitives (project-directory keys, jsonl.zstd frames, workspace registry, host/HTTP plumbing) as lib/store. One host entry with two HTTP prefixes and two model tools, one browser bundle with two right-pane tabs and a merged config card.",
   "keywords": [
     "dsh",
     "dsh-plugin",

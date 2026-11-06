@@ -22,7 +22,8 @@ Windows, NSPasteboard file URLs on macOS — and hands the real absolute paths b
 ## Requirements
 
 Windows (the clipboard is read through PowerShell 5.1 `System.Windows.Forms`) or macOS (system
-`osascript`). Other platforms answer `unsupported-platform` and stock paste behaviour applies.
+`osascript`). Other platforms answer `unsupported-platform`; the client shows a notice and inserts no
+path.
 
 ## Install
 
@@ -70,8 +71,8 @@ paste/upload path is never broken. The plugin touches exactly this much of the k
 | `exports['./client']` + `window.__ModuleLoader__.load({ id, factory })` | how the browser half is loaded |
 
 The plugin involves **no subagents**, so the kernel 0.2.1-rc.2 subagent convention
-(`startActivation({provider, request})`, Agent Presets) changes nothing for it. `test/manifest.test.js`
-and `test/client.test.js` pin the list above in the test suite.
+(`startActivation({provider, request})`, Agent Presets) changes nothing for it. `test/manifest.test.ts`
+and `test/client.test.ts` pin the list above in the test suite.
 
 ## Use
 
@@ -96,8 +97,8 @@ The host reads the clipboard per platform. Windows uses PowerShell
 (`System.Windows.Forms.Clipboard`) and emits **base64(UTF-8 JSON)**, so paths with Chinese characters
 or spaces survive the redirected process's code page. macOS uses `osascript -l JavaScript` to read the
 NSPasteboard's `public.file-url` entries and merges Finder's legacy `NSFilenamesPboardType` list, so a
-multi-selection cannot collapse into one item; directory versus file is decided by the host with
-`stat`. Concurrent pastes share one probe.
+multi-selection cannot collapse into one item; directory versus file is decided on the host side
+(`stat` on macOS, `Directory::Exists` in the PowerShell probe). Concurrent pastes share one probe.
 
 ## Configuration
 
@@ -109,7 +110,7 @@ or this package's own `cordis.patch.yml`, which `dsh plugin add` wires in):
     - id: folder-path
       name: dsh-folder-path
       config:
-        enabled: true          # false mounts the host half inert (the client then stops taking over)
+        enabled: true          # false mounts the host half inert: no route is registered, so a folder paste only shows a notice
         timeoutMs: 5000        # per-probe budget
         powershell: powershell.exe   # also settable via DSH_FOLDER_PATH_POWERSHELL
         osascript: /usr/bin/osascript # also settable via DSH_FOLDER_PATH_OSASCRIPT
@@ -145,7 +146,8 @@ or this package's own `cordis.patch.yml`, which `dsh plugin add` wires in):
 ## Development
 
 ```sh
-npm run build   # client/index.ts -> .client-build/index.js -> lib/client.js (wraps the browser half as a __ModuleLoader__ bundle)
+npm run build   # host tsc (src/index.ts -> lib/index.js, declarations in lib/types) and client tsc
+                # (client/index.ts -> .client-build/index.js); then scripts/build-client.mts writes lib/client.js
 npm test        # builds both halves, then host route / browser-half contract / manifest contract tests
                 # (node --test, no DSH server needed)
 ```

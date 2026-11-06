@@ -3,10 +3,13 @@
 对过长的工具输出做压缩：模型先看到摘要与字节数，完整原文写进 spill 存储，需要时按路径取回。
 
 ## 工作方式
-  - 挂在 tools/post-execute waterfall 上，native 与 PTC 执行路径共用这条流水线。
-  - 按内容类型挑选压缩器（行数/字节阈值、format 提示），输出 rtk condensed 通知。
-  - 原文写入 spill（目录由 profile 的 spill-local 行固定），可随时取回。
+
+- 挂在 `tools/post-execute` waterfall 上（native 与 PTC 执行路径共用），不加 `prepend`（最内层），看到的是原始结果。
+- 用外部 rtk 精简：按内容家族选 `-f <filter>`，认不出走裸 `rtk pipe` 透传。
+- 替换前过四道闸门：标记逐字保全、失败证据保全、压缩比合理、必须严格变小；任一不过就保留原文。
+- 原文写入 spill（官方 `ctx.spillStore`），替换后附一行 rtk condensed 通知。
 
 ## 口径
-  - native 模式：压缩直接影响模型可见输出。
-  - PTC 模式：压缩只作用于会话日志里的 dispatch content，模型拿到的是程序返回值，上下文大小不变。
+
+- 只替换模型可见的 `content`；命令、`value`、`isError` 都不动。
+- `accept` 决定携带 `value` 时原样放行。

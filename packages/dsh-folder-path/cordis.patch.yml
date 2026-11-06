@@ -6,8 +6,9 @@
 # the browser half (`dsh.client.platform: web` in package.json) is served as a
 # client bundle the module system loads at boot.
 #
-# Every knob is optional. `enabled: false` mounts the host half inert; the
-# browser half then keeps its hands off folder pastes and DSH behaves as before.
+# Every knob is optional. `enabled: false` mounts the host half inert: the
+# clipboard route is not registered, so a folder paste only shows a notice and
+# inserts no path (the browser half still intercepts the paste).
 - insert:
     - id: folder-path
       name: dsh-folder-path

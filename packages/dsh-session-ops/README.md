@@ -7,7 +7,7 @@ One package, one host-plugin row, two halves:
 
 | Half | What it does | Entry points |
 | --- | --- | --- |
-| delete | filter by workspace / archive / subagent, batch select, per-session guards; removes data from disk | HTTP `/session-admin/api/*`, model tool `session_admin`, right-pane "会话管理" tab, conversation-header trash icon, settings page "会话工具" |
+| delete | filter by ungrouped / temp / archive / subagent, batch select, per-session guards; removes data from disk | HTTP `/session-admin/api/*`, model tool `session_admin`, right-pane "会话管理" tab, conversation-header trash icon, settings page "会话工具" |
 | move | relocate the log, rewrite `header.cwd`, follow workspace membership; optional memory follow (off by default) | HTTP `/session-move/api/*`, model tool `session_move`, right-pane "会话归位" tab, session context menu |
 
 The session-storage primitives live in this package under `lib/store/` (project-directory key
@@ -49,10 +49,10 @@ The plugin row has one shared `enabled` master switch; every other key is indepe
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `enabled` | `true` | master switch; `false` registers no routes, tools or slots |
-| `root` | `''` | session root override; empty derives it from `$DSH_HOME/sessions` |
+| `enabled` | `true` | master switch; `false` registers no host routes or tools (the browser half still loads its tabs) |
+| `root` | `''` | session root override; empty reads `sessionPersistence.root` (`$DSH_HOME/sessions` for the jsonl backend) |
 | `adminAllowHosts` | `[]` | delete-half LAN trust list (parsed from the `Host` header) |
-| `moveAllowHosts` | `[]` | move-half LAN trust list (exact socket `remoteAddress` match) |
+| `moveAllowHosts` | `[]` | move-half LAN trust list (exact `Host` header match) |
 | `headerDeleteButton` | `true` | conversation-header trash icon (icon + two confirmations) |
 | `allowWorkspaceSessions` | `false` | allow deleting sessions that belong to a workspace |
 | `allowLiveSessions` | `false` | allow deleting sessions still loaded in the host |
@@ -62,10 +62,11 @@ The plugin row has one shared `enabled` master switch; every other key is indepe
 | `memoryFollow` | `off` | project-memory follow: `off` / `copy` / `move` (`move` is irreversible) |
 | `repairForkChildrenOnBoot` | `true` | re-file fork children whose membership was lost, at boot |
 
-The two trust keys **cannot** be merged: the delete half parses the `Host` header and additionally
-rejects `sec-fetch-site: cross-site` and cross-origin `Origin`, while the move half matches the
-socket address exactly. Merging them would loosen one half. Both only affect LAN access; loopback is
-always trusted.
+The two trust keys **cannot** be merged: the delete half decides loopback from the `Host` header and
+matches `adminAllowHosts` as a `host` or `host:port` authority, while the move half decides loopback
+from the socket's `remoteAddress` and matches `moveAllowHosts` against the exact `Host` value. Both
+reject `sec-fetch-site: cross-site` and cross-origin `Origin`; merging them would change one half's
+observable behaviour. Both only affect LAN access, and only loopback is trusted by default.
 
 The browser half registers one config card on the Plugins page: slot `plugins.bundle.config`, key =
 the package name `dsh-session-ops`, carrying the seven volatile knobs (4 delete + 3 move). Saving

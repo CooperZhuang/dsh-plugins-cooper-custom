@@ -8,9 +8,9 @@
 - 注册：`ctx.slots.inject(...)` + `ctx.slots.register({ name, id: 'dsh-better-sidebar:session-row-tabs', order: 10 }, sessionRowTabsIcon)`
 - 图标：14px 内联 SVG（分栏面板形），`opacity: .6`，带 `data-better-sidebar-row-tabs=""` 便于以后无头验证；没有 onClick/tabIndex，遵守非交互约定
 
-### 宿主渲染契约（这次核对过，决定了注入写法）
+### 宿主渲染契约
 
-从已安装宿主（桌面 2.0.22-beta.1 / 内核 0.2.2-rc.1）的 `ui-renderer` 里确认：
+从已安装宿主（桌面 2.0.22-beta.1 / 内核 0.2.2-rc.1）的 `ui-renderer` 里确认，它决定了注入写法：
 
 - `runInject(entry, binding, actions)` 只在有 scope binding 时才把 `binding.key` 当第一个参数；**root-scope 条目调用 `inject()` 无参且按条目缓存一次**（`cachedRootInject`）
 - 渲染时 props 合并顺序是 `{ ...kit, ...injected, ...slotInjected.props, ...ownerProps }`，**ownerProps 最后覆盖**
@@ -18,9 +18,9 @@
 
 所以：sessionId 走组件 prop，**不要**从 `inject(sessionId)` 拿；store 通过 apply 里创建的组件包装器传入。注册里不放 `inject`：root 条目的 inject face 无参且按条目缓存一次，同 slot 的 `forge-panel.row` 传的无参 inject 只能放跨行共享的 state，无法区分 session（slot 目录里该 slot 的 `slotInject` 也是空）。
 
-## 显示条件（语义）
+## 显示条件
 
-仅当该会话在 better-sidebar 的持久化布局里**还有打开的页签**：
+仅当该会话在 better-sidebar 的持久化布局里还有打开的页签：
 
 - 已在本 run 加载进 store 的会话：`store.getSessionState(sessionId)` 的 `bottomSplits` 叶子 `tabs.length > 0`，跟随 store 通知即时变化
 - 其余会话：读 `localStorage['dsh-sidebar:v1:' + sessionId]` 并解析 `bottomSplits`；按原始字符串做上限 512 条的 memo，只有 raw 变化才重新 JSON.parse
@@ -28,7 +28,7 @@
 - 带 `?dsh-sidebar-reset` 的页面加载中不显示（与上游重置逃生口一致）
 - 读不到存储 / JSON 损坏 / 缺 sessionId：不显示，不抛
 
-如果要改成“只要有持久化状态就显示”（含仅展开目录），把 `countSessionRowTabs(...) > 0` 换成 `raw !== null` 即可。
+如果要改成「只要有持久化状态就显示」（含仅展开目录），把 `countSessionRowTabs(...) > 0` 换成 `raw !== null` 即可。
 
 ## 补丁的 3 处改动（只动 lib/client.js）
 
@@ -64,7 +64,9 @@ git diff --no-index --no-color a b |
 
 补丁以包根为基准，文件头是 `a/lib/client.js` / `b/lib/client.js`。
 
-## 应用到 profile（由 Lead 执行；本会话未改 profile）
+## 应用到 profile
+
+以下步骤由 Lead 执行；本记录所在会话没有改 profile。
 
 ```sh
 cp dsh-better-sidebar-session-icon.patch ~/.dsh/profiles/desktop/patches/
@@ -85,7 +87,7 @@ shasum -a 256 ~/.dsh/profiles/desktop/node_modules/dsh-better-sidebar/lib/client
 node --check ~/.dsh/profiles/desktop/node_modules/dsh-better-sidebar/lib/client.js
 ```
 
-应用补丁会重写 node_modules 里的包文件；按约定本会话没有执行。装完后页面只需刷新还是需要重启宿主**未验证**：客户端 bundle 由宿主按包路径读取，可能受模块缓存影响。
+应用补丁会重写 node_modules 里的包文件；按约定本会话没有执行。2026-11-06 复核：desktop profile 已装该补丁，`client.js` 的 sha256 为 `30173b2f2bcc385e0a5792a4fd7cef2f12deeee2876fe92482dc9c2a4dd05017`，与上文期望值一致。装完后页面只需刷新还是需要重启宿主**未验证**：客户端 bundle 由宿主按包路径读取，可能受模块缓存影响。
 
 ## 回滚
 
@@ -100,11 +102,11 @@ node --check ~/.dsh/profiles/desktop/node_modules/dsh-better-sidebar/lib/client.
 - `git diff` 与 `git diff --no-index` 两条生成路径产出逐字节相同的补丁
 - 静态（12/12）：从补丁后的文件反向剥掉注入块能逐字节还原 0.30.0 原文件；`exports.apply` / `exports.inject` / `window.__ModuleLoader__.load` 入口不变；`slots.inject` 调用点 6 → 7；注册使用 `id`/`order`、不经 inject、store 经包装组件绑定
 - 逻辑单测（13/13）：从补丁后 bundle 按标记提取注入块，stub React 直接调用组件 —— 嵌套 split 页签计数、缓存命中/空（缓存优先于旧 localStorage）/无存储/坏 JSON/reset、图标尺寸与无交互属性、订阅 store、缺 sessionId 返回 null、元素类型合法
-- 宿主契约核对：见上文“宿主渲染契约”，来自 app.asar 里 ui-renderer 的实现与 slot 目录条目
+- 宿主契约核对：见上文「宿主渲染契约」，来自 app.asar 里 `ui-renderer` 的实现与 slot 目录条目
 
 未验证：
 
-- **未做页面级验证**：没有装补丁、没有刷新页面，行尾图标的实际位置、间距、主题色观感都没有截图证据
+- **未做页面级验证**：补丁已装进 desktop profile，但没有刷新页面后的截图证据，行尾图标的实际位置、间距、主题色观感仍未验证
 - 没有在真实宿主里调用该注册（slot 声明存在性已在 app.asar 中确认）
 - better-locale 其它语言下的 tooltip：新 key 只进 zh/en，其余回退 en
 
