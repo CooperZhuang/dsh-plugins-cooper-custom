@@ -198,6 +198,33 @@ export interface MoveContext {
     };
     effect: (fn: () => unknown, label?: string) => unknown;
 }
+/** 工作区行（面板与工具共用的纯数据投影）。 */
+export interface WorkspaceRow {
+    id: string;
+    title: string;
+    path: string;
+    sessions: number;
+}
+/**
+ * 把一个**已存在的绝对目录**登记成工作区；已经登记过时原样返回那条记录。
+ *
+ * 与内核 `workspace/create` remote 方法同一套语义（`resolveByPath` → `create`），
+ * 只是 Host 侧直接调注册表服务，不经过页面：于是模型工具与右栏面板的「新建工作区…」
+ * 共用这一份实现。
+ *
+ * 拒绝的输入（与内核一致）：相对路径、盘符相对路径（`C:foo`）、不存在的路径、文件。
+ *
+ * @param ctx - Host 上下文（需要 `workspaceRegistry`）。
+ * @param payload - `{ path, title? }`。
+ * @returns `{ created, workspace }`。
+ */
+export declare function createOrResolveWorkspace(ctx: MoveContext, payload: {
+    path?: unknown;
+    title?: unknown;
+} | undefined): Promise<{
+    created: boolean;
+    workspace: WorkspaceRow;
+}>;
 /**
  * 挂载搬迁半边：路由 + 工具。
  *

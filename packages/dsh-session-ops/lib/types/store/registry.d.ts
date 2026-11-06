@@ -68,6 +68,17 @@ export interface WorkspaceRegistryLike {
     headers?: Map<string, Record<string, unknown>> | undefined;
     unarchiveSession(sessionId: string): Promise<unknown>;
     unpinSession(sessionId: string): Promise<unknown>;
+    /**
+     * 把一个**已存在的绝对目录**登记成工作区；同路径重复调用返回既有实体且不改标题。
+     * 内核 `@deepseek-ai/dsh-workspace` 的 `WorkspaceRegistry.create`。可选：取值时
+     * `typeof === 'function'` 判断，缺这个能力时 `workspace_create` 直接报错而不是崩。
+     */
+    create?: (path: string, title?: string) => Promise<WorkspaceEntity>;
+    /**
+     * 按规范化（`realpath`）路径解析已有工作区；目录存在但没登记时返回 `undefined`，
+     * 路径不存在时 reject。内核的 `WorkspaceRegistry.resolveByPath`。
+     */
+    resolveByPath?: (path: string) => Promise<WorkspaceEntity | undefined>;
 }
 /** 持久化写入句柄（`persistence.tracker.writers` 的值）。 */
 export interface SessionWriteHandle {

@@ -321,7 +321,7 @@ test('volatile 旋钮：loader/volatile-update 之后立即生效，不用重挂
   })
 })
 
-test('合并后的 apply 同时注册两条路由与两个工具（前缀与名字逐一对应）', async () => {
+test('合并后的 apply 同时注册两条路由与三个工具（前缀与名字逐一对应）', async () => {
   await inSandbox(async () => {
     const mounted = await mount(fakeRegistry(() => undefined, []))
     try {
@@ -332,8 +332,8 @@ test('合并后的 apply 同时注册两条路由与两个工具（前缀与名�
       )
       assert.deepEqual(
         mounted.tools.map((tool) => tool.name).sort(),
-        ['session_admin', 'session_move'],
-        '两个模型工具都必须注册',
+        ['session_admin', 'session_move', 'workspace_create'],
+        '三个模型工具都必须注册',
       )
     } finally {
       await mounted.close()

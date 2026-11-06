@@ -226,20 +226,91 @@ test('isTrustedRequest 只放行 loopback 与白名单 authority', () => {
   )
 })
 
-test('apply 注册两条路由与两个工具，且工具 schema 是真 JSON Schema', () => {
+test('apply 注册两条路由与三个工具，且工具 schema 是真 JSON Schema', () => {
   const { ctx, state } = stubCtx({})
   apply(ctx, {})
-  // 合并后两半各一条路由、各一个工具（顺序即 apply 里的挂载顺序：先删除后搬迁）。
+  // 合并后两半各一条路由（顺序即 apply 里的挂载顺序：先删除后搬迁）；搬迁半边带两个工具。
   assert.deepEqual(state.routes.map((route) => route.path), ['/session-admin/api', '/session-move/api'])
   assert.deepEqual(state.routes.map((route) => route.kind), ['prefix', 'prefix'])
-  assert.equal(state.tools.length, 2)
-  assert.deepEqual(state.tools.map((entry) => entry.name), ['session_admin', 'session_move'])
+  assert.equal(state.tools.length, 3)
+  assert.deepEqual(state.tools.map((entry) => entry.name), ['session_admin', 'session_move', 'workspace_create'])
   const tool = state.tools[1]
   assert.equal(tool.name, 'session_move')
   assert.equal(tool.parameters.type, 'object')
   assert.deepEqual(tool.parameters.required, ['action'])
   assert.equal(tool.output.schema.type, 'object')
   assert.ok(Array.isArray(tool.output.schema.required))
+
+  // `workspace_create` 的 schema 同样是真 JSON Schema（根 object + 对象级 required）。
+  const workspaceTool = state.tools[2]
+  assert.equal(workspaceTool.name, 'workspace_create')
+  assert.equal(workspaceTool.parameters.type, 'object')
+  assert.deepEqual(workspaceTool.parameters.required, ['path'])
+  assert.equal(workspaceTool.output.schema.type, 'object')
+  assert.deepEqual(workspaceTool.output.schema.required, ['ok', 'summary'])
+})
+
+test('workspace_create：登记幂等，且拒绝相对路径 / 不存在的路径 / 文件', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-session-ops-workspace-'))
+  const existing = join(root, 'existing')
+  const fresh = join(root, 'fresh')
+  mkdirSync(existing, { recursive: true })
+  mkdirSync(fresh, { recursive: true })
+  const filePath = join(root, 'a-file.txt')
+  writeFileSync(filePath, 'x')
+  try {
+    // 注册表桩：`resolveByPath` 只认「已登记的路径」，`create` 会真的记住新目录。
+    const created = [{ id: 'ws-existing', title: 'existing', path: existing, sessionIds: [] }]
+    const registry = {
+      archivedSessionIds: [],
+      headers: new Map(),
+      list: () => created,
+      resolveByPath: async (value) => created.find((workspace) => workspace.path === value),
+      create: async (value, title) => {
+        const workspace = { id: `ws-${created.length + 1}`, title: title ?? 'fresh', path: value, sessionIds: [] }
+        created.push(workspace)
+        return workspace
+      },
+    }
+    const { ctx, state } = stubCtx({ registry })
+    apply(ctx, {})
+    const tool = state.tools.find((entry) => entry.name === 'workspace_create')
+    assert.ok(tool !== undefined, 'workspace_create 必须注册')
+
+    const first = await tool.execute({ path: fresh })
+    assert.equal(first.ok, true)
+    assert.equal(first.created, true)
+    assert.equal(first.workspace.path, fresh)
+    assert.equal(created.length, 2, '新目录必须真的登记进注册表')
+
+    const again = await tool.execute({ path: fresh })
+    assert.equal(again.ok, true)
+    assert.equal(again.created, false, '同一目录重复登记必须原样返回，不新建')
+    assert.equal(created.length, 2)
+
+    const relative = await tool.execute({ path: 'tmp/no-such' })
+    assert.equal(relative.ok, false)
+    assert.match(relative.summary, /不是绝对路径/)
+
+    const missing = await tool.execute({ path: join(root, 'not-here') })
+    assert.equal(missing.ok, false)
+    assert.match(missing.summary, /目录不存在/)
+
+    const file = await tool.execute({ path: filePath })
+    assert.equal(file.ok, false)
+    assert.match(file.summary, /不是目录/)
+
+    // 路由与工具共用同一份实现：面板回落时走的就是这条。
+    const res = fakeRes()
+    await moveRoute(state).handler(
+      fakeReq({ url: `${MOVE_API_PREFIX}/workspaceCreate`, method: 'POST', payload: { path: fresh } }),
+      res.res,
+    )
+    assert.equal(res.out.status, 200)
+    assert.equal(JSON.parse(res.out.body).value.workspace.path, fresh)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('路由：config / list 返回 Host 事实', async () => {

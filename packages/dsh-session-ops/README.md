@@ -9,6 +9,7 @@ One package, one host-plugin row, two halves:
 | --- | --- | --- |
 | delete | filter by ungrouped / temp / archive / subagent, batch select, per-session guards; removes data from disk | HTTP `/session-admin/api/*`, model tool `session_admin`, right-pane "会话管理" tab, conversation-header trash icon, settings page "会话工具" |
 | move | relocate the log, rewrite `header.cwd`, follow workspace membership; optional memory follow (off by default) | HTTP `/session-move/api/*`, model tool `session_move`, right-pane "会话归位" tab, session context menu |
+| workspace | register an **existing absolute directory** as a workspace (idempotent: an already-registered directory is returned unchanged); never moves a session | HTTP /session-move/api/workspaceCreate, model tool workspace_create, 新建工作区… in the right-pane 会话归位 tab |
 
 The session-storage primitives live in this package under `lib/store/` (project-directory key
 codec, `session[.vN].jsonl[.zstd]` frame read/write, workspace registry, `$DSH_HOME` and file

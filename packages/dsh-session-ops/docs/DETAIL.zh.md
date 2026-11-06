@@ -10,7 +10,8 @@
 ## 其他入口
 
 - 会话右键菜单：移动会话到工作区…、删除会话…
-- 模型工具 `session_admin`、`session_move`；宿主 HTTP `/session-admin/api`、`/session-move/api`。
+- 「会话归位」页签的「新建工作区…」：选一个已存在的目录，登记成工作区并直接选为搬迁目标。
+- 模型工具 session_admin、session_move、workspace_create；宿主 HTTP /session-admin/api、/session-move/api（含 workspaceCreate）。
 
 ## 共享存储原语
 

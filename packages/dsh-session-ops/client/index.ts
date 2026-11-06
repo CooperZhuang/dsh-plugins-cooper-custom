@@ -1676,10 +1676,13 @@
    * 拖放面板。
    * @param React - 外壳预置的 React。
    * @param api - Host API 客户端。
+   * @param workspaceTools - `{ pickDirectory, createWorkspaceAt }`：内核目录选择器与
+   *   工作区登记（客户端服务优先，回落 Host 路由）。
    * @returns 面板组件。
    */
-  function createPanel(React, api) {
+  function createPanel(React, api, workspaceTools) {
     const h = React.createElement
+    const { pickDirectory, createWorkspaceAt } = workspaceTools
     return function SessionMovePanel(props) {
       const fill = props.fill === true
       const useSessions = props.useSessions
@@ -1696,6 +1699,7 @@
       const [hover, setHover] = React.useState('')
       const [outcome, setOutcome] = React.useState(null)
       const [token, setToken] = React.useState(0)
+      const [creating, setCreating] = React.useState(false)
       // 右键菜单的一次性交接：面板一直开着时靠订阅推过来；这次才挂载时，初始版本号
       // 会让下面的 effect 在挂载后立刻把槽里的请求取走。
       const [requestVersion, setRequestVersion] = React.useState(moveRequest.version)
@@ -1786,6 +1790,33 @@
       )
       if (failure !== null) children.push(h('div', { key: 'fail', style: S.bad }, `读取失败：${failure}`))
 
+      /**
+       * 把一个已存在的目录登记成工作区，并直接选为搬迁目标。
+       *
+       * 目录由内核的原生选择器挑（`uiWorkspace.pickDirectory()`）；登记优先走外壳自己的
+       * 客户端服务 `ctx.workspaces.create({ path })`——与内核「添加工作区」同一个 remote
+       * 方法，页面刷新即生效；外壳没提供这个服务时回落到 Host 的
+       * `/session-move/api/workspaceCreate`（与模型工具 `workspace_create` 同一份实现）。
+       */
+      const createWorkspace = () => {
+        if (creating) return
+        setCreating(true)
+        setOutcome(null)
+        Promise.resolve()
+          .then(() => pickDirectory())
+          .then((path) => {
+            if (typeof path !== 'string' || path.length === 0) return undefined
+            return createWorkspaceAt(path)
+          })
+          .then((workspace) => {
+            if (workspace === undefined || workspace === null) return
+            setTargetPick(String(workspace.id))
+            setToken((current) => current + 1)
+            setOutcome({ ok: true, created: true, report: { workspace } })
+          }, (error) => setOutcome({ ok: false, error: String(error?.message ?? error) }))
+          .then(() => setCreating(false))
+      }
+
       children.push(
         h('div', { key: 'bar', style: S.bar }, [
           h('input', {
@@ -1797,6 +1828,14 @@
             onChange: (event) => setFilter(event.target.value),
           }),
           h('button', { key: 'r', type: 'button', style: busy ? { ...S.button, ...S.disabled } : S.button, disabled: busy, onClick: () => setToken((current) => current + 1) }, '刷新'),
+          h('button', {
+            key: 'nw',
+            type: 'button',
+            style: creating ? { ...S.button, ...S.disabled } : S.button,
+            disabled: creating,
+            onClick: createWorkspace,
+            title: '把一个已存在的目录登记成工作区，并选为搬迁目标',
+          }, creating ? '新建中…' : '新建工作区…'),
         ]),
       )
 
@@ -1945,7 +1984,9 @@
           h('div', { key: 'out', style: S.result }, [
             h('div', { key: 's', style: ok ? S.good : S.bad },
               ok
-                ? `${outcome.dryRun === true ? '✔ 预演完成' : '✔ 已搬迁'}${outcome.report?.noop === true ? '（无需搬迁）' : ''}`
+                ? (outcome.created === true
+                    ? `✔ 已登记工作区「${outcome.report?.workspace?.title ?? ''}」`
+                    : `${outcome.dryRun === true ? '✔ 预演完成' : '✔ 已搬迁'}${outcome.report?.noop === true ? '（无需搬迁）' : ''}`)
                 : `✘ ${String(outcome.error)}`),
             h('pre', { key: 'd', style: S.pre }, JSON.stringify(outcome.report ?? outcome, null, 2)),
           ]),
@@ -1975,7 +2016,40 @@
 
       function apply(ctx) {
         const api = createApi()
-        const Panel = createPanel(React, api)
+        // 目录选择器（内核服务，可选注入）：面板里「新建工作区…」用它挑目录。
+        let uiWorkspaceService
+        ctx.inject(['uiWorkspace'], (injected) => {
+          uiWorkspaceService = injected.get('uiWorkspace')
+          return () => {
+            uiWorkspaceService = undefined
+          }
+        })
+        const pickDirectory = async () => {
+          const service = uiWorkspaceService
+          if (service === undefined || typeof service.pickDirectory !== 'function')
+            throw new Error('当前外壳没有提供目录选择器（uiWorkspace.pickDirectory）')
+          return await service.pickDirectory()
+        }
+        /**
+         * 登记工作区：优先客户端服务（页面刷新即生效），回落 Host 路由。
+         * 两条路都返回 `{ id, title, path }`。
+         */
+        const createWorkspaceAt = async (path) => {
+          const spaces = ctx.workspaces
+          if (spaces !== undefined && typeof spaces.create === 'function') {
+            const workspace = await spaces.create({ path })
+            return {
+              id: String(workspace?.workspaceId ?? workspace?.id ?? ''),
+              title: String(workspace?.title ?? ''),
+              path: String(workspace?.path ?? path),
+            }
+          }
+          const value = await api.call('workspaceCreate', { path })
+          const workspace = value !== null && typeof value === 'object' ? value.workspace : undefined
+          if (workspace === undefined || workspace === null) throw new Error('Host 没有返回工作区记录')
+          return workspace
+        }
+        const Panel = createPanel(React, api, { pickDirectory, createWorkspaceAt })
 
         // 右侧面板服务：右键菜单要借它把搬迁页签打开（与删除半边同一套可选注入）。
         let sidebarRight

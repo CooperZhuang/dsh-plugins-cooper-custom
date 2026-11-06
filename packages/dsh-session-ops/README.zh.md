@@ -8,6 +8,7 @@ DeepSeek Harness（DSH）的会话运维插件：真删除已持久化的会话�
 | --- | --- | --- |
 | 删除 | 按未分组、临时或失效目录、归档、子代理筛选；批量选择；逐条守卫；真删磁盘数据 | HTTP `/session-admin/api/*`、模型工具 `session_admin`、右栏「会话管理」页签、会话标题栏垃圾桶、设置页「会话工具」 |
 | 搬迁 | 搬日志、改写 header 的 `cwd`、跟随工作区成员表；可选项目记忆跟随（默认关） | HTTP `/session-move/api/*`、模型工具 `session_move`、右栏「会话归位」页签、会话右键菜单 |
+| 建工作区 | 把一个**已存在的绝对目录**登记成工作区（已登记则原样返回）；只登记，不动任何会话 | HTTP /session-move/api/workspaceCreate、模型工具 workspace_create、右栏「会话归位」页签的「新建工作区…」 |
 
 会话存储原语收在本包的 `lib/store/`：项目目录键编解码、`session[.vN].jsonl[.zstd]` 帧读写、工作区注册表、`$DSH_HOME` 与文件日志、HTTP 底座。两个半边共用同一份实现。
 

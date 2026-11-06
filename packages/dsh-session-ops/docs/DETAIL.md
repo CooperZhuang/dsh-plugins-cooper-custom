@@ -9,7 +9,8 @@ between workspaces while keeping the registry consistent.
 
 ## Other entry points
   - Session context menu: move / delete.
-  - Model tools session_admin, session_move; host HTTP /session-admin/api, /session-move/api.
+  - 新建工作区… in the Move tab: pick an existing directory, register it as a workspace and select it as the move target.
+  - Model tools session_admin, session_move, workspace_create; host HTTP /session-admin/api, /session-move/api (including workspaceCreate).
 
 ## Shared storage primitives
 

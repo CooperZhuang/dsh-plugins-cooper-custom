@@ -27,6 +27,7 @@
  */
 import { statSync } from 'node:fs';
 import { realpath } from 'node:fs/promises';
+import { isAbsolute, resolve } from 'node:path';
 import { createApiHandler, readJsonBody } from './store/http.js';
 import { dshHome } from './store/host.js';
 import { SESSION_RUNNING_STATUS, accountedSessionIds, agentSessionStatus, archivedSessionIds, findWorkspace, redirectSessionWriters, residentSessionIds, sessionWriteHandles, workspaceOwningSession, } from './store/registry.js';
@@ -527,6 +528,126 @@ function buildTool(mover, config, log) {
     };
 }
 /**
+ * 工作区实体的对外投影。
+ * @param workspace - 注册表实体。
+ * @returns 纯数据行。
+ */
+function workspaceRow(workspace) {
+    return {
+        id: String(workspace.id),
+        title: String(workspace.title),
+        path: String(workspace.path),
+        sessions: Array.isArray(workspace.sessionIds) ? workspace.sessionIds.length : 0,
+    };
+}
+/**
+ * 把一个**已存在的绝对目录**登记成工作区；已经登记过时原样返回那条记录。
+ *
+ * 与内核 `workspace/create` remote 方法同一套语义（`resolveByPath` → `create`），
+ * 只是 Host 侧直接调注册表服务，不经过页面：于是模型工具与右栏面板的「新建工作区…」
+ * 共用这一份实现。
+ *
+ * 拒绝的输入（与内核一致）：相对路径、盘符相对路径（`C:foo`）、不存在的路径、文件。
+ *
+ * @param ctx - Host 上下文（需要 `workspaceRegistry`）。
+ * @param payload - `{ path, title? }`。
+ * @returns `{ created, workspace }`。
+ */
+export async function createOrResolveWorkspace(ctx, payload) {
+    const registry = ctx.workspaceRegistry;
+    if (registry === undefined || typeof registry.create !== 'function') {
+        throw new Error('Host 没有提供 workspaceRegistry.create，无法新建工作区');
+    }
+    const raw = typeof payload?.path === 'string' ? payload.path.trim() : '';
+    if (raw.length === 0)
+        throw new Error('缺少目录路径（path）');
+    if (!isAbsolute(raw))
+        throw new Error(`不是绝对路径：${raw}`);
+    const absolute = resolve(raw);
+    let stats;
+    try {
+        stats = statSync(absolute);
+    }
+    catch {
+        throw new Error(`目录不存在：${absolute}`);
+    }
+    if (!stats.isDirectory())
+        throw new Error(`不是目录：${absolute}`);
+    if (typeof registry.resolveByPath === 'function') {
+        const existing = await registry.resolveByPath(absolute);
+        if (existing !== undefined && existing !== null) {
+            return { created: false, workspace: workspaceRow(existing) };
+        }
+    }
+    const title = typeof payload?.title === 'string' && payload.title.trim().length > 0
+        ? payload.title.trim()
+        : undefined;
+    const workspace = title === undefined ? await registry.create(absolute) : await registry.create(absolute, title);
+    return { created: true, workspace: workspaceRow(workspace) };
+}
+/** `workspace_create` 的输入 schema（真 JSON Schema，同 `session_move`）。 */
+const WORKSPACE_TOOL_PARAMETERS = {
+    type: 'object',
+    additionalProperties: true,
+    properties: {
+        path: { type: 'string', description: '要登记为工作区的绝对目录路径（必须已存在；相对路径、不存在的路径、文件都会被拒绝）。' },
+        title: { type: 'string', description: '可选显示名；省略时内核用目录名。' },
+    },
+    required: ['path'],
+};
+/** `workspace_create` 的输出 schema。 */
+const WORKSPACE_TOOL_OUTPUT = {
+    type: 'object',
+    additionalProperties: true,
+    required: ['ok', 'summary'],
+    properties: {
+        ok: { type: 'boolean', description: '调用本身是否成功。' },
+        summary: { type: 'string', description: '一句话结论。' },
+        created: { type: 'boolean', description: 'true = 新建；false = 该目录已有工作区，原样返回。' },
+        workspace: { type: 'object', additionalProperties: true, description: '工作区行（id / title / path / sessions）。' },
+    },
+};
+/** `workspace_create` 的注册体。 */
+function buildWorkspaceTool(ctx, log) {
+    return {
+        name: 'workspace_create',
+        description: 'Register (or idempotently resolve) a DSH workspace over an existing absolute directory. ' +
+            'A workspace is the sidebar group that owns sessions; creating one never moves or touches any session. ' +
+            'Use it when a directory should become a workspace (for example before session_move files sessions into it), ' +
+            'then call session_move with action="move" and targetWorkspace set to the returned id or path. ' +
+            'An absolute path is required; relative paths, drive-relative paths (C:foo), missing paths and files are refused.',
+        parameters: WORKSPACE_TOOL_PARAMETERS,
+        output: {
+            schema: WORKSPACE_TOOL_OUTPUT,
+            render: (_args, value) => [{ type: 'text', text: value.summary }],
+        },
+        presentCall: (args) => ({
+            card: 'generic',
+            title: 'Create workspace',
+            kind: 'other',
+            rawInput: { path: args.path, title: args.title },
+        }),
+        async execute(args) {
+            try {
+                const result = await createOrResolveWorkspace(ctx, args);
+                const workspace = result.workspace;
+                log('info', `workspace_create: ${result.created ? 'created' : 'resolved'} ${workspace.id} path=${workspace.path}`);
+                return {
+                    ok: true,
+                    created: result.created,
+                    workspace,
+                    summary: result.created
+                        ? `Created workspace "${workspace.title}" at ${workspace.path} (id ${workspace.id}).`
+                        : `Workspace "${workspace.title}" already covers ${workspace.path} (id ${workspace.id}); nothing was created.`,
+                };
+            }
+            catch (error) {
+                return { ok: false, summary: `workspace_create failed: ${messageOf(error)}` };
+            }
+        },
+    };
+}
+/**
  * 挂载搬迁半边：路由 + 工具。
  *
  * 与删除半边刻意不同的两点（原样保留的理由）：
@@ -558,6 +679,8 @@ export function mountMove(ctx, config, log) {
         list: async () => mover.list(),
         /** 搬一条会话。 */
         move: async (payload) => mover.move(payload),
+        /** 登记一个工作区（已登记则原样返回），供面板在没有客户端服务时回落。 */
+        workspaceCreate: async (payload) => createOrResolveWorkspace(ctx, payload),
         /** 用 DSH 自己的读取器读回一条会话。 */
         verify: async (payload) => mover.verify(String(payload.sessionId ?? '')),
         /** 能力/诊断。 */
@@ -593,6 +716,7 @@ export function mountMove(ctx, config, log) {
         }),
     }), 'dsh-session-move: api route');
     ctx.effect(() => ctx.tools.register(buildTool(mover, config, log)), 'dsh-session-move: session_move tool');
+    ctx.effect(() => ctx.tools.register(buildWorkspaceTool(ctx, log)), 'dsh-session-move: workspace_create tool');
 }
 // ---------------------------------------------------------------------------
 // fork 子会话成员自愈
