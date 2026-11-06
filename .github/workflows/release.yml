@@ -102,12 +102,4 @@ jobs:
       - name: npm publish (Trusted Publishing / OIDC)
         if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry-run) }}
         working-directory: packages/${{ steps.target.outputs.package }}
-        shell: bash
-        run: |
-          # 诊断用：失败时把 npm 的错误尾段落成注解，公开 API 就能读到（日志接口要 admin）。
-          set -o pipefail
-          npm publish --access public --provenance 2>&1 | tee /tmp/npm-publish.log || {
-            msg="$(tail -c 1500 /tmp/npm-publish.log | tr '\n' ' ' | tr -d '\r')"
-            echo "::error::publish failed: ${msg}"
-            exit 1
-          }
+        run: npm publish --access public --provenance
