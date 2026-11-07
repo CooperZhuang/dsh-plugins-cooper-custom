@@ -158,30 +158,39 @@ export const DEFAULT_SUMMARY_FRESH_SLOTS = 3
 /**
  * Default cap on stored entries per scope before the least recently used are evicted.
  *
- * 1000 rather than 200 as of 2026-10-24, after the recall path got an inverted
- * index (`prefilterEntries`): measured on this machine, 1000 entries cost 63 ms
- * per turn scanning everything and 25 ms through the index, and the index falls
- * back to a full scan when it would leave too few candidates to be trusted.
- * `scripts/recall-bench.mjs` is the probe that decided it; re-run it before
- * raising this again.
- */
-export const DEFAULT_MAX_ENTRIES_PER_SCOPE = 1000
+  * There is no cap by default (`0`). A cap is a storage decision, not a memory
+  * decision: the store is files on disk, the recall path reads an inverted index
+  * (`prefilterEntries`), and the summary already selects a bounded, ranked slice,
+  * so a large store costs index size rather than correctness. When a cap IS set,
+  * the least-attended entries are archived (never deleted) and `pinned`,
+  * `permanent` and `user`-written entries are exempt.
+  */
+export const DEFAULT_MAX_ENTRIES_PER_SCOPE = 0
 
 /** Default hours between periodic maintenance sweeps; `0` disables the sweep. */
 export const DEFAULT_SWEEP_INTERVAL_HOURS = 12
 
-/** Default days an unused memory survives before it is archived; `0` disables archival. */
-export const DEFAULT_MAX_UNUSED_DAYS = 90
+/**
+ * Default days an unused memory survives before it is archived; `0` disables archival.
+ *
+ * Off by default for the same reason the cap is: an entry nobody has happened to
+ * read yet is not a stale entry, and archiving it removes it from recall without
+ * a person having decided anything. Retrieval already ranks by decay and use, so
+ * an unused memory sinks instead of being lost. Set a number to re-enable the
+ * age-based sweep.
+ */
+export const DEFAULT_MAX_UNUSED_DAYS = 0
 
 /**
  * Default days a `snapshot` memory survives before it is archived; `0` disables.
  *
  * A reading taken at one moment is wrong from the day after it was taken, and
  * reading it does not make it right, so it cannot be judged by the unused clock
- * that a convention is judged by. Sixty days is long enough to be useful as
- * history and short enough that a stale number stops being quoted.
+ * that a convention is judged by. Off by default: the decay ranking already
+ * pushes an old reading down, and archiving it outright is a loss nobody asked
+ * for. Set a number to re-enable snapshot expiry.
  */
-export const DEFAULT_SNAPSHOT_MAX_AGE_DAYS = 60
+export const DEFAULT_SNAPSHOT_MAX_AGE_DAYS = 0
 
 /** Default share of title/body tokens two memories must have in common to be merged. */
 export const DEFAULT_DEDUPE_SIMILARITY = 0.7
@@ -460,7 +469,7 @@ export const Config = z.object({
    */
   rotationEveryTurns: z.number().default(DEFAULT_ROTATION_EVERY_TURNS).description('Inside one conversation, emit a fresh rotation block every this many user turns (0 keeps the old once-per-conversation behaviour).').volatile(),
   /** Max stored entries per scope; the least-recently-updated are evicted. */
-  maxEntriesPerScope: z.number().default(DEFAULT_MAX_ENTRIES_PER_SCOPE).description('Stored memories per scope; past this cap the least recently used are deleted.').volatile(),
+  maxEntriesPerScope: z.number().default(DEFAULT_MAX_ENTRIES_PER_SCOPE).description('Stored memories per scope; past this cap the least-attended are archived (pinned, permanent and user-written entries are exempt). 0 (the default) means no cap: the store grows and retrieval ranks it.').volatile(),
   /** Days an unused memory survives before it is archived. `0` disables archival. */
   maxUnusedDays: z.number().default(DEFAULT_MAX_UNUSED_DAYS).description('Days an unused memory survives before it is archived. Archived entries are recoverable with /memories restore. 0 disables archival.').volatile(),
   /** Days a snapshot memory survives regardless of use. `0` disables. */
@@ -835,7 +844,7 @@ export function normalizeSettings(input: Partial<MemoriesSettings> | undefined):
     deltaMaxBytes: positive(value.deltaMaxBytes, DEFAULT_DELTA_MAX_BYTES, 0),
     rotationEntries: positive(value.rotationEntries, DEFAULT_ROTATION_ENTRIES, 0),
     rotationEveryTurns: positive(value.rotationEveryTurns, DEFAULT_ROTATION_EVERY_TURNS, 0),
-    maxEntriesPerScope: positive(value.maxEntriesPerScope, DEFAULT_MAX_ENTRIES_PER_SCOPE),
+    maxEntriesPerScope: positive(value.maxEntriesPerScope, DEFAULT_MAX_ENTRIES_PER_SCOPE, 0),
     maxUnusedDays: positive(value.maxUnusedDays, DEFAULT_MAX_UNUSED_DAYS, 0),
     snapshotMaxAgeDays: positive(value.snapshotMaxAgeDays, DEFAULT_SNAPSHOT_MAX_AGE_DAYS, 0),
     dedupeSimilarity: clampUnit(value.dedupeSimilarity, DEFAULT_DEDUPE_SIMILARITY),

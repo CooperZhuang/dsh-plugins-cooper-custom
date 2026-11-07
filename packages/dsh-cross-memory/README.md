@@ -108,9 +108,9 @@ dsh plugin --profile <profile> add /path/to/packages/dsh-cross-memory
 | `rotationEntries` | `16` | 每会话额外列出多少个未出现过的标题；`0` 关闭标题轮转 |
 | `rotationEveryTurns` | `8` | 同一个长会话里每隔多少个用户轮重新发一次标题轮转块；`0` 只发一次 |
 | `rawRecall` | `false` | 补注块是否附带来源会话的原文片段（默认关闭） |
-| `maxEntriesPerScope` | `1000` | 每作用域保留上限，超出后归档最久没有被读到或注入的条目（手写、`pinned`、`permanent` 条目除外） |
-| `maxUnusedDays` | `90` | 多久没用就归档（手写、`pinned`、`permanent` 条目除外）；`0` 关闭 |
-| `snapshotMaxAgeDays` | `60` | `durability: snapshot` 条目的过期天数；`0` 关闭 |
+| `maxEntriesPerScope` | `0`（不限制） | 每作用域保留上限；`0` 表示不设上限，条目一直保留，由召回排序决定用哪些。设了上限后超出部分归档最久没被读到或注入的条目（手写、`pinned`、`permanent` 除外） |
+| `maxUnusedDays` | `0`（关闭） | 多久没用就归档（手写、`pinned`、`permanent` 除外）；`0` 关闭。关闭时未读条目只是排序靠后，不会消失 |
+| `snapshotMaxAgeDays` | `0`（关闭） | `durability: snapshot` 条目的过期天数；`0` 关闭 |
 | `dedupeSimilarity` | `0.7` | 标题与正文字词重合度超过多少时，新记忆取代旧记忆 |
 | `sweepIntervalHours` | `12` | 定期整理间隔；`0` 关闭 |
 | `autoExtract` | `true` | 是否启用空闲后台抽取 |
