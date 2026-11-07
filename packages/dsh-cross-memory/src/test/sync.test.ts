@@ -13,7 +13,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { MemorySync, STORE_GITIGNORE, entryStamp, isEntryPath, isHostDescriptorPath, isSessionNotePath, mergeLoopLedgers, newerEntry, newerHostDescriptor, newerSessionNote, nextClockDelay } from '../sync.js'
+import { MemorySync, STORE_GITIGNORE, entryStamp, isEntryPath, isHostDescriptorPath, isPersonaPath, isSessionNotePath, mergeLoopLedgers, mergePersona, newerEntry, newerHostDescriptor, newerSessionNote, nextClockDelay } from '../sync.js'
 import { applyConflictPlan, isArchivedEntryPath, projectRootOf } from '../sync-runtime.js'
 import { slugify } from '../storage.js'
 import type { EntryConflict } from '../sync.js'
@@ -262,6 +262,58 @@ test('a conflicting host descriptor keeps the newer reading', () => {
   assert.equal(isHostDescriptorPath('projects/a/hosts/example-host-local.json'), true)
   assert.equal(isHostDescriptorPath('projects/a/project.json'), false)
   assert.equal(isHostDescriptorPath('entries/hosts/note.md'), false)
+})
+
+test('a persona file merges as a bullet union, section by section', () => {
+  const ours = ['## 他怎么工作', '- 中文交流', '- 改完自己验', '', '## 他的标准', '- 讨厌假动作', ''].join('\n')
+  const theirs = ['## 他怎么工作', '- 中文交流', '- 一条只有 PC 记下的工作方式', '', '## 他的标准', '- 讨厌假动作', '- 一条只有 PC 记下的标准', ''].join('\n')
+  const merged = mergePersona(ours, theirs)
+  assert.match(merged, /中文交流/u)
+  assert.match(merged, /一条只有 PC 记下的工作方式/u)
+  assert.match(merged, /一条只有 PC 记下的标准/u)
+  assert.equal((merged.match(/- 中文交流/gu) ?? []).length, 1, 'duplicates are dropped')
+  assert.ok(merged.indexOf('一条只有 PC 记下的工作方式') < merged.indexOf('## 他的标准'), 'a bullet stays in its own section')
+  assert.equal(isPersonaPath('persona/human.md'), true)
+  assert.equal(isPersonaPath('entries/one.md'), false)
+})
+
+test('a modify/delete conflict keeps the edited file instead of aborting the sync', async () => {
+  const { remote, left, right } = await twoWayFixture()
+  await mkdir(join(left.dir, 'entries'), { recursive: true })
+  await writeFile(join(left.dir, 'entries', 'doomed.md'), entryText('doomed', 'left version', '2026-02-01T00:00:00.000Z'))
+  await left.sync.run('test')
+  await right.sync.run('test')
+  // left retires the row; right edits it in parallel
+  await rm(join(left.dir, 'entries', 'doomed.md'))
+  await left.sync.run('test')
+  await writeFile(join(right.dir, 'entries', 'doomed.md'), entryText('doomed', 'right edit survives', '2026-03-01T00:00:00.000Z'))
+
+  const outcome = await right.sync.run('test')
+
+  assert.equal(outcome.pushed, true, 'the delete/modify conflict no longer blocks the push')
+  assert.match(await readFile(join(right.dir, 'entries', 'doomed.md'), 'utf8'), /right edit survives/u)
+  assert.match(execFileSync('git', ['-C', remote, 'show', 'main:entries/doomed.md'], { encoding: 'utf8' }), /right edit survives/u)
+  assert.equal(git(right.dir, 'status', '--porcelain').trim(), '', 'the store is not left mid-rebase')
+})
+
+test('two machines appending persona bullets both survive the sync', async () => {
+  const { remote, left, right } = await twoWayFixture()
+  await mkdir(join(left.dir, 'persona'), { recursive: true })
+  await writeFile(join(left.dir, 'persona', 'human.md'), ['## 他怎么工作', '- 中文交流', ''].join('\n'))
+  await left.sync.run('test')
+  await right.sync.run('test')
+  await writeFile(join(left.dir, 'persona', 'human.md'), ['## 他怎么工作', '- 中文交流', '- 左机的规则', ''].join('\n'))
+  await left.sync.run('test')
+  await writeFile(join(right.dir, 'persona', 'human.md'), ['## 他怎么工作', '- 中文交流', '- 右机的规则', ''].join('\n'))
+
+  const outcome = await right.sync.run('test')
+
+  assert.equal(outcome.pushed, true)
+  const persona = await readFile(join(right.dir, 'persona', 'human.md'), 'utf8')
+  assert.match(persona, /左机的规则/u)
+  assert.match(persona, /右机的规则/u)
+  assert.match(execFileSync('git', ['-C', remote, 'show', 'main:persona/human.md'], { encoding: 'utf8' }), /右机的规则/u)
+  assert.equal(git(right.dir, 'status', '--porcelain').trim(), '')
 })
 
 test('the clock schedule picks the next local time, and wraps to tomorrow', () => {
