@@ -55,6 +55,7 @@ const WORD = /[a-z0-9_]+/gu
 export const FIELD_WEIGHTS = {
   title: 40,
   keys: 26,
+  entities: 24,
   tags: 20,
   appliesTo: 18,
   body: 12,
@@ -70,6 +71,7 @@ export const FIELD_WEIGHTS = {
 export const TERM_WEIGHTS = {
   title: 8,
   keys: 7,
+  entities: 7,
   tags: 6,
   appliesTo: 5,
   body: 2,
@@ -215,12 +217,14 @@ interface Searchable {
   readonly title: string
   readonly body: string
   readonly keys: string
+  readonly entities: string
   readonly tags: string
   readonly appliesTo: string
   /** Latin words present in each field, for whole-word matching. */
   readonly titleWords: ReadonlySet<string>
   readonly bodyWords: ReadonlySet<string>
   readonly keyWords: ReadonlySet<string>
+  readonly entityWords: ReadonlySet<string>
   readonly tagWords: ReadonlySet<string>
   readonly appliesWords: ReadonlySet<string>
 }
@@ -235,17 +239,20 @@ function searchable(entry: MemoryEntry): Searchable {
   const title = entry.title.toLowerCase()
   const body = entry.body.toLowerCase()
   const keys = entry.keys.join(' ').toLowerCase()
+  const entities = (entry.entities ?? []).join(' ').toLowerCase()
   const tags = entry.tags.join(' ').toLowerCase()
   const appliesTo = (entry.appliesTo ?? '').toLowerCase()
   return {
     title,
     body,
     keys,
+    entities,
     tags,
     appliesTo,
     titleWords: words(title),
     bodyWords: words(body),
     keyWords: words(keys),
+    entityWords: words(entities),
     tagWords: words(tags),
     appliesWords: words(appliesTo),
   }
@@ -307,7 +314,7 @@ export function termIndex(entries: readonly MemoryEntry[]): Map<string, number[]
   }
   entries.forEach((entry, at) => {
     const fields = searchable(entry)
-    for (const text of [fields.title, fields.body, fields.keys, fields.tags, fields.appliesTo]) {
+    for (const text of [fields.title, fields.body, fields.keys, fields.entities, fields.tags, fields.appliesTo]) {
       for (const term of tokenize(text)) add(term, at)
       // A single CJK character is only reachable through `includes`, which a
       // bigram-only index would miss.
@@ -374,6 +381,10 @@ function matchOne(
     score += FIELD_WEIGHTS.keys
     phrase = true
   }
+  if (on('entities') && matches(fields.entities, fields.entityWords, normalized)) {
+    score += FIELD_WEIGHTS.entities
+    phrase = true
+  }
   if (on('tags') && matches(fields.tags, fields.tagWords, normalized)) {
     score += FIELD_WEIGHTS.tags
     phrase = true
@@ -390,7 +401,7 @@ function matchOne(
   const queryRuns = cjkRuns(normalized)
   const cjkBacked = new Set<string>()
   const strongFields: readonly (readonly [ScoreField, string])[] = [
-    ['title', fields.title], ['keys', fields.keys], ['tags', fields.tags], ['appliesTo', fields.appliesTo],
+    ['title', fields.title], ['keys', fields.keys], ['entities', fields.entities], ['tags', fields.tags], ['appliesTo', fields.appliesTo],
   ]
   for (const [name, field] of strongFields) {
     if (!on(name)) continue
@@ -410,6 +421,10 @@ function matchOne(
     }
     if (on('keys') && matches(fields.keys, fields.keyWords, term)) {
       score += TERM_WEIGHTS.keys * weight
+      strongHit = true
+    }
+    if (on('entities') && matches(fields.entities, fields.entityWords, term)) {
+      score += TERM_WEIGHTS.entities * weight
       strongHit = true
     }
     if (on('tags') && matches(fields.tags, fields.tagWords, term)) {
@@ -781,7 +796,7 @@ export interface MatchCredit {
 }
 
 /** One field a match may be scored against. */
-export type ScoreField = 'title' | 'keys' | 'tags' | 'appliesTo' | 'body'
+export type ScoreField = 'title' | 'keys' | 'entities' | 'tags' | 'appliesTo' | 'body'
 
 /** How strictly {@link matchCredit} applies its structural gate. */
 export interface CreditOptions {
@@ -875,18 +890,45 @@ export function matchCredit(
   const only = options.fields === undefined ? undefined : new Set(options.fields)
   const match = bestMatch(entry, query, options.hub, only)
   const distinctive = match.relevance >= minScore * QUALIFIED_SCORE_FACTOR
+  // A turn that NAMES one of the memory's entities is about it even when nothing
+  // else overlaps: 「北街南街分别买了什么」 shares only 街 with a memory filed as
+  // 「南街文具店补买描图纸」, and the entity list is what makes that reachable.
+  const entityHit = only === undefined || only.has('entities') ? sharesEntity(entry, query) : false
   const credited = match.evidence.phrase
+    || entityHit
     || match.evidence.strongTerms >= minTerms
     || (singleTerm && match.evidence.strongTerms >= 1 && distinctive)
   return {
-    about: match.relevance >= minScore && credited,
+    about: (match.relevance >= minScore && credited) || entityHit,
     distinctive,
     credited,
-    relevance: match.relevance,
+    relevance: entityHit ? Math.max(match.relevance, minScore) : match.relevance,
     best: match.best,
     evidence: match.evidence,
     score: match.relevance * importanceOf(entry) * decayOf(entry, now) * timeBoost(entry, window),
   }
+}
+
+/**
+ * Whether the query names one of the entry's entities.
+ *
+ * Entities are exact names, so the test is a substring match on each query term
+ * (a CJK bigram or a Latin word) against the entity list. A single shared
+ * character is not enough: 「票」 alone would make every receipt memory answer
+ * every question about tickets.
+ *
+ * @param entry - the memory whose entity list is tested.
+ * @param query - the turn.
+ * @returns true when at least one query term appears in the entity list.
+ */
+export function sharesEntity(entry: MemoryEntry, query: string): boolean {
+  const entities = (entry.entities ?? []).join(' ').toLowerCase()
+  if (entities.trim().length === 0) return false
+  for (const term of tokenize(query)) {
+    if (term.length < 2) continue
+    if (entities.includes(term)) return true
+  }
+  return false
 }
 
 /**

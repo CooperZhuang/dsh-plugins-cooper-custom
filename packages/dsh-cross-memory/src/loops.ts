@@ -120,10 +120,15 @@ export function mergeLoops(
     const existing = loops.find((loop) => loop.state === 'open' && overlaps(normalize(loop.text), key))
     if (existing !== undefined) {
       // A later deadline wins: the user moved the promise, they did not make two.
-      if (candidate.dueAt !== undefined && (existing.dueAt === undefined || candidate.dueAt > existing.dueAt)) {
-        const index = loops.indexOf(existing)
-        loops[index] = { ...existing, dueAt: candidate.dueAt }
-      }
+      // The text is carried forward too when the candidate re-words it (a
+      // progress report is told to keep the original promise's wording, so
+      // containment still recognises it), and the first sighting keeps its age.
+      const index = loops.indexOf(existing)
+      const dueAt = candidate.dueAt !== undefined && (existing.dueAt === undefined || candidate.dueAt > existing.dueAt)
+        ? candidate.dueAt
+        : existing.dueAt
+      const same = normalize(existing.text) === key
+      loops[index] = { ...existing, ...same ? {} : { text }, openedAt: same ? existing.openedAt : now, ...dueAt === undefined ? {} : { dueAt } }
       continue
     }
     loops.push({

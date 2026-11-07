@@ -189,6 +189,7 @@ export const LEGACY_PROJECT_SLUG = /^.+?-[0-9a-f]{8}$/u
 export function formatEntry(entry: MemoryEntry): string {
   const tags = entry.tags.length > 0 ? `tags: ${entry.tags.join(', ')}` : 'tags:'
   const keys = entry.keys.length > 0 ? `keys: ${entry.keys.join(', ')}` : undefined
+  const entities = entry.entities !== undefined && entry.entities.length > 0 ? `entities: ${entry.entities.join(', ')}` : undefined
   return [
     FENCE,
     `id: ${entry.id}`,
@@ -197,6 +198,7 @@ export function formatEntry(entry: MemoryEntry): string {
     `title: ${entry.title}`,
     tags,
     ...keys === undefined ? [] : [keys],
+    ...entities === undefined ? [] : [entities],
     ...entry.appliesTo !== undefined && entry.appliesTo.length > 0 ? [`appliesTo: ${entry.appliesTo}`] : [],
     ...entry.durability === 'snapshot' ? ['durability: snapshot'] : [],
     ...entry.durability === 'snapshot' && entry.asOf !== undefined ? [`asOf: ${new Date(entry.asOf).toISOString()}`] : [],
@@ -274,6 +276,7 @@ export function parseEntry(text: string, scope: MemoryScope, fallbackId: string)
   // use; an entry written before the field existed simply has none.
   const derivedFrom = (fields.get('derivedfrom') ?? '').split(',').map((value) => value.trim()).filter((value) => value.length > 0)
   const keys = (fields.get('keys') ?? '').split(',').map(normalizeKey).filter((key) => key.length > 0)
+  const entities = (fields.get('entities') ?? '').split(',').map((value) => value.replace(/\s+/gu, ' ').trim()).filter((value) => value.length > 0)
   return {
     id: fields.get('id') ?? fallbackId,
     scope,
@@ -284,6 +287,7 @@ export function parseEntry(text: string, scope: MemoryScope, fallbackId: string)
     body,
     tags: (fields.get('tags') ?? '').split(',').map(normalizeTag).filter((tag) => tag.length > 0),
     keys,
+    ...entities.length > 0 ? { entities } : {},
     ...appliesTo !== undefined && appliesTo.length > 0 ? { appliesTo } : {},
     ...durability === 'snapshot' ? { durability, ...asOf > 0 ? { asOf } : {} } : {},
     ...pinned ? { pinned: true } : {},
@@ -1145,6 +1149,9 @@ export class MemoryStore {
       : await this.entryFile(draft.scope, projectRoot, keepId)
     const tags = [...new Set(draft.tags.map(normalizeTag).filter((tag) => tag.length > 0))].slice(0, 12)
     const keys = [...new Set((draft.keys ?? existing?.keys ?? []).map(normalizeKey).filter((key) => key.length > 0))].slice(0, 12)
+    // Entities accumulate the same way keys do: a rewrite that names a new
+    // person/place keeps the old ones, because a later turn may name either.
+    const entities = [...new Set((draft.entities ?? existing?.entities ?? []).map((value) => value.replace(/\s+/gu, ' ').trim()).filter((value) => value.length > 0))].slice(0, 12)
     // A rewrite that omits `appliesTo` KEEPS the existing one, exactly like
     // `kind` and `keys`. Dropping it silently is a leak nothing downstream can
     // undo: measured on a real store, one background consolidation erased the
@@ -1219,6 +1226,7 @@ export class MemoryStore {
       body: draft.body.trim(),
       tags,
       keys,
+      ...entities.length > 0 ? { entities } : {},
       ...appliesTo !== undefined && appliesTo.length > 0 ? { appliesTo } : {},
       ...durability === 'snapshot' ? { durability, ...asOf === undefined || asOf <= 0 ? { asOf: now } : { asOf } } : {},
       ...pinned ? { pinned: true } : {},
