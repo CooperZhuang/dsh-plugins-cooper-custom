@@ -1503,7 +1503,7 @@ export class MemoriesRuntime {
       // asking for three consecutive characters, every ordinary mid-conversation
       // turn produced one of these, and six turns in a row recalled nothing at
       // all with the right memory sitting one shared pair away.
-      if (near !== undefined && near.relevance >= this.settings.recallMinScore && !this.nearMissLogged.has(session)) {
+      if (near !== undefined && near.relevance >= this.settings.recallMinScore * ALIAS_FLOOR_SHARE && !this.nearMissLogged.has(session)) {
         this.nearMissLogged.add(session)
         this.log.info('dsh-cross-memory: session %s had a near miss worth reading: %s', session.id, detail)
       }

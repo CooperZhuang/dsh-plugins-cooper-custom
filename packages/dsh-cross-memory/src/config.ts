@@ -43,11 +43,21 @@ export const DEFAULT_SYNC_CLOCK = '12:05,18:05'
 /** Default debounce before a burst of memory writes becomes one commit, in seconds. */
 export const DEFAULT_SYNC_DEBOUNCE_SECONDS = 2
 
-/** Default byte budget for the injected memory summary. */
-export const DEFAULT_MAX_SUMMARY_BYTES = 4096
+/**
+ * Default byte budget for the injected memory summary.
+ *
+ * 4096 was sized when a store held a few dozen entries. On a real long-lived
+ * store the summary is the ONLY projection most conversations ever see, and at
+ * 4 KB it could not even list the dozen entries the per-scope cap allowed once
+ * the entries were Chinese (measured on the Ornn8 six-persona benchmark: a
+ * 5120-byte budget rendered 12 of 149-326 live entries, so 96% of the store was
+ * invisible unless the on-demand recall happened to fire). 8192 roughly doubles
+ * the rendered set at the cost of one extra cached prefix block per session.
+ */
+export const DEFAULT_MAX_SUMMARY_BYTES = 8192
 
 /** Default cap on entries listed in the injected summary per scope. */
-export const DEFAULT_MAX_SUMMARY_ENTRIES = 12
+export const DEFAULT_MAX_SUMMARY_ENTRIES = 20
 
 /**
  * Whether a conversation is told about memories written after its summary.
@@ -109,9 +119,11 @@ export const DEFAULT_ROTATION_MAX_BYTES = 1600
  * on global entries, and in every session the same six were unrelated to the
  * workspace (a plugin's logger threshold, a sidebar adapter, a model catalog).
  * Four keeps the portable half visible without letting it bury the scope that is
- * actually about this conversation.
+ * actually about this conversation. Six follows the per-scope raise: the global
+ * half is what every unrelated conversation can use, and four was leaving the
+ * same six entries to compete for a budget that now has room.
  */
-export const DEFAULT_GLOBAL_SUMMARY_ENTRIES = 4
+export const DEFAULT_GLOBAL_SUMMARY_ENTRIES = 6
 
 /**
  * Default byte budget for the global section alone, inside {@link DEFAULT_MAX_SUMMARY_BYTES}.
@@ -184,13 +196,15 @@ export const DEFAULT_RECALL_MODE = 'on-demand'
  * paraphrase that shares two bigrams with a title scores around 9-12, so nothing
  * ever cleared it. The floor is now a strictness knob, and the PRECISION lives in
  * `recallMinTerms` — the structural evidence gate, which a score threshold cannot
- * replace. 9 is just above one shared bigram in a title (8) so that a single
- * common word is never sufficient on its own.
+ * replace. 6 is deliberately below the 8 a single shared title bigram scores: a
+ * one-bigram paraphrase (「北街南街」 against 「南街文具店」) is a real match that
+ * the old floor refused, and the term gate plus the hub discount are what keep a
+ * shared common word from recalling everything.
  */
-export const DEFAULT_RECALL_MIN_SCORE = 9
+export const DEFAULT_RECALL_MIN_SCORE = 6
 
 /** Default cap on recall deltas injected into one conversation. */
-export const DEFAULT_RECALL_MAX_PER_CONVERSATION = 4
+export const DEFAULT_RECALL_MAX_PER_CONVERSATION = 8
 
 /**
  * Default byte budget for one recall delta block.
@@ -200,7 +214,7 @@ export const DEFAULT_RECALL_MAX_PER_CONVERSATION = 4
  * entry costs about 90. At 800 a two-entry block would not fit, which is why
  * this is not 400 as it was when a delta could only ever hold one memory.
  */
-export const DEFAULT_RECALL_MAX_BYTES = 1_200
+export const DEFAULT_RECALL_MAX_BYTES = 2_400
 
 /** Default minimum length of a user turn worth a recall decision. */
 export const DEFAULT_RECALL_MIN_QUERY_CHARS = 2
@@ -222,12 +236,16 @@ export const DEFAULT_RAW_RECALL_EXCERPTS = 3
 /**
  * Default number of distinct strong-field terms a recall needs.
  *
- * Two is what makes a paraphrased question reachable without letting a shared
- * common word in: "这个插件的日志在哪里" shares 插件 and 日志 with a memory titled
- * "插件日志的查看方式" (two terms, credited), while "该插件是否有日志" shares only
- * 插件 with a title about plugin registration order (one term, not credited).
+ * Two was the old precision gate, but a Chinese paraphrase of a stored fact
+ * routinely shares exactly ONE substantive word with it: a benchmark turn asking
+ * 「理零票第一步」 against a memory filed as 「整理小票先按日期分堆」 shares only
+ * 票, and 「点碗粉加两个小菜」 against 「不吃香菜」 shares only 菜. Two terms made
+ * those unreachable no matter how high the relevance score was. One term plus the
+ * relevance floor is the gate now; the floor (8) is what keeps a shared common
+ * word like 插件 or 日志 from recalling everything, and the entity path in
+ * `recallFor` adds a second, stronger signal on top.
  */
-export const DEFAULT_RECALL_MIN_TERMS = 2
+export const DEFAULT_RECALL_MIN_TERMS = 1
 
 /**
  * Every valid recall mode.
@@ -396,13 +414,13 @@ export const Config = z.object({
   /** Max entries listed for the global scope, which every session shares. */
   globalSummaryEntries: z.number().default(DEFAULT_GLOBAL_SUMMARY_ENTRIES).description('How many memories the GLOBAL section may list, capped below maxSummaryEntries. Both scopes share one byte budget and global renders first, so without this the global half grows to fill whatever the project half leaves (measured: 87% of a small project\'s summary). 0 removes the global section entirely.').volatile(),
   /** Byte budget for the global section alone. */
-  globalSummaryBytes: z.number().default(DEFAULT_GLOBAL_SUMMARY_BYTES).description('Byte budget for the GLOBAL section, inside maxSummaryBytes. A count cap is not enough because Chinese entries are ~3 bytes per character: four of them still filled 60% of a 4 KB block. 0 removes the global section entirely.').volatile(),
+  globalSummaryBytes: z.number().default(DEFAULT_GLOBAL_SUMMARY_BYTES).description('Byte budget for the GLOBAL section, inside maxSummaryBytes. A count cap is not enough because Chinese entries are ~3 bytes per character: a handful of them still fills a large share of the block. 0 removes the global section entirely.').volatile(),
   /** How many of those entries are reserved for never-listed memories. */
   summaryFreshSlots: z.number().default(DEFAULT_SUMMARY_FRESH_SLOTS).description('How many of each scope\'s summary entries are reserved for memories that have never been listed before, preferring ones written deliberately over extracted ones. 0 leaves selection to the ranking alone, which on a full scope never shows anything new.').volatile(),
   /** How the injected summary is refreshed as the conversation moves on. */
   recallMode: z.string().default(DEFAULT_RECALL_MODE).description('once injects the summary once per conversation; on-demand also injects a small delta when the current turn clearly matches a memory; off disables injection and leaves only the memory tool.').volatile(),
   /** Minimum relevance a recall delta must reach. */
-  recallMinScore: z.number().default(DEFAULT_RECALL_MIN_SCORE).description('Minimum relevance a memory must reach before it is injected as a recall delta. A strictness knob, not the precision gate: recallMinTerms is what keeps generic overlap out. Raise it to demand a stronger lexical match.').volatile(),
+  recallMinScore: z.number().default(DEFAULT_RECALL_MIN_SCORE).description('Minimum relevance a memory must reach before it is injected as a recall delta. Together with recallMinTerms this is the precision gate: with the default of one term, the score floor is what keeps a shared common word like 插件 or 日志 from recalling every memory. Raise it to demand a stronger lexical match.').volatile(),
   /** Cap on recall deltas injected into one conversation. */
   recallMaxPerConversation: z.number().default(DEFAULT_RECALL_MAX_PER_CONVERSATION).description('Maximum recall deltas injected into one conversation, counted per memory. 0 disables them.').volatile(),
   /** Byte budget for one recall delta block. */
@@ -413,7 +431,7 @@ export const Config = z.object({
   /** Shortest user turn worth a recall decision. */
   recallMinQueryChars: z.number().default(DEFAULT_RECALL_MIN_QUERY_CHARS).description('Shortest user turn, in characters, that may trigger a recall delta. Short acknowledgements are skipped instead of scanning the store.').volatile(),
   /** Distinct strong-field terms a recall needs before it is credited. */
-  recallMinTerms: z.number().default(DEFAULT_RECALL_MIN_TERMS).description('Distinct query terms that must land in the title, keys, tags, or appliesTo before a memory may be recalled on demand. This is what keeps a Chinese turn from recalling every memory that shares a common word like 插件 or 日志. 1 makes the relevance floor the only gate, which is noticeably noisier for Chinese; 0 disables the check.').volatile(),
+  recallMinTerms: z.number().default(DEFAULT_RECALL_MIN_TERMS).description('Distinct query terms that must land in the title, keys, tags, or appliesTo before a memory may be recalled on demand. 1 (the default) admits a one-word paraphrase, which a Chinese rewrite of a stored fact routinely is, and lets the relevance floor do the precision work; 2 demands two shared words and misses single-word paraphrases; 0 disables the check entirely.').volatile(),
   /**
    * Whether memories written after the summary was injected get a small delta.
    *

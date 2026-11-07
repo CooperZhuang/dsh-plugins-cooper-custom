@@ -120,15 +120,16 @@ test('a recall that fires, and a near miss that is refused, both reach the log',
   await runtime.write(session, { scope: 'global', title: 'Prefer pnpm', body: 'Use pnpm, not npm.', tags: [] }, 'tool')
   await runtime.recallFor(stubAgent(session))
   assert.ok(lines.some((line) => line.includes('recalled')), `a fired delta is logged at info, got: ${lines.join(' | ')}`)
-  // The refusal that hides a mis-tuned gate: the memory CLEARS the relevance
-  // floor and is still turned away by the evidence gate. Reported once per
-  // conversation so it cannot become noise on a long session.
+  // The refusal that hides a mis-tuned gate: the memory clears the lowered
+  // relevance floor through its BODY and is still turned away by the evidence
+  // gate (no strong-field term). Reported once per conversation so it cannot
+  // become noise on a long session.
   const { runtime: other, lines: otherLines } = await loggedFixture(t)
-  const gated = stubSession(process.cwd(), '该插件是否有日志')
-  // Tagged with the shared word, so the turn really does clear the relevance
-  // floor: that is what makes the refusal the evidence gate's doing, and what
-  // makes it worth a line in the log.
-  await other.write(gated, { scope: 'global', title: '插件注册顺序', body: '插件在启动时注册。'.repeat(6), tags: ['插件'] }, 'tool')
+  const gated = stubSession(process.cwd(), '日志在哪里看')
+  // The shared word lives only in the body: it clears the relevance floor
+  // (minScore * ALIAS_FLOOR_SHARE) without earning a strong term, which is what
+  // makes the refusal the evidence gate's doing and worth a line in the log.
+  await other.write(gated, { scope: 'global', title: '插件注册顺序', body: '插件在启动时注册，日志文件在启动时生成，日志路径可以在配置里改，日志级别分三档。', tags: ['插件'] }, 'tool')
   await other.recallFor(stubAgent(gated))
   const nearMisses = (): number => otherLines.filter((line) => line.includes('near miss worth reading')).length
   assert.equal(nearMisses(), 1, 'the refused-but-close case is reported')
@@ -160,20 +161,19 @@ test('an on-demand delta surfaces the memory the current turn matches', async (t
 test('a delta is injected once per entry and capped per conversation', async (t) => {
   const { runtime } = await fixture(t)
   const session = stubSession(process.cwd(), 'pnpm')
-  await runtime.write(session, { scope: 'global', title: 'Prefer pnpm', body: 'Use pnpm.', tags: [] }, 'tool')
   const agent = stubAgent(session)
 
-  assert.ok(await runtime.recallFor(agent) !== undefined)
+  await runtime.write(session, { scope: 'global', title: 'Prefer pnpm', body: 'Use pnpm.', tags: [] }, 'tool')
+  assert.ok(await runtime.recallFor(agent) !== undefined, 'the first entry earns a delta')
   assert.equal(await runtime.recallFor(agent), undefined, 'the same entry is never repeated')
 
-  await runtime.write(session, { scope: 'global', title: 'pnpm hoisting', body: 'Hoist pnpm deps.', tags: [] }, 'tool')
-  assert.ok(await runtime.recallFor(agent) !== undefined, 'a second unseen entry still fits')
-
-  await runtime.write(session, { scope: 'global', title: 'pnpm store', body: 'Share the pnpm store.', tags: [] }, 'tool')
-  assert.ok(await runtime.recallFor(agent) !== undefined, 'up to three')
-  await runtime.write(session, { scope: 'global', title: 'pnpm audit', body: 'Audit pnpm deps.', tags: [] }, 'tool')
-  assert.ok(await runtime.recallFor(agent) !== undefined, 'the fourth memory still fits the default cap')
-  await runtime.write(session, { scope: 'global', title: 'pnpm dedupe', body: 'Dedupe pnpm deps.', tags: [] }, 'tool')
+  // The default cap is 8 deltas per conversation. One entry per turn keeps the
+  // count unambiguous: each turn recalls exactly the entry that just arrived.
+  for (let index = 0; index < 7; index += 1) {
+    await runtime.write(session, { scope: 'global', title: `pnpm note ${index}`, body: `Note ${index} about pnpm.`, tags: [] }, 'tool')
+    assert.ok(await runtime.recallFor(agent) !== undefined, `entry ${index + 2} still fits the default cap`)
+  }
+  await runtime.write(session, { scope: 'global', title: 'pnpm overflow', body: 'Overflow note about pnpm.', tags: [] }, 'tool')
   assert.equal(await runtime.recallFor(agent), undefined, 'the cap stops further deltas')
 })
 
@@ -224,19 +224,19 @@ test('the delta byte budget bounds one block instead of dropping it', async (t) 
 
 test('a turn that shares only one alias still recalls, and says how it matched', async (t) => {
   const { runtime } = await fixture(t)
-  const session = stubSession(process.cwd(), 'monorepo 该怎么配')
+  const session = stubSession(process.cwd(), '理零票第一步')
   await runtime.write(session, {
     scope: 'global',
     title: '本仓是一个 pnpm 工作区',
     body: '统一用 pnpm，不要跑 npm install。',
     tags: [],
-    keys: ['monorepo'],
-    appliesTo: '配置 monorepo 工作区时',
+    keys: ['零票'],
+    appliesTo: '整理票据时',
   }, 'tool')
   const message = await runtime.recallFor(stubAgent(session))
   const text = blockText(message)
-  // It fires at all: the two-term gate refused this turn (one shared term), so
-  // without the alias pass this would have been silence.
+  // It fires at all: the strict gate refuses this turn (one shared term scoring
+  // below the relevance floor), so without the alias pass this is silence.
   assert.match(text, /pnpm 工作区/u)
   // And it announces the weaker match, because a one-word hit read as a strong
   // one is exactly the misreading the annotation exists to prevent.
@@ -300,27 +300,25 @@ test('a Chinese turn reaches a memory it names in two non-adjacent pairs', async
   assert.match(textOf(delta), /把混装的工作区改动拆成两笔提交/u)
 })
 
-test('a Chinese turn that only shares common pairs recalls nothing', async (t) => {
+test('a Chinese turn that shares one pair recalls only when the pair clears the floor', async (t) => {
   const { runtime } = await fixture(t)
   const session = stubSession(process.cwd(), '该插件是否有日志')
-  // Shares the isolated pair 插件 with the question and nothing longer. It also
-  // scores 12, above any floor low enough to admit a paraphrase, so a score
-  // threshold cannot be the thing that keeps this out — the evidence gate is.
+  // Shares the isolated pair 插件 with the question and nothing longer. The
+  // default gate is now one term plus the relevance floor, so this recalls: the
+  // pair is in the title, and the body word 日志 is not evidence by itself.
   await runtime.write(session, {
     scope: 'global',
     title: '插件注册顺序',
     body: '插件在启动时注册，日志级别由配置决定。',
     tags: [],
   }, 'tool')
-  assert.equal(await runtime.recallFor(stubAgent(session)), undefined,
-    'the same characters are not the same phrase')
-  // One pair is one term, and recall needs two. The body also says 日志, but a
-  // body word is not evidence: a long memory mentions many things.
+  assert.ok(await runtime.recallFor(stubAgent(session)) !== undefined,
+    'one shared pair that clears the floor recalls')
   const counted = matchCredit(
     (await runtime.search(session, '该插件是否有日志', { limit: 1 }))[0]!.entry,
-    '该插件是否有日志', 9, 2,
+    '该插件是否有日志', 6, 1,
   )
-  assert.equal(counted.evidence.strongTerms, 1, 'exactly one pair is credited, and it is not enough')
+  assert.equal(counted.evidence.strongTerms, 1, 'exactly one pair is credited')
 })
 
 test('appliesTo is what makes a memory reachable when the title shares no noun', async (t) => {

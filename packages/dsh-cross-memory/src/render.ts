@@ -562,8 +562,8 @@ export function renderOpenLoops(loops: readonly LoopItem[], options: OpenLoopOpt
     .sort((left, right) => (left.dueAt ?? Number.MAX_SAFE_INTEGER) - (right.dueAt ?? Number.MAX_SAFE_INTEGER)
       || right.openedAt - left.openedAt)
   if (open.length === 0) return undefined
-  const maxEntries = options.maxEntries ?? 8
-  const maxBytes = options.maxBytes ?? 800
+  const maxEntries = options.maxEntries ?? 12
+  const maxBytes = options.maxBytes ?? 1000
   const header = 'Open loops (the user said they would do these; not done yet):'
   const lines = [header]
   let used = bytes(header)

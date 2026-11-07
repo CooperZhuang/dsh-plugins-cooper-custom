@@ -157,8 +157,11 @@ test('the rotation block gives both scopes a share', async (t) => {
     await rm(dir, { recursive: true, force: true })
   })
   const agent = stubAgent(stubSession(dir))
-  await seed(runtime, agent.session, 30, 'global memory')
-  for (let index = 0; index < 20; index += 1) {
+  // The summary now lists up to 20 entries per scope, so the rotation needs a
+  // store larger than that to have anything left to rotate: 60 global + 40 project
+  // leaves 40 + 20 unseen after the summary, and the block gives both a share.
+  await seed(runtime, agent.session, 60, 'global memory')
+  for (let index = 0; index < 40; index += 1) {
     await runtime.write(agent.session, {
       scope: 'project',
       title: `project memory ${index}`,

@@ -93,15 +93,16 @@ dsh plugin --profile <profile> add /path/to/packages/dsh-cross-memory
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
-| `maxSummaryBytes` | `4096` | 每会话注入摘要的总字节预算；`0` 关闭注入，只留工具 |
-| `maxSummaryEntries` | `12` | 每个作用域最多列出几条 |
-| `globalSummaryEntries` | `4` | 全局段最多列几条（两作用域共用总预算，全局段先渲染） |
+| `maxSummaryBytes` | `8192` | 每会话注入摘要的总字节预算；`0` 关闭注入，只留工具 |
+| `maxSummaryEntries` | `20` | 每个作用域最多列出几条 |
+| `globalSummaryEntries` | `6` | 全局段最多列几条（两作用域共用总预算，全局段先渲染） |
 | `globalSummaryBytes` | `1200` | 全局段单独占的字节预算；`0` 不注入全局段 |
 | `summaryFreshSlots` | `3` | 每作用域预留几个名额给从未出现过的记忆，避免老条目长期占位 |
 | `recallMode` | `on-demand` | `once` 只注一次摘要 / `on-demand` 额外按需补注 / `off` 只用工具 |
-| `recallMinScore` | `9` | 按需补注的相关度下限（严格度旋钮） |
-| `recallMinTerms` | `2` | 补注所需的实词数，防止只共享一个常见词就触发 |
-| `recallMaxPerConversation` | `4` | 一个会话最多按需补注多少条记忆；`0` 关闭 |
+| `recallMinScore` | `6` | 按需补注的相关度下限；与 `recallMinTerms` 一起构成精度门槛 |
+| `recallMinTerms` | `1` | 补注所需的实词数。中文改写常只共享一个实词，故默认 1，靠分数门槛控噪声 |
+| `recallMaxPerConversation` | `8` | 一个会话最多按需补注多少条记忆；`0` 关闭 |
+| `recallMaxBytes` | `2400` | 每个按需补注块的字节预算；`0` 关闭|
 | `injectDelta` | `true` | 摘要注入后新写入的记忆以增量块补发，每会话最多两次 |
 | `deltaMaxBytes` | `1600` | 每个增量块的字节预算；一条完整条目约 200–350 字节，`0` 关闭增量块 |
 | `rotationEntries` | `16` | 每会话额外列出多少个未出现过的标题；`0` 关闭标题轮转 |

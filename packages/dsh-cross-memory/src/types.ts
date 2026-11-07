@@ -78,6 +78,12 @@ export interface MemoryEntry {
    * buys most of the recall a vector index would, without an index.
    */
   readonly keys: readonly string[]
+  /**
+   * Named entities the memory is about: people, places, organisations, objects,
+   * dates. Used by recall to match a turn that names one of them even when it
+   * shares no other word with the memory (「北街南街」 against 「南街文具店」).
+   */
+  readonly entities?: readonly string[]
   /** When this memory is worth recalling, in the author's words. */
   readonly appliesTo?: string
   /**
@@ -319,6 +325,8 @@ export interface MemoryDraft {
   readonly derivedFrom?: readonly string[]
   /** Extra search keys (aliases, keyphrases) that should also find this memory. */
   readonly keys?: readonly string[]
+  /** Named entities (people, places, organisations, objects) this memory is about. */
+  readonly entities?: readonly string[]
 }
 
 /** The outcome of persisting one draft. */

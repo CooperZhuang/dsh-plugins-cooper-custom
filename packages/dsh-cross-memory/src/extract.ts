@@ -119,11 +119,11 @@ export function selectKnownTitles(
  * truncation keep everything that finished.
  */
 export const EXTRACT_SYSTEM = [
-  'You maintain long-term memory for a coding assistant.',
+  'You maintain long-term memory for an AI assistant\'s user.',
   'Read the supplied conversation transcript and extract only durable, reusable facts that would help in a FUTURE session.',
   '',
-  'Record: stable user preferences and working style; project architecture and conventions; build/test/deploy commands; environment and tooling facts; non-obvious gotchas; decisions and their reasons.',
-  'Do NOT record: transient task state, one-off debugging output, secrets, API keys, tokens, credentials, personal data, restatements of the code the assistant just wrote, or anything already stated in the transcript as a question rather than a fact.',
+  'Record: stable user preferences and working style; project architecture and conventions; build/test/deploy commands; environment and tooling facts; non-obvious gotchas; decisions and their reasons; the user\'s personal background and relationships (family, colleagues, friends, neighbours); personal habits, routines and plans; creative collaborations and shared stories; commitments and promises with their deadlines.',
+  'Do NOT record: transient task state, one-off debugging output, secrets, API keys, tokens, credentials, sensitive personal data (ID numbers, medical records, financial account details), restatements of the code the assistant just wrote, or anything already stated in the transcript as a question rather than a fact.',
   '',
   'Write every title and body in Simplified Chinese. Keep paths, commands, identifiers, product names and error strings exactly as they are.',
   'The injected summary shows only the title and roughly the first 100 characters of the body (the budget forces short previews), so lead with the trigger and the decision; put the detail after.',
@@ -131,13 +131,18 @@ export const EXTRACT_SYSTEM = [
   'When a number IS the point of the memory (a measured pass rate, a corpus size, the current state of a system), set "durability":"snapshot" and give "asOf" as the date it was measured; it is then shown with that date and retired once it is old. Everything else is "durable" and needs neither field.',
   'A problem that is already fixed is recorded as fixed ("已修 in <commit>"); never leave it reading as an open problem.',
   '',
+  'TIME: a fact carrying a relative time (明天/上周五/前天/下周三/上个月) MUST also carry its absolute date in the body, resolved against the today\'s date given below ("前天（2026-05-25）"). A later turn may ask exactly "那次是几号", and the relative word alone cannot answer it.',
+  'UPDATES: when the transcript CHANGES an existing fact — a correction, a changed plan, a new version, a story retcon — do NOT overwrite the old state. Keep the timeline in the body: "旧：<old>；新：<new>（<date> 改）". A later turn may ask what was true BEFORE the change (改口/纠错/真实变化), and only the timeline answers it.',
+  'CONFLICTS: when the user says two things about the same subject that do not agree and the transcript does not explain why, record BOTH ("两种说法：<A>；<B>；原因未明"). Never pick one side and drop the other.',
+  '',
   'Choose the scope of each memory:',
-  '- "global": true across the developer\'s machines and projects — how they like to work, general preferences, tooling, machine and path facts, network and proxy setup, how to move work between machines.',
+  '- "global": true across the developer\'s machines and projects — how they like to work, general preferences, tooling, machine and path facts, network and proxy setup, how to move work between machines, and the user\'s personal background and relationships.',
   '- "project": true only for this workspace (its architecture, commands, conventions, gotchas).',
   'Choose by breadth, not by wording: naming a machine, drive letter, repository path, host, employer or customer is NOT by itself evidence of project scope. A durable fact about the developer\'s own environment is global even when it names such a thing, because global memories are what every unrelated project reads. A fact becomes "project" only when it would be wrong or meaningless outside this one workspace.',
   '',
   'Each memory has a short imperative title (max 80 characters), a 1-3 sentence body, up to 5 lowercase keyword tags, and 1-5 search keys: the aliases and keyphrases a future session would actually type (for example "monorepo" for a pnpm-workspace fact).',
   'Search keys are how a memory is found at all, so spend them on the words a person would use who has NOT read the memory: the other name for the same thing, the command, the file, the error text, the product\'s own term. Include the English technical term when the memory is written in Chinese and vice versa — a turn that mixes them ("这个排序改动会不会动到 system prompt") shares no characters with "前缀缓存", and the keys are the only place that gap can be closed. Retrieval is lexical: it matches characters, not meaning.',
+  'Also give each memory "entities": the people, places, organisations, objects and dates it is about, each as a short exact name ("刘莹", "南街文具店", "叶楠", "2026-05-25"). A later turn that names one of them ("北街南街分别买了什么") may share no other word with the memory, and the entity list is what makes it reachable.',
   'Give each memory a kind, because the kinds are recalled differently:',
   '- "preference": how the user wants work done, or a correction they issued.',
   '- "failure": something that went wrong and how to avoid repeating it.',
@@ -148,7 +153,8 @@ export const EXTRACT_SYSTEM = [
   'Every memory must also carry "quote": one continuous passage copied VERBATIM from a single message in the transcript above (8-200 characters), keeping its punctuation and wording exactly, and without the "USER:"/"ASSISTANT:" line prefix. Choose the sentence that carries the claim — the user stating it, or the assistant\'s conclusion you are recording — not a greeting, a question or your own summary. Never paraphrase the quote, combine two messages, or invent one. The quote is checked as an exact substring of the transcript before the memory is written, and a memory whose quote does not appear there is discarded, so a paraphrased quote loses the memory.',
   '',
   'Mark whose words a memory preserves with "voice":',
-  '- "user" when the user themselves stated it: how they want work done, a correction they issued, a habit, an opinion, a rule they set ("以后都…", "不要…", "我喜欢…").',
+  '- "user" when the user themselves stated it: how they want work done, a correction they issued, a habit, an opinion, a rule they set ("以后都…", "不要…", "我喜欢…"), or a fact about their own life.',
+  '- "assistant" when the memory preserves the ASSISTANT\'s own words, suggestion or promise. Never file the assistant\'s words as the user\'s: a later turn asking "你当时建议什么" must not be answered with "你说过…".',
   '- Record the SUBSTANCE faithfully but in the form that will be found and understood later: rewrite for clarity when their sentence was context-bound, and keep their exact phrasing only where the wording itself carries the rule (a threshold, a condition, a turn of phrase they will repeat). The voice field records whose claim it is, not a transcript.',
   '- omit the field (the default) when the memory is your own conclusion, an observation about the code, or a fact you looked up.',
   'Never attribute your own conclusion to the user. A profile of this person is rebuilt from the "user" entries, so a misattributed guess becomes a false belief about them.',
@@ -157,9 +163,10 @@ export const EXTRACT_SYSTEM = [
   '- One short sentence each, in the user\'s framing, naming the object ("把报价单发出去", not "邮件相关").',
   '- NEVER drop the time word: if the user said 明天/周五/下周三, the loop text must start with it ("明天把登录页的截图补齐"), because a later question may be exactly "我明天要做什么"; resolve "dueAt" to the absolute ISO date computed from today\'s date given above, and omit it when no deadline was said.',
   '- "dueAt" only when a deadline was actually said, as ISO date or date-time. Never invent one: a loop without a deadline is a note, and nagging somebody about a note turns help into supervision.',
+  '- PROGRESS: when the user reports that part of an existing obligation is done ("先还一件，还剩两件"), return a loop whose text KEEPS the original promise\'s wording and adds the remaining part ("还剩两件夜班见闻（原欠三件）"), so the ledger recognises it as the same promise and updates it. Do not keep the original full amount as still owed.',
   '- Skip what the session shows as already done, and skip the assistant\'s own to-dos. An empty array is the normal result.',
   'Prefer few high-value memories over many trivial ones. Return at most the requested number.',
-  'Reply with JSON only, no prose and no code fence: {"memories":[{"scope":"global"|"project","kind":string,"title":string,"body":string,"tags":string[],"appliesTo":string,"quote":string}],"loops":[{"text":string,"dueAt":string?}],"summary":string}',
+  'Reply with JSON only, no prose and no code fence: {"memories":[{"scope":"global"|"project","kind":string,"title":string,"body":string,"tags":string[],"keys":string[],"entities":string[],"appliesTo":string,"quote":string,"voice":"user"|"assistant"}],"loops":[{"text":string,"dueAt":string?}],"summary":string}',
   'Write the "memories" array first and the "summary" paragraph last: the reply is capped, and a summary written first can spend the whole budget before the first memory is complete.',
   'Write "summary" as one paragraph (2-4 sentences) saying what this session was about — the task, the decisions, and anything that would help someone judge the memories above later. It is stored as the evidence behind them.',
   'When nothing is worth remembering, reply exactly {"memories":[],"summary":""}.'
@@ -190,6 +197,7 @@ export const EXTRACT_JSON_SCHEMA = {
           body: { type: 'string' },
           tags: { type: 'array', items: { type: 'string' } },
           keys: { type: 'array', items: { type: 'string' } },
+          entities: { type: 'array', items: { type: 'string' } },
           appliesTo: { type: 'string' },
           quote: { type: 'string' },
           voice: { type: 'string', enum: ['user', 'assistant'] },
@@ -480,6 +488,7 @@ export function parseExtraction(text: string, maxMemories: number, sessionId: st
       ? record['tags'].filter((tag): tag is string => typeof tag === 'string')
       : []
     const keys = Array.isArray(record['keys']) ? record['keys'].filter((key): key is string => typeof key === 'string') : []
+    const entities = Array.isArray(record['entities']) ? record['entities'].filter((entity): entity is string => typeof entity === 'string') : []
     const appliesTo = typeof record['appliesTo'] === 'string'
       ? redactSecrets(record['appliesTo'].replace(/\s+/gu, ' ').trim()).slice(0, 160)
       : ''
@@ -493,9 +502,10 @@ export function parseExtraction(text: string, maxMemories: number, sessionId: st
     const quote = typeof record['quote'] === 'string'
       ? redactSecrets(record['quote'].replace(/\s+/gu, ' ').trim()).slice(0, 300)
       : ''
-    // "assistant" is the default and is stored as absent, so every entry written
-    // before this field existed keeps its meaning.
-    const voice = record['voice'] === 'user' ? 'user' as const : undefined
+    // "assistant" is stored explicitly (the assistant's own words are a different
+    // claim from the user's); the absent default means "the extractor's own
+    // conclusion", which is what every entry written before this field existed is.
+    const voice = record['voice'] === 'user' ? 'user' as const : record['voice'] === 'assistant' ? 'assistant' as const : undefined
     usable.push({
       scope: scope as MemoryScope,
       kind: toMemoryKind(record['kind']),
@@ -503,6 +513,7 @@ export function parseExtraction(text: string, maxMemories: number, sessionId: st
       body: cleanBody,
       tags,
       keys,
+      entities,
       ...voice === undefined ? {} : { voice },
       ...appliesTo.length > 0 ? { appliesTo } : {},
       ...quote.length > 0 && quote !== '[redacted]' ? { quote } : {},

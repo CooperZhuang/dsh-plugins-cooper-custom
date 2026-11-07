@@ -1,0 +1,12 @@
+{
+  "extract": {
+    "input": 4077049,
+    "output": 485502,
+    "calls": 1308
+  },
+  "answer": {
+    "input": 1439264,
+    "output": 18687,
+    "calls": 714
+  }
+}
