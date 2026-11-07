@@ -658,11 +658,11 @@ const TOOL_PARAMETERS = {
         },
         dryRun: {
             type: 'boolean',
-            description: 'Report what would be deleted without touching anything.',
+            description: 'Report what would be deleted without touching anything. Takes precedence over confirm: when true, nothing is removed even if confirm is also true.',
         },
         confirm: {
             type: 'boolean',
-            description: 'Must be true for action="delete" to actually remove data.',
+            description: 'Must be true for action="delete" to actually remove data (and dryRun must not be true).',
         },
         limit: {
             type: 'integer',
@@ -737,6 +737,7 @@ function buildTool(admin, config, log, holds) {
             'Always start with action="list" plus a scope to see exactly what is in range, then call action="delete" with the SAME scope and confirm=true. ' +
             'Scope values: all (every persisted session), ungrouped (exactly the rows the sidebar shows under Ungrouped — no workspace, and neither archived nor a subagent child), temp (sessions whose working directory is gone or under the OS temp dir), archived, subagent, orphan (no session log left, only a stale cache entry). ' +
             'Sessions that belong to a workspace, are currently open/running, are archived, or are subagent children are REFUSED unless you pass the matching include* flag; report those refusals to the user instead of retrying blindly. ' +
+            'Pass dryRun=true to preview exactly what would be removed — dryRun takes precedence over confirm and never deletes anything. ' +
             'Deletion is irreversible — there is no undo and no trash.',
         parameters: TOOL_PARAMETERS,
         output: {
@@ -772,7 +773,11 @@ function buildTool(admin, config, log, holds) {
                         .join(' | ')}`,
                 };
             }
-            if (args.confirm !== true) {
+            // `dryRun` 的语义是「绝不落盘」，优先级高于 `confirm`：`confirm=true` 只是
+            // 「允许真删」的前置条件，不能反过来把 dryRun 盖掉。2026-11-07 修：此前只在
+            // confirm !== true 时才走预演，confirm=true 时 dryRun 被静默忽略、直接真删。
+            const dryRun = args.dryRun === true || args.confirm !== true;
+            if (dryRun) {
                 // 不真删：把它们当作一次预演，把「确认后会发生什么」原样回给模型。
                 const payload = {
                     scope,
@@ -793,7 +798,7 @@ function buildTool(admin, config, log, holds) {
                     matched: value.results.length,
                     reclaimedBytes: value.reclaimed,
                     rejections: rejections.map((r) => ({ id: r.id, reason: r.reason })),
-                    summary: `DRY RUN — confirm is not true, nothing was deleted. ${value.results.length} session(s) in range, ${value.reclaimed} bytes would be reclaimed. ${rejections.length} would be refused (${summarizeReasons(rejections)}). Re-issue with confirm=true to proceed.`,
+                    summary: `DRY RUN — nothing was deleted (${args.dryRun === true ? 'dryRun=true' : 'confirm is not true'}). ${value.results.length} session(s) in range, ${value.reclaimed} bytes would be reclaimed. ${rejections.length} would be refused (${summarizeReasons(rejections)}). Re-issue with dryRun=false and confirm=true to proceed.`,
                 };
             }
             const value = await api.delete({

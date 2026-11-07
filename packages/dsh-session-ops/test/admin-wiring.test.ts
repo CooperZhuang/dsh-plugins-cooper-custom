@@ -256,6 +256,67 @@ test('dryRun 走同一条路由：不摘登记表，也不删文件', async () =
   })
 })
 
+/**
+ * 模型工具面的 `dryRun` 必须压过 `confirm`。
+ *
+ * 2026-11-07 的现场 bug：`session_admin` 的 execute 只在 `confirm !== true` 时才走预演，
+ * `confirm=true` 时把 `dryRun` 静默忽略、直接真删。调用方按工具说明先给
+ * `dryRun=true + confirm=true` 做预演，结果数据被删。这条测试钉住「两者同时给也不删」。
+ */
+test('工具侧 dryRun 优先于 confirm：两者同时给也一个文件都不删', async () => {
+  await inSandbox(async ({ home, sessionDirOf }) => {
+    writeSession(home, '--proj--', 'session-sandbox', { cwd: 'C:\\sandbox', title: '沙箱会话' })
+    const registry = fakeRegistry(sessionDirOf, ['session-sandbox'])
+    const mounted = await mount(registry)
+
+    try {
+      const tool = mounted.tools.find((entry) => entry.name === 'session_admin')
+      assert.ok(tool, 'session_admin 工具必须注册')
+      const result = await tool.execute({
+        action: 'delete',
+        sessionIds: ['session-sandbox'],
+        includeWorkspace: true,
+        dryRun: true,
+        confirm: true,
+      })
+
+      assert.equal(result.dryRun, true, '结果必须标记为 dryRun')
+      assert.equal(result.removed, 0, 'dryRun 不能真删')
+      assert.match(String(result.summary), /DRY RUN/)
+      assert.deepEqual(registry.calls, [], 'dryRun 不该摘登记表')
+      assert.equal(registry.membership.has('session-sandbox'), true)
+      assert.equal(existsSync(sessionDirOf('session-sandbox')), true, 'dryRun 优先于 confirm，文件必须还在')
+    } finally {
+      await mounted.close()
+    }
+  })
+})
+
+test('工具侧 confirm=true 且未给 dryRun 时仍然真删（修复不能把真删路径也堵死）', async () => {
+  await inSandbox(async ({ home, sessionDirOf }) => {
+    writeSession(home, '--proj--', 'session-sandbox', { cwd: 'C:\\sandbox', title: '沙箱会话' })
+    const registry = fakeRegistry(sessionDirOf, ['session-sandbox'])
+    const mounted = await mount(registry)
+
+    try {
+      const tool = mounted.tools.find((entry) => entry.name === 'session_admin')
+      assert.ok(tool, 'session_admin 工具必须注册')
+      const result = await tool.execute({
+        action: 'delete',
+        sessionIds: ['session-sandbox'],
+        includeWorkspace: true,
+        confirm: true,
+      })
+
+      assert.equal(result.dryRun, false)
+      assert.equal(result.removed, 1)
+      assert.equal(existsSync(sessionDirOf('session-sandbox')), false, '真删路径必须仍然可用')
+    } finally {
+      await mounted.close()
+    }
+  })
+})
+
 test('登记表摘不掉时拒绝删除：文件留下，结果里给出原因', async () => {
   await inSandbox(async ({ home, sessionDirOf }) => {
     writeSession(home, '--proj--', 'session-sandbox', { cwd: 'C:\\sandbox', title: '沙箱会话' })
