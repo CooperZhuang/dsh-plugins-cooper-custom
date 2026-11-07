@@ -285,7 +285,7 @@ async function runPersona(persona, history, exams, route, log) {
       .map((turn) => `用户：${turn['用户消息']}\n助手：${turn['助手回复']}`)
       .join('\n\n')
     const memoryBlocks = [messageText(summary), messageText(recall)].filter((text) => text.trim().length > 0).join('\n\n')
-    const system = '你是助手。只依据下面提供的资料回答问题。资料里没有的信息就回答「不知道」。问题问到的每件事都要答到；资料里与该问题相关的条件、期限或替代做法也要一并说明。简短直接，不要复述资料。'
+    const system = '你是助手。只依据下面提供的资料回答问题。资料里没有的信息就回答「不知道」。问题问到的每件事都要答到；资料里与该问题相关的条件、期限或替代做法也要一并说明。资料里没有说明原因、后续或结果时，要明确说「没有说明」，不要自己推测。只回答问题问到的内容，不要补充与问题无关的细节。简短直接，不要复述资料。'
     const prompt = [
       memoryBlocks.trim().length === 0 ? '' : `记忆资料：\n${memoryBlocks}\n\n`,
       `最近对话：\n${recent}\n\n`,
