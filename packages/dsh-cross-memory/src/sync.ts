@@ -170,6 +170,69 @@ export function sessionNoteStamp(text: string): number {
   return Number.isNaN(parsed) ? 0 : parsed
 }
 
+/** Whether one path is a persona file: prose the assistant maintains for the user. */
+export function isPersonaPath(path: string): boolean {
+  return /(^|\/)persona\/[^/]+\.md$/u.test(path)
+}
+
+/**
+ * Merge two versions of a persona file as a bullet union.
+ *
+ * A persona file is headings plus bullet lists; both machines append their own
+ * observations, so a line-level union keeps every rule either machine recorded.
+ * Bullets are matched on their trimmed text (duplicates are dropped), inserted
+ * after the last bullet of the same section, and a whole section that only
+ * `theirs` has is appended at the end. Non-bullet lines come from `ours`.
+ */
+export function mergePersona(ours: string, theirs: string): string {
+  const result = ours.split('\n')
+  const seen = new Set<string>()
+  for (const line of result) {
+    if (line.startsWith('- ')) seen.add(line.trim())
+  }
+  // Bucket the bullets that only the other side has, by their section heading.
+  const pending = new Map<string, string[]>()
+  let section = ''
+  for (const line of theirs.split('\n')) {
+    if (line.startsWith('#')) section = line.trim()
+    else if (line.startsWith('- ')) {
+      const key = line.trim()
+      if (seen.has(key)) continue
+      seen.add(key)
+      const bucket = pending.get(section) ?? []
+      bucket.push(line)
+      pending.set(section, bucket)
+    }
+  }
+  if (pending.size === 0) return ours
+  // Insert each bucket after the last line that belongs to its section.
+  const sectionRanges: Array<{ heading: string; start: number; end: number }> = []
+  let current: { heading: string; start: number; end: number } | undefined
+  for (let i = 0; i < result.length; i += 1) {
+    const line = result[i]
+    if (line?.startsWith('#')) {
+      if (current !== undefined) current.end = i - 1
+      current = { heading: line.trim(), start: i, end: i }
+      sectionRanges.push(current)
+    } else if (current !== undefined && line !== undefined && line.trim() !== '') {
+      current.end = i
+    }
+  }
+  let offset = 0
+  for (const range of sectionRanges) {
+    const bucket = pending.get(range.heading)
+    if (bucket === undefined) continue
+    result.splice(range.end + 1 + offset, 0, ...bucket)
+    offset += bucket.length
+    pending.delete(range.heading)
+  }
+  for (const [heading, bucket] of pending) {
+    if (heading !== '') result.push('', heading)
+    result.push(...bucket)
+  }
+  return result.join('\n')
+}
+
 /**
  * Resolve one conflicting session note by keeping the later `at:` stamp.
  *
@@ -600,13 +663,32 @@ export class MemorySync {
       if (paths.length === 0) {
         const cont = await tryGit(this.dir, ['rebase', '--continue'], this.options.networkTimeoutMs)
         if (cont !== undefined) return { conflicts, resolvedByResolver, resolvedByTime, mergedByStructure }
+        // An empty commit (its change is already upstream) makes --continue
+        // refuse forever; with a clean index/tree the only way forward is --skip.
+        const dirty = await tryGit(this.dir, ['status', '--porcelain'], this.options.gitTimeoutMs)
+        if ((dirty ?? '').trim() === '') {
+          const skipped = await tryGit(this.dir, ['rebase', '--skip'], this.options.gitTimeoutMs)
+          if (skipped !== undefined) {
+            mergedByStructure += 1
+            continue
+          }
+        }
         continue
       }
       for (const path of paths) {
         const ours = await tryGit(this.dir, ['show', ':' + '2:' + path], this.options.gitTimeoutMs)
         const theirs = await tryGit(this.dir, ['show', ':' + '3:' + path], this.options.gitTimeoutMs)
-        if (ours === undefined || theirs === undefined) continue
+        if (ours === undefined && theirs === undefined) continue
         conflicts += 1
+        // modify/delete: one side removed the file while the other edited it.
+        // Keep the surviving text — a machine's edit must not vanish because the
+        // other machine retired the row; consolidation can retire it later.
+        if (ours === undefined || theirs === undefined) {
+          await writeFile(join(this.dir, path), (ours ?? theirs) as string)
+          mergedByStructure += 1
+          await git(this.dir, ['add', path], this.options.gitTimeoutMs)
+          continue
+        }
         // Both sides already agree byte for byte: nothing to decide, and git only
         // stopped because the replayed commit touched a file upstream had also
         // rewritten to the same text. This is common for per-host descriptors
@@ -636,6 +718,13 @@ export class MemorySync {
           if (descriptor !== undefined) {
             await writeFile(join(this.dir, path), descriptor)
             resolvedByTime += 1
+            await git(this.dir, ['add', path], this.options.gitTimeoutMs)
+            continue
+          }
+          const persona = isPersonaPath(path) ? mergePersona(ours, theirs) : undefined
+          if (persona !== undefined) {
+            await writeFile(join(this.dir, path), persona)
+            mergedByStructure += 1
             await git(this.dir, ['add', path], this.options.gitTimeoutMs)
             continue
           }
