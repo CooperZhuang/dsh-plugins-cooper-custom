@@ -320,8 +320,16 @@ export const DEFAULT_EXTRACT_MAX_OUTPUT_TOKENS = 8192
 /** Default timeout for one extraction call. */
 export const DEFAULT_EXTRACT_TIMEOUT_MS = 120_000
 
-/** Default max drafts one extraction may produce. */
-export const DEFAULT_EXTRACT_MAX_MEMORIES = 5
+/**
+ * Default max drafts one extraction may produce.
+ *
+ * 8 rather than 5: on a real production session, an audit of 50 Mubea
+ * Invoice-Insight conversations found 247 durable facts, and the cap of 5 was
+ * the single biggest cause of missed material on long sessions (one audit
+ * session held 16 facts and kept 5). Eight keeps a long session's findings
+ * without letting a short one pad itself.
+ */
+export const DEFAULT_EXTRACT_MAX_MEMORIES = 8
 
 /** Default idle hours a session must accumulate before it is mined. */
 export const DEFAULT_MIN_IDLE_HOURS = 6
