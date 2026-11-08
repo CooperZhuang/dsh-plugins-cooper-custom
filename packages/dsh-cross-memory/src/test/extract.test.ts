@@ -16,7 +16,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { MemoriesRuntime } from '../index.js'
 import type { MemoryEntry } from '../types.js'
-import { EXTRACT_JSON_SCHEMA, bindEvidence, collectExtractionWindow, collectWindow, parseExtraction, redactSecrets, runExtraction, selectKnownTitles } from '../extract.js'
+import { EXTRACT_JSON_SCHEMA, bindEvidence, collectExtractionWindow, collectWindow, parseExtraction, redactSecrets, resolveRelativeTimes, runExtraction, selectKnownTitles } from '../extract.js'
 import { normalizeSettings } from '../config.js'
 import { peakDelayMs } from '../schedule.js'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -172,6 +172,18 @@ test('parseExtraction keeps the string keys and drops the rest', () => {
   assert.deepEqual([...parsed.drafts[0]?.keys ?? []], ['monorepo'])
   // A reply that omits keys is normal: they are an optimization, not a contract.
   assert.deepEqual([...parseExtraction('{"memories":[{"scope":"global","title":"x","body":"y"}]}', 5, 's').drafts[0]?.keys ?? []], [])
+})
+
+test('resolveRelativeTimes names the absolute day for every relative time', () => {
+  // 2026-05-27 is a Wednesday.
+  const base = new Date(2026, 4, 27)
+  assert.equal(resolveRelativeTimes('前天搬窗边', base), '前天（2026-05-25）搬窗边')
+  assert.equal(resolveRelativeTimes('昨天替班', base), '昨天（2026-05-26）替班')
+  assert.equal(resolveRelativeTimes('上周五是生日', base), '上周五（2026-05-22）是生日')
+  assert.equal(resolveRelativeTimes('下周三交报告', base), '下周三（2026-06-03）交报告')
+  // An absolute date is left alone, and an unresolvable word is left alone.
+  assert.equal(resolveRelativeTimes('2026-05-25 已记下', base), '2026-05-25 已记下')
+  assert.equal(resolveRelativeTimes('上周的事', base), '上周的事')
 })
 
 test('parseExtraction accepts a bare object, a fenced object, and rejects junk', () => {

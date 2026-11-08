@@ -168,7 +168,7 @@ export const EXTRACT_SYSTEM = [
   '- "dueAt" only when a deadline was actually said, as ISO date or date-time. Never invent one: a loop without a deadline is a note, and nagging somebody about a note turns help into supervision.',
   '- PROGRESS: when the user reports that part of an existing obligation is done ("先还一件，还剩两件"), the loop text MUST be the REMAINING part with the original promise\'s wording kept ("还剩两件夜班见闻（原欠三件）"), because the ledger recognises it as the same promise and replaces the old amount. A loop that still states the full original amount ("三天内讲完欠的三件") is WRONG after a progress report: it leaves the ledger owing what is already done. Skip the obligation entirely only when nothing is left.',
   '- Skip what the session shows as already done, and skip the assistant\'s own to-dos. An empty array is the normal result.',
-  'Prefer few high-value memories over many trivial ones. Return at most the requested number.',
+  'Prefer few high-value memories over many trivial ones. Return at most the requested number. If the transcript only supports three, return three: padding a short session with one-off detail is how noise gets into the store and pushes real memories out of the summary.',
   'Reply with JSON only, no prose and no code fence: {"memories":[{"scope":"global"|"project","kind":string,"title":string,"body":string,"tags":string[],"keys":string[],"entities":string[],"appliesTo":string,"quote":string,"voice":"user"|"assistant"}],"loops":[{"text":string,"dueAt":string?}],"summary":string}',
   'Write the "memories" array first and the "summary" paragraph last: the reply is capped, and a summary written first can spend the whole budget before the first memory is complete.',
   'Write "summary" as one paragraph (2-4 sentences) saying what this session was about — the task, the decisions, and anything that would help someone judge the memories above later. It is stored as the evidence behind them.',
@@ -626,6 +626,95 @@ function localDate(now = new Date()): string {
   return new Intl.DateTimeFormat('sv-SE', { dateStyle: 'short' }).format(now)
 }
 
+/** Relative-time words that carry no date of their own. */
+const RELATIVE_TIME = /(大前天|前天|昨天|昨日|今天|今日|明天|明日|次日|后天|后日|上个月|上月|本月|这个月|当月|去年|今年|上周[一二三四五六日天]|这周[一二三四五六日天]|本周[一二三四五六日天]|下周[一二三四五六日天]|下星期[一二三四五六日天])/gu
+
+/** Parse a `YYYY-MM-DD` string into a LOCAL Date at midnight. */
+function parseLocalDate(value: string): Date {
+  const [year, month, day] = value.split('-').map((part) => Number(part))
+  return new Date(year ?? 1970, (month ?? 1) - 1, day ?? 1)
+}
+
+function isoOfDay(value: Date): string {
+  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`
+}
+
+function addDays(value: Date, days: number): Date {
+  return new Date(value.getFullYear(), value.getMonth(), value.getDate() + days)
+}
+
+/** The weekday index (Monday = 0) a Chinese weekday character names. */
+function weekdayOf(char: string): number {
+  const table: Record<string, number> = { '一': 0, '二': 1, '三': 2, '四': 3, '五': 4, '六': 5, '日': 6, '天': 6 }
+  return table[char] ?? 0
+}
+
+/**
+ * The absolute date one relative-time word names, or undefined when it cannot be
+ * resolved (a bare 上周 with no weekday, for instance).
+ *
+ * @param word - the matched relative-time expression.
+ * @param base - the day it is resolved against (the extraction day).
+ * @returns `YYYY-MM-DD`, or undefined.
+ */
+function resolveRelative(word: string, base: Date): string | undefined {
+  switch (word) {
+    case '今天': case '今日': return isoOfDay(base)
+    case '明天': case '明日': case '次日': return isoOfDay(addDays(base, 1))
+    case '后天': case '后日': return isoOfDay(addDays(base, 2))
+    case '昨天': case '昨日': return isoOfDay(addDays(base, -1))
+    case '前天': return isoOfDay(addDays(base, -2))
+    case '大前天': return isoOfDay(addDays(base, -3))
+    case '去年': return isoOfDay(new Date(base.getFullYear() - 1, 0, 1))
+    case '今年': return isoOfDay(base)
+    case '上个月': case '上月': return isoOfDay(new Date(base.getFullYear(), base.getMonth() - 1, 1))
+    case '本月': case '这个月': case '当月': return isoOfDay(base)
+    default: break
+  }
+  const match = /^(上|这|本|下)(?:周|星期)([一二三四五六日天])$/u.exec(word)
+  if (match === null) return undefined
+  const target = weekdayOf(match[2] ?? '一')
+  const current = (base.getDay() + 6) % 7
+  const delta = target - current
+  const offset = match[1] === '上' ? delta - 7 : match[1] === '下' ? delta + 7 : delta
+  return isoOfDay(addDays(base, offset))
+}
+
+/**
+ * Put the absolute date next to every relative-time word in a text.
+ *
+ * The extractor is told to resolve relative times itself, and often does not: a
+ * memory filed as 「前天搬窗边」 cannot answer 「是几号」 later, because the
+ * answering turn resolves 前天 against ITS OWN day and lands two days off. This
+ * is the deterministic backstop — the extraction day is the only reference the
+ * plugin has, and it is the day the transcript was mined on.
+ *
+ * @param text - a title or body.
+ * @param base - the day to resolve against.
+ * @returns the text with `前天（2026-05-25）` style annotations.
+ */
+export function resolveRelativeTimes(text: string, base: Date): string {
+  return text.replace(RELATIVE_TIME, (word) => {
+    const resolved = resolveRelative(word, base)
+    return resolved === undefined ? word : `${word}（${resolved}）`
+  })
+}
+
+/**
+ * Apply {@link resolveRelativeTimes} to every draft's title and body.
+ *
+ * @param drafts - the parsed drafts.
+ * @param base - the extraction day.
+ * @returns drafts with the absolute dates filled in.
+ */
+function resolveDraftTimes(drafts: MemoryDraft[], base: Date): MemoryDraft[] {
+  return drafts.map((draft) => {
+    const title = resolveRelativeTimes(draft.title, base)
+    const body = resolveRelativeTimes(draft.body, base)
+    return title === draft.title && body === draft.body ? draft : { ...draft, title, body }
+  })
+}
+
 /** Everything one extraction call needs. */
 export interface ExtractionRequest {
   /** Session being mined. */
@@ -815,7 +904,8 @@ export async function runExtraction(llm: LlmRuntime, request: ExtractionRequest)
       : parseExtraction(repairTruncatedJson(text), request.maxMemories, request.session.id)
     // Evidence is checked before "was anything kept": a salvaged object whose
     // quote is not in the transcript is exactly the case the check exists for.
-    const bound = bindEvidence(salvaged.drafts, request.window.sources)
+    const timed = resolveDraftTimes(salvaged.drafts, parseLocalDate(localDate()))
+    const bound = bindEvidence(timed, request.window.sources)
     if (bound.drafts.length > 0) {
       return {
         kind: 'memories',
@@ -837,7 +927,8 @@ export async function runExtraction(llm: LlmRuntime, request: ExtractionRequest)
   }
   const parsed = parseExtraction(text, request.maxMemories, request.session.id)
   if (parsed.drafts.length === 0) return { kind: 'none', reason: 'empty-reply', route, ...usage === undefined ? {} : { usage } }
-  const bound = bindEvidence(parsed.drafts, request.window.sources)
+  const timed = resolveDraftTimes(parsed.drafts, parseLocalDate(localDate()))
+  const bound = bindEvidence(timed, request.window.sources)
   if (bound.drafts.length === 0) {
     return { kind: 'none', reason: 'unsupported-evidence', route, ...usage === undefined ? {} : { usage } }
   }
