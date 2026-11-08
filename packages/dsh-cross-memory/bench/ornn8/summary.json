@@ -1,20 +1,20 @@
 {
-  "passed": 572,
+  "passed": 565,
   "scored": 714,
   "dataset_questions": 714,
   "groups": {
     "persona": {
       "P01": {
         "total": 88,
-        "passed": 76
+        "passed": 74
       },
       "P12": {
         "total": 79,
-        "passed": 67
+        "passed": 63
       },
       "P14": {
         "total": 82,
-        "passed": 60
+        "passed": 64
       },
       "P16": {
         "total": 123,
@@ -22,61 +22,61 @@
       },
       "P17": {
         "total": 172,
-        "passed": 132
+        "passed": 139
       },
       "P20": {
         "total": 170,
-        "passed": 150
+        "passed": 138
       }
     },
     "content_tags": {
       "生日": {
         "total": 40,
-        "passed": 38
+        "passed": 37
       },
       "第三方事实": {
         "total": 114,
-        "passed": 95
+        "passed": 92
       },
       "纠错": {
         "total": 48,
-        "passed": 41
+        "passed": 39
       },
       "改口": {
         "total": 40,
-        "passed": 35
+        "passed": 38
       },
       "相对日期": {
         "total": 44,
-        "passed": 18
+        "passed": 19
       },
       "时间题": {
         "total": 48,
-        "passed": 18
+        "passed": 19
       },
       "称呼条件": {
         "total": 48,
-        "passed": 46
+        "passed": 48
       },
       "带条件或期限的偏好和边界": {
         "total": 59,
-        "passed": 39
+        "passed": 42
       },
       "边界": {
         "total": 68,
-        "passed": 60
+        "passed": 63
       },
       "约定和欠账": {
         "total": 55,
-        "passed": 41
+        "passed": 43
       },
       "用户的基本信息": {
         "total": 56,
-        "passed": 46
+        "passed": 42
       },
       "资料不足": {
         "total": 56,
-        "passed": 45
+        "passed": 46
       },
       "没解释的矛盾": {
         "total": 47,
@@ -84,77 +84,77 @@
       },
       "偏好": {
         "total": 66,
-        "passed": 40
+        "passed": 41
       },
       "分散的线索": {
         "total": 56,
-        "passed": 41
+        "passed": 39
       },
       "职业": {
         "total": 51,
-        "passed": 43
+        "passed": 41
       },
       "时间约定": {
         "total": 43,
-        "passed": 28
+        "passed": 36
       },
       "敏感的事": {
         "total": 40,
-        "passed": 36
+        "passed": 38
       },
       "共同编的故事": {
         "total": 43,
-        "passed": 33
+        "passed": 32
       },
       "没说完要跟进的事": {
         "total": 42,
-        "passed": 32
+        "passed": 34
       },
       "计划": {
         "total": 65,
-        "passed": 58
+        "passed": 55
       },
       "计划假设梦转述猜测": {
         "total": 65,
-        "passed": 58
+        "passed": 55
       },
       "转述": {
         "total": 44,
-        "passed": 41
+        "passed": 38
       },
       "相似事件": {
         "total": 40,
-        "passed": 33
+        "passed": 28
       },
       "假设": {
         "total": 49,
-        "passed": 47
+        "passed": 44
       },
       "助手自己说过的话": {
         "total": 58,
-        "passed": 48
+        "passed": 46
       },
       "真实变化": {
         "total": 58,
-        "passed": 48
+        "passed": 52
       }
     },
     "interval_days": {
       "0": {
         "total": 189,
-        "passed": 159
+        "passed": 165
       },
       "3": {
         "total": 184,
-        "passed": 155
+        "passed": 145
       },
       "15": {
         "total": 174,
-        "passed": 131
+        "passed": 129
       },
       "45": {
         "total": 167,
-        "passed": 127
+        "passed": 126
       }
     }
   }

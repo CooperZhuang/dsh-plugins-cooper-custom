@@ -1,0 +1,110 @@
+[
+ {
+  "winner": "deepseek",
+  "qwenCoverage": 0,
+  "deepseekCoverage": 3,
+  "qwenNoise": 0,
+  "deepseekNoise": 2,
+  "note": "qwen 未抽出任何记忆；deepseek 覆盖了跳过可再生内容、快进合并等关键事实，但部分细节（.venv 重建、extracted_logs.tar.zst）在对话中无明确依据，存在噪声。",
+  "sid": "session-95d94fe8"
+ },
+ {
+  "winner": "deepseek",
+  "qwenCoverage": 0,
+  "deepseekCoverage": 4,
+  "qwenNoise": 0,
+  "deepseekNoise": 2,
+  "note": "qwen 未抽出任何记忆，deepseek 覆盖了 venv 重建、跨平台测试、SSH 传输等关键事实，但部分条目（如 BOM、base64 编码）在对话中无直接依据，存在推测性噪声。",
+  "sid": "session-c3b3c4cb"
+ },
+ {
+  "winner": "deepseek",
+  "qwenCoverage": 0,
+  "deepseekCoverage": 5,
+  "qwenNoise": 0,
+  "deepseekNoise": 2,
+  "note": "qwen 未抽出任何记忆，deepseek 覆盖了文档位置、跨平台测试、BOM、Playwright 路径、skipif 误伤、调度器串扰等关键事实，仅个别条目偏细节。",
+  "sid": "c795c74c-e8b3-4b"
+ },
+ {
+  "winner": "deepseek",
+  "qwenCoverage": 3,
+  "deepseekCoverage": 5,
+  "qwenNoise": 4,
+  "deepseekNoise": 2,
+  "note": "DeepSeek 覆盖了更多具体事实（skipif 细节、marker、环境版本、根因），Qwen 虽更精简但遗漏较多关键发现。",
+  "sid": "fe6532db-fff8-47"
+ },
+ {
+  "winner": "deepseek",
+  "qwenCoverage": 3,
+  "deepseekCoverage": 5,
+  "qwenNoise": 2,
+  "deepseekNoise": 2,
+  "note": "DeepSeek 覆盖了更多具体事实（打包缺陷、解释器版本、BOM、base64 传参等），Qwen 虽更精简但遗漏较多关键细节。",
+  "sid": "35269282-6cfe-48"
+ },
+ {
+  "winner": "deepseek",
+  "qwenCoverage": 3,
+  "deepseekCoverage": 5,
+  "qwenNoise": 4,
+  "deepseekNoise": 3,
+  "note": "DeepSeek 覆盖了更多经核实的关键事实（12/19 口径、PC 解释器、打包缺陷、调度器串扰根因等），Qwen 遗漏多项且含 rev2 过时结论；两者均有少量噪声，DeepSeek 略多但整体信息价值更高。",
+  "sid": "f6a6a157-3ff3-42"
+ },
+ {
+  "winner": "deepseek",
+  "qwenCoverage": 3,
+  "deepseekCoverage": 5,
+  "qwenNoise": 3,
+  "deepseekNoise": 2,
+  "note": "DeepSeek 覆盖了更多已验证的关键事实（护栏误判、150 项闸门、base64 传参、打包缺陷、解释器版本等），Qwen 遗漏较多且含少量泛化标题。",
+  "sid": "943d2075-fd09-43"
+ },
+ {
+  "winner": "deepseek",
+  "qwenCoverage": 3,
+  "deepseekCoverage": 5,
+  "qwenNoise": 4,
+  "deepseekNoise": 2,
+  "note": "DeepSeek 覆盖了更多经核实的具体缺陷（打包漏点文件、base64 传参、依赖戳、dry-run 占位符、解释器版本等），Qwen 虽更精简但遗漏较多关键事实且含少量泛化条目。",
+  "sid": "2eda0fac-4899-43"
+ },
+ {
+  "winner": "deepseek",
+  "qwenCoverage": 3,
+  "deepseekCoverage": 5,
+  "qwenNoise": 3,
+  "deepseekNoise": 2,
+  "note": "DeepSeek 覆盖了更多具体技术事实（pytest 行为、脚本缺陷、环境版本、12 项口径等），Qwen 遗漏较多且含少量泛化标题，但两者噪声均较低。",
+  "sid": "7c8fb323-1ac2-43"
+ },
+ {
+  "winner": "deepseek",
+  "qwenCoverage": 2,
+  "deepseekCoverage": 4,
+  "qwenNoise": 2,
+  "deepseekNoise": 2,
+  "note": "DeepSeek 抓住了本任务核心事实（-Force 缺陷、BOM 剥离、ps1 带 BOM+CRLF），Qwen 仅命中 BOM 一条且混入大量无关记忆。",
+  "sid": "66e5f1bc-6f94-4e"
+ },
+ {
+  "winner": "deepseek",
+  "qwenCoverage": 3,
+  "deepseekCoverage": 5,
+  "qwenNoise": 3,
+  "deepseekNoise": 2,
+  "note": "DeepSeek 覆盖了更多具体事实（BOM/CRLF、item.path、-m ''、base64 传输、解释器版本等），Qwen 条目更少且部分表述含糊，但两者都含少量低价值细节。",
+  "sid": "6a6705bf-205b-40"
+ },
+ {
+  "winner": "deepseek",
+  "qwenCoverage": 2,
+  "deepseekCoverage": 4,
+  "qwenNoise": 2,
+  "deepseekNoise": 3,
+  "note": "DeepSeek 覆盖了对话中实际讨论的凭证号列、blob 取件、Settings.VERSION 缺陷等关键事实，Qwen 的记忆几乎全是对话未涉及的测试脚本细节。",
+  "sid": "session-7b8d01ff"
+ }
+]

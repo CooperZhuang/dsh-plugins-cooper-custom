@@ -179,7 +179,7 @@ function runtimeConfig(storeDir, logFile) {
     autoExtract: true,
     extractWindowMessages: 200,
     extractMaxInputChars: 96000,
-    extractMaxMemories: 5,
+    extractMaxMemories: 8,
     extractMaxOutputTokens: 8192,
     extractTimeoutMs: 120000,
     extractIntervalMinutes: 30,

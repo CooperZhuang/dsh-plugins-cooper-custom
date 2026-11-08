@@ -1,0 +1,90 @@
+{
+  "sessions": 12,
+  "qwen": {
+    "coverage": 2.08,
+    "noise": 2.25
+  },
+  "deepseek": {
+    "coverage": 4.58,
+    "noise": 2.17
+  },
+  "winner": {
+    "qwen": 0,
+    "deepseek": 12,
+    "tie": 0
+  },
+  "perSession": [
+    {
+      "sid": "session-95d94fe8",
+      "winner": "deepseek",
+      "qwenCoverage": 0,
+      "deepseekCoverage": 3
+    },
+    {
+      "sid": "session-c3b3c4cb",
+      "winner": "deepseek",
+      "qwenCoverage": 0,
+      "deepseekCoverage": 4
+    },
+    {
+      "sid": "c795c74c-e8b3-4b",
+      "winner": "deepseek",
+      "qwenCoverage": 0,
+      "deepseekCoverage": 5
+    },
+    {
+      "sid": "fe6532db-fff8-47",
+      "winner": "deepseek",
+      "qwenCoverage": 3,
+      "deepseekCoverage": 5
+    },
+    {
+      "sid": "35269282-6cfe-48",
+      "winner": "deepseek",
+      "qwenCoverage": 3,
+      "deepseekCoverage": 5
+    },
+    {
+      "sid": "f6a6a157-3ff3-42",
+      "winner": "deepseek",
+      "qwenCoverage": 3,
+      "deepseekCoverage": 5
+    },
+    {
+      "sid": "943d2075-fd09-43",
+      "winner": "deepseek",
+      "qwenCoverage": 3,
+      "deepseekCoverage": 5
+    },
+    {
+      "sid": "2eda0fac-4899-43",
+      "winner": "deepseek",
+      "qwenCoverage": 3,
+      "deepseekCoverage": 5
+    },
+    {
+      "sid": "7c8fb323-1ac2-43",
+      "winner": "deepseek",
+      "qwenCoverage": 3,
+      "deepseekCoverage": 5
+    },
+    {
+      "sid": "66e5f1bc-6f94-4e",
+      "winner": "deepseek",
+      "qwenCoverage": 2,
+      "deepseekCoverage": 4
+    },
+    {
+      "sid": "6a6705bf-205b-40",
+      "winner": "deepseek",
+      "qwenCoverage": 3,
+      "deepseekCoverage": 5
+    },
+    {
+      "sid": "session-7b8d01ff",
+      "winner": "deepseek",
+      "qwenCoverage": 2,
+      "deepseekCoverage": 4
+    }
+  ]
+}
