@@ -48,7 +48,9 @@ function stubSession(cwd: string): Session {
 /** A runtime over a temp store. */
 async function fixture(t: { after: (fn: () => void | Promise<void>) => void }, settings: Partial<MemoriesConfig> = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'dsh-cross-memory-sweep-'))
-  const runtime = new MemoriesRuntime(stubContext, { memoriesDir: dir, autoExtract: false, ...settings })
+  // Retention is off by default now (the store keeps everything and retrieval
+  // ranks it), so a test about the age sweep says the window it means.
+  const runtime = new MemoriesRuntime(stubContext, { memoriesDir: dir, autoExtract: false, maxUnusedDays: 90, ...settings })
   t.after(() => {
     runtime.dispose()
     return rm(dir, { recursive: true, force: true })
