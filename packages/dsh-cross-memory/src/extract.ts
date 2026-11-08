@@ -35,7 +35,7 @@ export interface ExtractWindow {
    * because it carries the `USER:`/`ASSISTANT:` prefixes and the quote comes from
    * the message body.
    */
-  readonly sources: readonly { readonly seq: number; readonly text: string }[]
+  readonly sources: readonly { readonly seq: number; readonly text: string; readonly time?: number | undefined }[]
   /**
    * Unmined prose messages this window left out.
    *
@@ -324,7 +324,7 @@ export function collectWindow(
   order: 'newest' | 'oldest' = 'newest',
 ): ExtractWindow {
   const floor = SessionSeq(Math.max(0, Math.trunc(afterSeq)))
-  const lines: { seq: number; role: 'user' | 'assistant'; text: string }[] = []
+  const lines: { seq: number; role: 'user' | 'assistant'; text: string; time: number | undefined }[] = []
   for (const seq of session.surface.nodes) {
     if (seq <= floor) continue
     const event = session.eventAt(seq)
@@ -335,14 +335,17 @@ export function collectWindow(
     if (message === null) continue
     const text = blockText(message.content)
     if (text.length === 0) continue
-    lines.push({ seq, role: message.role === 'user' ? 'user' : 'assistant', text })
+    // The message's own day travels with it: a transcript that spans several
+    // days cannot be resolved against one "today", and the extractor resolves
+    // 前天 against the line it came from.
+    lines.push({ seq, role: message.role === 'user' ? 'user' : 'assistant', text, time: event.time })
   }
   // `newest` keeps the tail and admits lines backwards from it; `oldest` keeps
   // the head and admits forward. Both keep at least one line even when that line
   // alone blows the character budget: a window that is empty for budget reasons
   // would stall the watermark on the same message forever.
   const selected = order === 'oldest' ? lines.slice(0, maxMessages) : lines.slice(-maxMessages)
-  const kept: { seq: number; role: 'user' | 'assistant'; text: string }[] = []
+  const kept: { seq: number; role: 'user' | 'assistant'; text: string; time: number | undefined }[] = []
   let used = 0
   if (order === 'oldest') {
     let admitted = 0
@@ -368,10 +371,14 @@ export function collectWindow(
   // what lets the watermark advance one backlog chunk at a time.
   const lastSeq = kept.at(-1)?.seq
   return {
-    text: kept.map((line) => `${line.role === 'user' ? 'USER' : 'ASSISTANT'}: ${line.text}`).join('\n\n'),
+    // Each line carries its own day. The extractor resolves a relative time
+    // against the day of the line it appears in, not one global "today" — a
+    // transcript that spans a week would otherwise resolve every 前天 to the
+    // same wrong day.
+    text: kept.map((line) => `${line.role === 'user' ? 'USER' : 'ASSISTANT'}: [${line.time === undefined ? '?' : localDate(new Date(line.time))}] ${line.text}`).join('\n\n'),
     lastSeq,
     messages: kept.length,
-    sources: kept.map((line) => ({ seq: line.seq, text: line.text })),
+    sources: kept.map((line) => ({ seq: line.seq, text: line.text, time: line.time })),
     skipped: lines.length - kept.length,
   }
 }
@@ -627,7 +634,7 @@ function localDate(now = new Date()): string {
 }
 
 /** Relative-time words that carry no date of their own. */
-const RELATIVE_TIME = /(大前天|前天|昨天|昨日|今天|今日|明天|明日|次日|后天|后日|上个月|上月|本月|这个月|当月|去年|今年|上周[一二三四五六日天]|这周[一二三四五六日天]|本周[一二三四五六日天]|下周[一二三四五六日天]|下星期[一二三四五六日天])/gu
+const RELATIVE_TIME = /(?:大前天|前天|昨天|昨日|今天|今日|明天|明日|次日|后天|后日|上个月|上月|本月|这个月|当月|去年|今年|上周[一二三四五六日天]|这周[一二三四五六日天]|本周[一二三四五六日天]|下周[一二三四五六日天]|下星期[一二三四五六日天])/gu
 
 /** Parse a `YYYY-MM-DD` string into a LOCAL Date at midnight. */
 function parseLocalDate(value: string): Date {
@@ -693,22 +700,40 @@ function resolveRelative(word: string, base: Date): string | undefined {
  * @param base - the day to resolve against.
  * @returns the text with `前天（2026-05-25）` style annotations.
  */
+/** A relative word the extractor already annotated with an absolute date. */
+const ANNOTATED_DATE = /^（\d{4}-\d{2}-\d{2}）/u
+
 export function resolveRelativeTimes(text: string, base: Date): string {
-  return text.replace(RELATIVE_TIME, (word) => {
+  return text.replace(RELATIVE_TIME, (word, offset: number, whole: string) => {
     const resolved = resolveRelative(word, base)
-    return resolved === undefined ? word : `${word}（${resolved}）`
+    if (resolved === undefined) return word
+    // Already annotated by the model — never stack a second date.
+    if (ANNOTATED_DATE.test(whole.slice(offset + word.length))) return word
+    return `${word}（${resolved}）`
   })
 }
 
 /**
- * Apply {@link resolveRelativeTimes} to every draft's title and body.
+ * Apply {@link resolveRelativeTimes} to every draft's title and body, resolving
+ * against the day the draft's QUOTE came from (falling back to the extraction
+ * day when the quote has no day).
  *
- * @param drafts - the parsed drafts.
- * @param base - the extraction day.
+ * @param drafts - the parsed, evidence-bound drafts.
+ * @param sources - the transcript lines, with their timestamps.
+ * @param fallback - the extraction day.
  * @returns drafts with the absolute dates filled in.
  */
-function resolveDraftTimes(drafts: MemoryDraft[], base: Date): MemoryDraft[] {
+function resolveDraftTimes(
+  drafts: readonly MemoryDraft[],
+  sources: readonly { readonly seq: number; readonly time?: number | undefined }[],
+  fallback: Date,
+): MemoryDraft[] {
+  const timeOf = (seq: number | undefined): Date => {
+    const time = sources.find((source) => source.seq === seq)?.time
+    return time === undefined ? fallback : new Date(time)
+  }
   return drafts.map((draft) => {
+    const base = timeOf(draft.evidenceSeq)
     const title = resolveRelativeTimes(draft.title, base)
     const body = resolveRelativeTimes(draft.body, base)
     return title === draft.title && body === draft.body ? draft : { ...draft, title, body }
@@ -904,12 +929,12 @@ export async function runExtraction(llm: LlmRuntime, request: ExtractionRequest)
       : parseExtraction(repairTruncatedJson(text), request.maxMemories, request.session.id)
     // Evidence is checked before "was anything kept": a salvaged object whose
     // quote is not in the transcript is exactly the case the check exists for.
-    const timed = resolveDraftTimes(salvaged.drafts, parseLocalDate(localDate()))
-    const bound = bindEvidence(timed, request.window.sources)
+    const bound = bindEvidence(salvaged.drafts, request.window.sources)
+    const timed = resolveDraftTimes(bound.drafts, request.window.sources, parseLocalDate(localDate()))
     if (bound.drafts.length > 0) {
       return {
         kind: 'memories',
-        drafts: bound.drafts,
+        drafts: timed,
         loops: salvaged.loops,
         summary: salvaged.summary,
         dropped: salvaged.dropped,
@@ -927,12 +952,12 @@ export async function runExtraction(llm: LlmRuntime, request: ExtractionRequest)
   }
   const parsed = parseExtraction(text, request.maxMemories, request.session.id)
   if (parsed.drafts.length === 0) return { kind: 'none', reason: 'empty-reply', route, ...usage === undefined ? {} : { usage } }
-  const timed = resolveDraftTimes(parsed.drafts, parseLocalDate(localDate()))
-  const bound = bindEvidence(timed, request.window.sources)
+  const bound = bindEvidence(parsed.drafts, request.window.sources)
+  const timed = resolveDraftTimes(bound.drafts, request.window.sources, parseLocalDate(localDate()))
   if (bound.drafts.length === 0) {
     return { kind: 'none', reason: 'unsupported-evidence', route, ...usage === undefined ? {} : { usage } }
   }
-  return { kind: 'memories', drafts: bound.drafts, loops: parsed.loops, summary: parsed.summary, dropped: parsed.dropped, unsupported: bound.unsupported, ...bound.dropped.length === 0 ? {} : { droppedEvidence: bound.dropped }, route, ...usage === undefined ? {} : { usage } }
+  return { kind: 'memories', drafts: timed, loops: parsed.loops, summary: parsed.summary, dropped: parsed.dropped, unsupported: bound.unsupported, ...bound.dropped.length === 0 ? {} : { droppedEvidence: bound.dropped }, route, ...usage === undefined ? {} : { usage } }
 }
 
 /**

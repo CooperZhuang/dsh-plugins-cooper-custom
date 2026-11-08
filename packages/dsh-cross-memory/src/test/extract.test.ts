@@ -71,7 +71,7 @@ function transcriptQuote(options: { messages: { content: { type: string; text?: 
   const prompt = options.messages
     .map((message) => message.content.filter((block) => block.type === 'text').map((block) => block.text ?? '').join(''))
     .join('\n')
-  const line = /(?:^|\n)(?:USER|ASSISTANT): ([^\n]+)/u.exec(prompt)?.[1]
+  const line = /(?:^|\n)(?:USER|ASSISTANT): (?:\[[^\]]*\] )?([^\n]+)/u.exec(prompt)?.[1]
   return line === undefined ? undefined : line.trim().slice(0, 160)
 }
 
