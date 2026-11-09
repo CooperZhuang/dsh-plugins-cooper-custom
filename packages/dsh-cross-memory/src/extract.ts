@@ -950,15 +950,33 @@ export type ExtractionOutcome =
  * @param request - session, window, route, and budget.
  * @returns the parsed drafts, or a reason there are none.
  */
+/**
+ * How many memories one pass should ask for, given the window size.
+ *
+ * The cap exists to keep a short session from padding itself, but a long session
+ * with 16 durable facts was being cut at 8 — measured on 50 real sessions, the
+ * misses concentrated in the biggest ones. Scale with the window, bounded so a
+ * short session is still asked for few.
+ *
+ * @param requested - the configured cap.
+ * @param messages - how many messages the window holds.
+ * @returns the cap to actually use.
+ */
+export function effectiveMaxMemories(requested: number, messages: number): number {
+  if (requested <= 0) return requested
+  return Math.min(requested * 2, Math.max(requested, Math.ceil(messages / 12)))
+}
+
 export async function runExtraction(llm: LlmRuntime, request: ExtractionRequest): Promise<ExtractionOutcome> {
   if (request.window.text.trim().length === 0) return { kind: 'none', reason: 'empty-window' }
   const route = resolveLlmRoute(request.session, request.provider, request.model, request.fallbackRoute ?? {})
   if (route === undefined) return { kind: 'none', reason: 'no-route' }
+  const maxMemories = effectiveMaxMemories(request.maxMemories, request.window.messages)
   const known = request.knownTitles ?? []
   const framed = [
     `Workspace scope label: ${request.projectLabel}`,
     `Today's date is ${localDate()} (the user's local date). Resolve every relative time in the transcript against it.`,
-    `Extract at most ${request.maxMemories} memories from this transcript.`,
+    `Extract at most ${maxMemories} memories from this transcript.`,
     ...known.length === 0 ? [] : [
       '',
       'Memories already stored in the scopes this pass writes to:',
@@ -1016,10 +1034,10 @@ export async function runExtraction(llm: LlmRuntime, request: ExtractionRequest)
     // so a truncated reply is normally an unterminated array of COMPLETE
     // objects: keep what parsed, and only when nothing did does the caller hear
     // about the cap.
-    const complete = parseExtraction(text, request.maxMemories, request.session.id)
+    const complete = parseExtraction(text, maxMemories, request.session.id)
     const salvaged = complete.drafts.length > 0
       ? complete
-      : parseExtraction(repairTruncatedJson(text), request.maxMemories, request.session.id)
+      : parseExtraction(repairTruncatedJson(text), maxMemories, request.session.id)
     // Evidence is checked before "was anything kept": a salvaged object whose
     // quote is not in the transcript is exactly the case the check exists for.
     const bound = bindEvidence(salvaged.drafts, request.window.sources)
@@ -1043,7 +1061,7 @@ export async function runExtraction(llm: LlmRuntime, request: ExtractionRequest)
     }
     return { kind: 'none', reason: finish === 'max-tokens' ? 'max-tokens' : 'incomplete', route, ...usage === undefined ? {} : { usage } }
   }
-  const parsed = parseExtraction(text, request.maxMemories, request.session.id)
+  const parsed = parseExtraction(text, maxMemories, request.session.id)
   if (parsed.drafts.length === 0) return { kind: 'none', reason: 'empty-reply', route, ...usage === undefined ? {} : { usage } }
   const bound = bindEvidence(parsed.drafts, request.window.sources)
   const timed = resolveDraftTimes(bound.drafts, request.window.sources, parseLocalDate(localDate()))
