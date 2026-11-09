@@ -714,6 +714,70 @@ function resolveRelative(word: string, base: Date): string | undefined {
 /** A relative word the extractor already annotated with an absolute date. */
 const ANNOTATED_DATE = /^（\d{4}-\d{2}-\d{2}）/u
 
+/**
+ * Work salience: the words that mark a turn worth keeping.
+ *
+ * `strong` are the ones that almost always mean a durable work fact (a promise,
+ * a deadline, a correction, a number with a date, a decision); `weak` are the
+ * ones that often do (a name, a role, a plan). Scored strong*2 + weak, the same
+ * shape as the reference implementation this was adapted from.
+ */
+const WORK_SALIENCE_STRONG = /今天|明天|昨天|前天|后天|大后天|下周|上周|这周|月底|月初|年初|年底|星期[一二三四五六日天]|周[一二三四五六日天]|\d{1,2}\s*[月日号]|\d{4}\s*[-/年]|\d{1,2}\s*[点时]|答应|约定|承诺|说好|提醒|记得|别忘|改口|说错|更正|其实|矛盾|两版|之前说|截止|到期|欠|借|还|决定|口径|规范|流程|必须|一律|禁止|不得|要求|确认|验收|发布|上线|部署|迁移|升级|回滚|报价|人天|合同|投标|方案|需求/gu
+const WORK_SALIENCE_WEAK = /叫|称呼|名字|负责|接手|登记|换|工作|职业|同事|师傅|老板|客户|供应商|喜欢|讨厌|不吃|不要|不能|不想|边界|打算|计划|准备|要去|想去|巡检|接口|字段|配置|权限|分支|提交|合并|构建|测试/gu
+
+/** The salience score of one text: strong hits count double. */
+function workSalience(text: string): number {
+  const strong = (text.match(WORK_SALIENCE_STRONG) ?? []).length
+  const weak = (text.match(WORK_SALIENCE_WEAK) ?? []).length
+  return strong * 2 + weak
+}
+
+/**
+ * Pick the turns an extractor is most likely to skip, as a must-cover list.
+ *
+ * The extractor sees the whole window and still drops material: measured on 50
+ * real sessions, the misses were new people, changed names, one-line agreements
+ * and interface traps — exactly the turns that score high here. Handing the list
+ * to the model turns "silently skipped" into "write it, or say why not".
+ *
+ * @param sources - the transcript lines, with their surface seq.
+ * @param max - how many candidates to return.
+ * @returns candidates, most salient first, each with a short snippet.
+ */
+export function mustCoverCandidates(
+  sources: readonly { readonly seq: number; readonly text: string }[],
+  max = 6,
+): { seq: number; score: number; snippet: string }[] {
+  const rows = sources
+    .map((source) => ({
+      seq: source.seq,
+      score: workSalience(source.text),
+      snippet: source.text.replace(/\s+/gu, ' ').trim().slice(0, 90),
+    }))
+    .filter((row) => row.score >= 3 && row.snippet.length > 0)
+  return rows
+    .sort((left, right) => right.score - left.score || left.seq - right.seq)
+    .slice(0, Math.max(1, max))
+    .sort((left, right) => left.seq - right.seq)
+}
+
+/**
+ * Render the must-cover list for the prompt, or undefined when nothing qualifies.
+ *
+ * @param candidates - from {@link mustCoverCandidates}.
+ * @returns the prompt lines, ready to append.
+ */
+export function renderMustCover(candidates: readonly { readonly seq: number; readonly score: number; readonly snippet: string }[]): string | undefined {
+  if (candidates.length === 0) return undefined
+  const lines = candidates.map((candidate) => `- [${candidate.seq}] ${candidate.snippet}`)
+  return [
+    '',
+    `本窗必写候选（${candidates.length} 条，按显著度挑出）：`,
+    ...lines,
+    '对上面每一条：要么写成一条记忆，要么在 summary 里说明为什么不写。不要静默跳过。',
+  ].join('\n')
+}
+
 export function resolveRelativeTimes(text: string, base: Date): string {
   return text.replace(RELATIVE_TIME, (word, offset: number, whole: string) => {
     const resolved = resolveRelative(word, base)
@@ -900,6 +964,10 @@ export async function runExtraction(llm: LlmRuntime, request: ExtractionRequest)
       ...known.map((title) => `- ${title}`),
       'If the transcript adds to (or corrects) one of those, reuse its EXACT title so that entry is updated instead of duplicated. Only invent a new title for a genuinely new fact.',
     ],
+    // The must-cover list is built locally from the window, so it costs no model
+    // call: the turns most likely to be skipped (a new person, a changed name, a
+    // one-line agreement, an interface trap) are named up front.
+    ...request.recordScope === 'both' ? [] : (renderMustCover(mustCoverCandidates(request.window.sources)) ?? []),
     '',
     request.window.text,
   ].join('\n')

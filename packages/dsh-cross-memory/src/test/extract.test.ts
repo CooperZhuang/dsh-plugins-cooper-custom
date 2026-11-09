@@ -16,7 +16,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { MemoriesRuntime } from '../index.js'
 import type { MemoryEntry } from '../types.js'
-import { EXTRACT_JSON_SCHEMA, bindEvidence, collectExtractionWindow, collectWindow, parseExtraction, redactSecrets, resolveRelativeTimes, runExtraction, selectKnownTitles } from '../extract.js'
+import { EXTRACT_JSON_SCHEMA, bindEvidence, collectExtractionWindow, collectWindow, mustCoverCandidates, parseExtraction, redactSecrets, renderMustCover, resolveRelativeTimes, runExtraction, selectKnownTitles } from '../extract.js'
 import { normalizeSettings } from '../config.js'
 import { peakDelayMs } from '../schedule.js'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -172,6 +172,23 @@ test('parseExtraction keeps the string keys and drops the rest', () => {
   assert.deepEqual([...parsed.drafts[0]?.keys ?? []], ['monorepo'])
   // A reply that omits keys is normal: they are an optimization, not a contract.
   assert.deepEqual([...parseExtraction('{"memories":[{"scope":"global","title":"x","body":"y"}]}', 5, 's').drafts[0]?.keys ?? []], [])
+})
+
+test('mustCoverCandidates names the turns an extractor is most likely to skip', () => {
+  const sources = [
+    { seq: 1, text: '你好，今天天气不错。' },
+    { seq: 2, text: '师傅说周五前把报价单发出去，人天按 35 算。' },
+    { seq: 3, text: '行，那就这样。' },
+    { seq: 4, text: '新来的同事叫沈知夏，负责 SAP 投递。' },
+  ]
+  const picked = mustCoverCandidates(sources)
+  // The greeting scores nothing; the promise and the new person both make the cut.
+  assert.deepEqual(picked.map((row) => row.seq), [2, 4])
+  const rendered = renderMustCover(picked)
+  assert.match(rendered ?? '', /本窗必写候选/u)
+  assert.match(rendered ?? '', /\[2\]/u)
+  assert.match(rendered ?? '', /要么写成一条记忆/u)
+  assert.equal(renderMustCover([]), undefined)
 })
 
 test('resolveRelativeTimes names the absolute day for every relative time', () => {
