@@ -967,7 +967,12 @@ export async function runExtraction(llm: LlmRuntime, request: ExtractionRequest)
     // The must-cover list is built locally from the window, so it costs no model
     // call: the turns most likely to be skipped (a new person, a changed name, a
     // one-line agreement, an interface trap) are named up front.
-    ...request.recordScope === 'both' ? [] : (renderMustCover(mustCoverCandidates(request.window.sources)) ?? []),
+    ...request.recordScope === 'both'
+      ? []
+      : (() => {
+        const mustCover = renderMustCover(mustCoverCandidates(request.window.sources))
+        return mustCover === undefined ? [] : [mustCover]
+      })(),
     '',
     request.window.text,
   ].join('\n')
