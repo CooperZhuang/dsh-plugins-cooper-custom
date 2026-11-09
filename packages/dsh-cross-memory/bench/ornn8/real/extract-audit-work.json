@@ -1,0 +1,258 @@
+{
+  "scope": "work",
+  "sessions": 50,
+  "goldFacts": 341,
+  "covered": 254,
+  "coverage": 0.7449,
+  "avgScore": 3.98,
+  "missed": 87,
+  "noise": 21,
+  "missedList": [
+    {
+      "n": 4,
+      "fact": "§8.5 要求 PC 暂存目录生成的 .venv 解释器为 3.14，但验收步骤只验「第二次不重新 sync」，runner 日志只打解释器路径不打版本，「钉定 3.14」这一半无人验证"
+    },
+    {
+      "n": 6,
+      "fact": "vault 原件在本机预览/下载会因归档库盘不通返回 503，属现有设计（区分「原件丢了」与「盘符没映射」）"
+    },
+    {
+      "n": 6,
+      "fact": "从 PC 同步整库快照的流程：scripts/db_snapshot.ps1 export → import"
+    },
+    {
+      "n": 7,
+      "fact": "本地开发库：OrbStack + mysql:8.4 容器 mubea-mysql（127.0.0.1:3307，数据卷 mubea-mysql-dev-data），与生产同版本 8.4.11，账号对齐 .env"
+    },
+    {
+      "n": 7,
+      "fact": "坑：information_schema.TABLES.TABLE_ROWS 是 InnoDB 估算值，校验导入必须用 COUNT(*)"
+    },
+    {
+      "n": 7,
+      "fact": "source_config.source_value 取值顺序：arch_system_setting（库）→ .env → 代码默认；空串是显式关闭语义"
+    },
+    {
+      "n": 7,
+      "fact": "生产归档库只读 China，读取 5 个 stage 目录 + Invoice Archive；Invoice Insight 是只写子树"
+    },
+    {
+      "n": 7,
+      "fact": "storage_path 口径相对 SOURCE_VAULT_ROOT，写回/取件漏 AI/Invoice Insight 前缀会 410"
+    },
+    {
+      "n": 7,
+      "fact": "设计原则：归档是事实、交付是旁路；deliver 有 missing_keys 硬门槛（invoice_num/company_code）"
+    },
+    {
+      "n": 7,
+      "fact": "PC 无 rsync，跨机同步用 tar 流（ssh pc 'tar -C ... -cf - dist' | tar -xpf -）"
+    },
+    {
+      "n": 7,
+      "fact": "生产待办：638 份可自动归集未执行、1,440 份报销票缺购方字段、D 盘满、登录自启计划任务从未运行"
+    },
+    {
+      "n": 12,
+      "fact": "SAP 不可逆写入修复：ADD 成功即持久化 pdfid，SUB 失败重试只补 SUB"
+    },
+    {
+      "n": 12,
+      "fact": "人工放弃投递下推到投递候选与凭证反查投影"
+    },
+    {
+      "n": 12,
+      "fact": "状态机：归档族只允许转 in_exception；上传链路异常档案进入 in_exception"
+    },
+    {
+      "n": 12,
+      "fact": "疑似重复不再被 uk_invoice_num 静默合并，改「既有档案 + duplicate 副本 + duplicate 异常」"
+    },
+    {
+      "n": 12,
+      "fact": "无 worker 部署：失败作业落 failed 可重试，暂存件随作业清理"
+    },
+    {
+      "n": 12,
+      "fact": "组织隔离统一「授权 ∩ 隐藏」，补上 /api/invoices 等缺失端点过滤，委托 rbac:manage 不能越权"
+    },
+    {
+      "n": 12,
+      "fact": "归档库根/回写子目录统一「库优先」"
+    },
+    {
+      "n": 12,
+      "fact": "统计口径统一（created_at 切片、供应商精确聚合、归档数口径、KPI 同源）"
+    },
+    {
+      "n": 12,
+      "fact": "P1-7：sap_pending/sap_archived 标记废弃，历史行只读兼容"
+    },
+    {
+      "n": 12,
+      "fact": "P2-6：arch_invoice_file 唯一索引 uk_file_invoice_sha_role(invoice_id, sha256, file_role, storage)，storage 必须进键；升级先跑 dedupe_invoice_files.py --apply"
+    },
+    {
+      "n": 12,
+      "fact": "测试平台限制：仅 Windows 有单进程全量限制（conftest.py 开头 if os.name != \"nt\": return），macOS/Linux 没有"
+    },
+    {
+      "n": 12,
+      "fact": "红冲判断口径：税局顶层 Message=查验成功但 Data.Status=50 时按红冲判失败"
+    },
+    {
+      "n": 13,
+      "fact": "接入没有并发闸门：查有无原件→读整份 PDF 算 sha→INSERT 是无唯一键的 check-then-act，并发时同一票登记两条 original"
+    },
+    {
+      "n": 13,
+      "fact": "补充：arch_data_source.interval_minutes 未接线（按源定时未实现）；sync_all(dry_run=True) 仍写 arch_sync_run 并推进 last_scan_at"
+    },
+    {
+      "n": 14,
+      "fact": "设置页 sync.interval_minutes（及 .env 的 SYNC_INTERVAL_MINUTES）没有消费者，真正生效的是 vault.sync_interval_minutes（默认 0=关闭）"
+    },
+    {
+      "n": 14,
+      "fact": "ROUTE_GUARDS 有 6 条指向不存在路由的死规则；fail-closed 把 OPTIONS 预检按未登记方法拦下（401 且无 CORS 头）"
+    },
+    {
+      "n": 14,
+      "fact": "审计 before/after 缺口：中间件自动审计只记 status_code；改组织范围/停用/重置口令无 before 快照；锁定期间登录尝试不写审计"
+    },
+    {
+      "n": 14,
+      "fact": "system.log_level 只在保存那一刻生效，重启后回落 .env，启动日志仍把库值当「生效值」打印"
+    },
+    {
+      "n": 15,
+      "fact": "SAP 投递超时预警与状态机脱节：sap_timeout_watch 未注册、判据仍查 status='sap_pending'，永远不会命中"
+    },
+    {
+      "n": 15,
+      "fact": "queued_invoices 与 pending_invoices 并非同一口径：缺结构前置，deliver 跳过不改状态致坏行永久占队头"
+    },
+    {
+      "n": 15,
+      "fact": "硬前提只按票号取最新一条，但反查表唯一键是 (company_code, invoice_num, lookup_year)，投影又按票号写（高度可疑）"
+    },
+    {
+      "n": 16,
+      "fact": "发票类别（supplier/reimburse）已落库并贯穿列表/详情/导出/统计，手工上传必须选择发票类别"
+    },
+    {
+      "n": 16,
+      "fact": "只有供应商发票投递 SAP，报销类发票只反查凭证不投递"
+    },
+    {
+      "n": 16,
+      "fact": "二次识别与查验改为后台队列（入队即返回 job_id、进度页轮询），二次查验失败/红冲统一进异常中心"
+    },
+    {
+      "n": 16,
+      "fact": "组织隔离口径 = 授权 ∩ 隐藏（异常/导出/统计/大屏/上传/作业台账统一过滤）"
+    },
+    {
+      "n": 16,
+      "fact": "SAP 投递不可逆写入（头行 ADD 成功即持久化，SUB 失败不重 ADD）；状态机收敛（归档族只能转 in_exception）"
+    },
+    {
+      "n": 16,
+      "fact": "疑似重复处理（不覆盖既有档案）、原件唯一索引与预览/下载、一键替换升级/回传快照、系统设置页控件按类型渲染"
+    },
+    {
+      "n": 17,
+      "fact": "DOCX/PPTX 都缺「服务时段 9:00–18:00」，README 写「13 项工作包」实为 12"
+    },
+    {
+      "n": 17,
+      "fact": "报价单含税 55,000（不含税 51,886.79 + 税 3,113.21），H12 列宽不足会显示 ###"
+    }
+  ],
+  "noiseList": [
+    {
+      "n": 6,
+      "item": "核验脚本判据易取宽：0-紧急恢复.bat 不内置 SHA、UTF-8 标志只要求非 ASCII 名（所给对话中无对应内容，无法核实）"
+    },
+    {
+      "n": 6,
+      "item": "打包前须清掉工作树里的空目录，否则违反「标签 = 包内容」（所给对话中无对应内容，无法核实）"
+    },
+    {
+      "n": 12,
+      "item": "布局约定：左侧导航固定，右侧内容区独立滚动（可见对话未出现，疑来自省略中段，无法核实）"
+    },
+    {
+      "n": 12,
+      "item": "设置页按注册表 kind/choices 渲染：布尔开关、枚举下拉、整数带上下限（可见对话未出现，疑来自省略中段，无法核实）"
+    },
+    {
+      "n": 12,
+      "item": "1440 张未归集全是报销票且无任何购方识别数据，不是校验失效（可见对话未出现，疑来自省略中段，无法核实）"
+    },
+    {
+      "n": 12,
+      "item": "SAP 口径：报销类也反查凭证，但只有供应商发票投递（可见对话未出现，疑来自省略中段，无法核实）"
+    },
+    {
+      "n": 12,
+      "item": "发票类别 supplier/reimburse 按接入通道派生，手工上传必须选（可见对话未出现，疑来自省略中段，无法核实）"
+    },
+    {
+      "n": 16,
+      "item": "售前材料审计产出只写事实底稿，不直接改售前材料（一次性任务范围）"
+    },
+    {
+      "n": 19,
+      "item": "抽屉「票种」绑 invoice_type、「发票形态」绑 invoice_kind（可直接从 app.js/index.html 查到）"
+    },
+    {
+      "n": 23,
+      "item": "生产库现状（2026-10-27 升级后自检）：档案 9,546，供应商未归集 0（时点快照，易过期且可查库）"
+    },
+    {
+      "n": 28,
+      "item": "SAP 文档同步已改 4 份共 15 处，两份 SAP投递*.md 由用户自己改（一次性任务完成状态）"
+    },
+    {
+      "n": 29,
+      "item": "v0.1.25 回归口径：Mac 全量 1500 项 1474 passed + 26 skipped，0 失败（测试快照，随每次运行变化）"
+    },
+    {
+      "n": 29,
+      "item": "v0.1.25 已发布并生产升级成功：192/192 清单一致，仅 1 项额外步骤空操作失败（一次性发布状态）"
+    },
+    {
+      "n": 29,
+      "item": "v0.1.25 升级后需用户刷新页面，旧标签页仍跑 v0.1.24 前端（一次性运维提示，刷新即消解）"
+    },
+    {
+      "n": 35,
+      "item": "「v0.1.26 反查/投递改造后 Mac 全量 pytest：1552 passed, 26 skipped, 0 failed」是一次性跑批结果"
+    },
+    {
+      "n": 36,
+      "item": "「上游仓库 task-3 交付未提交 git，等 lead review」是一次性任务状态"
+    },
+    {
+      "n": 37,
+      "item": "「task-5 提速实测：全量 591.08s → 116.96s，-m 'not slow' 91.55s」是一次性跑批数字"
+    },
+    {
+      "n": 39,
+      "item": "「task-5 文档口径已落地：7 份文档补「凭证查询只对供应商发票」，旧表述 grep 命中 0」是一次性任务结果"
+    },
+    {
+      "n": 40,
+      "item": "「历史 Release 已补齐：v0.1.7→v0.3.0 连续 26 个，v0.1–v0.1.6 仍缺」是 GitHub 可查的状态快照"
+    },
+    {
+      "n": 44,
+      "item": "A7010-202611-00119 在生产仍是 pending/未投递，voucher_state=not_found（单票一次性状态，可由生产库查）"
+    },
+    {
+      "n": 48,
+      "item": "本地 data/db 是 10-27 旧 schema（无 voided 列），做不了作废态真机截图（本地环境一次性状态）"
+    }
+  ]
+}
