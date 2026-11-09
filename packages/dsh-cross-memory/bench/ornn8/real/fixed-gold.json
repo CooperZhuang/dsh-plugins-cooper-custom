@@ -1,0 +1,474 @@
+{
+  "project": "Mubea_Invoice-Insight",
+  "sessions": 50,
+  "totalFacts": 218,
+  "gold": [
+    {
+      "n": 0,
+      "facts": [
+        "跨机同步 Mubea_Invoice-Insight 时代码以 GitHub origin/main 为准（PC 工作区干净且 HEAD 已推送时 Mac 直接快进），并跳过 .venv、.tools、offline-bundle、.mysql 等可本地生成或联网下载的内容。",
+        "Mubea_Invoice-Insight 有 3 个被 gitignore 的密钥/配置文件（.env、sap_http_bridge/config.ini、scripts/sap_selftest.local.env），跨机同步时代码走 git、这 3 个要单独 scp 并核对 SHA256。",
+        "Mubea_Invoice-Insight 的代码路径：Mac 为 /Users/cooper/Documents/Code/Mubea_Invoice-Insight，PC 为 C:\\CodeRepository\\Mubea_Invoice-Insight。"
+      ]
+    },
+    {
+      "n": 1,
+      "facts": []
+    },
+    {
+      "n": 2,
+      "facts": [
+        "PC 侧 Mubea_Invoice-Insight 的 venv 解释器是 uv 托管的 CPython 3.13.14（pyvenv.cfg 指向 uv 的 cpython-3.13），不是系统安装的 Python 3.14。"
+      ]
+    },
+    {
+      "n": 3,
+      "facts": [
+        "PC 侧 Mubea_Invoice-Insight 的 venv 解释器是 uv 托管的 CPython 3.13.14，pyvenv.cfg 指向 uv 托管的 cpython-3.13，系统装的 3.14.6 未被 venv 使用。",
+        "Mubea_Invoice-Insight 的 Playwright 浏览器放在项目 .tools/ms-playwright（chromium-1248 + headless shell），本机跑浏览器用例要设 PLAYWRIGHT_BROWSERS_PATH 指向它，否则会因找不到浏览器而失败。"
+      ]
+    },
+    {
+      "n": 4,
+      "facts": [
+        "PowerShell 中 $ErrorActionPreference='Stop' 时 Write-Error 会变终止错误，脚本里 exit N 不可达，pwsh -File 退出码为 1。"
+      ]
+    },
+    {
+      "n": 5,
+      "facts": [
+        "Mubea_Invoice-Insight 的 .ps1 文件是 UTF-8-with-BOM + CRLF（PowerShell 5.1 靠 BOM 识别中文），用 edit 工具改 .ps1 会剥掉 BOM，必须写回，否则 Windows 上中文乱码。"
+      ]
+    },
+    {
+      "n": 6,
+      "facts": [
+        "Mubea_Invoice-Insight 发票档案列表新增「SAP 凭证号」列（列名跟详情页/导出 Excel 一致，避免与归档编目号混），空值显示 —（跟「异常」列风格一致，不是真空白）。",
+        "Mubea_Invoice-Insight 前端令牌只存在 localStorage、请求靠 Authorization: Bearer 头，全项目不写 dsh_token Cookie，所以直接用 <a href> 打开接口必 401，预览/下载必须走 JS 取 blob。",
+        "Mubea_Invoice-Insight 用 blob 在新标签页打开原件时，window.open 必须在点击的同一同步块里先开好（await 之后再开会被弹窗拦截器挡掉），且 blob URL 要延迟回收（立刻 revoke 会让新标签页变空白）。",
+        "Mubea_Invoice-Insight 原件新标签页地址栏显示的是 blob UUID 而不是文件名，要显示真实文件名需给取件接口实现 download_token 短时效签名（参数已预留、一直未实现）。",
+        "Mubea_Invoice-Insight 本机缺真实数据时可从 PC 同步整库快照（scripts/db_snapshot.ps1 export → import）。",
+        "PC 桌面会话的 GitHub 凭据无法从 SSH 侧证实或证伪：could not read Username、token invalid、gh auth token 空、ssh -T Permission denied 都是伪证；用户说 gh auth login 成功就继续相信，不要让他重登。",
+        "区分 PC SSH 会话与桌面会话的判据是 (Get-Process -Id $PID).SessionId（0=SSH，explorer 桌面=1）；无凭据推代码走 git bundle → scp → PC 本地 git fetch，禁止把 $env:GH_TOKEN=… 注入命令行（会落 shell 历史/日志）。",
+        "编辑技能要走 RED→GREEN：先跑改之前的基线场景，且基线必须隔离记忆，否则子代理会读到刚写的记忆、测不出技能本身的作用。",
+        "DSH 的 subagent 与 spawn_teammate 是两套机制，wait_agent 只观测 Team 成员，不能用来等 subagent。"
+      ]
+    },
+    {
+      "n": 7,
+      "facts": [
+        "PC（COOPER-HOME-PC）没有 rsync，跨 ssh 同步目录只能用 tar 流直传（ssh pc 'tar -C <dir> -cf - <path>' | tar -xpf - -C <dest>）。",
+        "本地没有 MySQL 时用 OrbStack + mysql:8.4 容器（容器名 mubea-mysql，127.0.0.1:3307，命名卷 mubea-mysql-dev-data）还原生产库 mubea_invoice_warehouse（MySQL 8.4.11）。",
+        "校验数据库导入行数必须用 COUNT(*)，information_schema.TABLES.TABLE_ROWS 是 InnoDB 估算值（会把 arch_audit_log 估成 11、arch_verification 估成 0）。",
+        "dist/ 在本仓库 .gitignore 第 64 行（离线交付包产物），且会被同仓库并发跑的 pytest 重建覆盖，同步前要先确认没有构建在跑。",
+        "共享盘数据源取值顺序固定为库 arch_system_setting → .env → 代码默认，空串是显式关闭语义（不再回落 .env）。",
+        "生产只从 \\\\taifile01.cn.mubea.net\\tai$\\03 Finance\\21 SAP\\SAP Document Database 这棵树读，5 个 stage 目录加 1 个结果归集目录 Invoice Archive，且只接 China。",
+        "AI\\Invoice Insight 是只写不读的交付子树，storage_path 口径相对 SOURCE_VAULT_ROOT，写回必须带 AI/Invoice Insight 这一层，否则详情页 410。",
+        "归档是事实、交付是旁路：交付失败只记 warning 不回滚归档，vault_sync 的 deliver_pending() 负责兜底自愈漏交付。"
+      ]
+    },
+    {
+      "n": 8,
+      "facts": [
+        "Windows 凭据保管库按登录会话隔离：ssh pc 是 Session 0，读不到 Session 1 的 DPAPI 库，所以 gh auth token/status 报 invalid 是伪证，别据此判 PC 没登录。",
+        "PC 仓库同步优先在 PC 自己的桌面窗口跑 git，或从 Mac 用 git bundle 传（git bundle create → scp → git fetch <bundle> → git merge --ff-only FETCH_HEAD），全程不需要 PC 凭据。",
+        "gh 默认把令牌存 keyring，hosts.yml 只有用户名、没有 oauth_token 是正常现象。"
+      ]
+    },
+    {
+      "n": 9,
+      "facts": [
+        "从 ssh pc 会话（Session 0）无法使用 PC 的 GitHub 凭据做 git fetch/push（Windows 凭据保管库按登录会话隔离），跨机 push/pull 一律在 Mac 侧仓库做。",
+        "PC 没有为 GitHub 注册 SSH 密钥（ssh -T git@github.com 返回 Permission denied publickey）。"
+      ]
+    },
+    {
+      "n": 10,
+      "facts": [
+        "company_code 列可空，仓库既有 6 处判定统一写 (company_code IS NULL OR company_code = '')，新代码只写 ='' 会漏 NULL 行。",
+        "verify.auto_retry_daily_limit 置 0 的语义是「不限」而非「关停」，关停自动重试要用 verify.auto_retry。",
+        "主体归集自动化的 auto_reenrich 必须先定义候选排序/游标或「最近尝试过即跳过」的终止机制，否则会对补不出购方的票永久空转。",
+        "归集钩子挂在 RecognitionImportService/VerifyImportService 共享的 _fill_invoice_fields 上无法区分 auto:recognition / auto:verify，且 source 枚举缺 _enrich_from_content 取值。",
+        "auto_reenrich 与 reenrich_from_original 的既有契约冲突：reenrich_from_original 的契约是系统不自行决定重跑全库。"
+      ]
+    },
+    {
+      "n": 11,
+      "facts": [
+        "org.* 配置项属于 ingest 组，设置手册应写进「接入节奏」行而非「识别与查验」行。",
+        "verify_import_service.py 的字段填充钩子要插在非 dry-run 分支（:547），:500 是 dry-run 预览，插错会在 dry-run 时写库。",
+        "测试基础设施坑：clean_operational 不清 arch_audit_log，且 SQLite 无 AUTOINCREMENT、删表后 id 复用，断言不能依赖 target_id/id 顺序。",
+        "主体归集 sweep 的审计 source 必须是 auto:sweep、actor=scheduler，不能沿用 resolve_unattributed 硬编码的 manual。",
+        "成本中心兜底只属于 xlsx 驱动的报销路径，sweep（only_with_buyer）不得使用。"
+      ]
+    },
+    {
+      "n": 12,
+      "facts": [
+        "二次识别与查验改为后台队列异步执行：提交即返回 job_id，调度器每 5 秒消费一批（默认 20 张），进度写 arch_second_pass_job，无 worker 的部署用请求后台线程兜底，旧同步接口保留（async_mode=false）。",
+        "识别策略：已有完整识别结果（recognition_state=succeeded 且票号/日期/销售方/购买方/价税合计齐全）只查验不重复识别。",
+        "回传目录自动压缩成单个 zip（含 db_snapshot、自检包、日志、额外步骤），现场只拷一个文件，压缩失败只告警。",
+        "一键替换额外步骤共 6 项且全部幂等自动执行：SAP 纠偏、清管理员待改密、纠正角色权限、重复原件预览、回填主表开票日期、补二次查验失败异常。",
+        "原件台账唯一约束 uk_file_invoice_sha_role(invoice_id, sha256, file_role, storage)，storage 必须进键——归档库交付会让同一内容在 local/vault 各登记一行。",
+        "组织隔离统一按「授权 ∩ 隐藏」resolve_org_scope 过滤，/api/invoices、/api/verify/records、/api/sap/status、/api/analytics/*、/api/dashboard/* 都补了过滤。",
+        "SAP 口径：供应商与报销类都反查凭证，但只有供应商发票投递。",
+        "设置页布尔项用开关、枚举用下拉，不让人手填 0/1。",
+        "测试护栏只在 Windows 生效（tests/conftest.py 的 pytest_collection_finish 开头 if os.name != \"nt\": return），macOS/Linux 无单进程全量限制，macOS 单进程全量 pytest 约 8 分钟。",
+        "提交即 push 不再询问；回传件由助手直接压缩。",
+        "归档库根目录/回写子目录统一「库优先」。",
+        "状态机约定：归档族只允许转 in_exception；sap_pending/sap_archived 为废弃状态，不再接受跃迁目标（返回 400），历史行只读兼容只允许转 in_exception。"
+      ]
+    },
+    {
+      "n": 13,
+      "facts": [
+        "数据源取值顺序的固定契约：库 arch_system_setting（含空串显式值）→ .env → 默认，且要求所有取值点（扫描/取件/回写）都走 source_value。",
+        "归档库根目录「库优先」只在扫描侧生效，取件（storage_service.vault_root）与回写（writeback_subdir）仍读 .env 快照，设置页改路径后原件会读不回来。",
+        "sap.delivery.auto 在设置页可改且登记为热生效，但三处消费点读的是启动时 settings 快照，实际要重启才生效。",
+        "vault 扫描批次上限（vault.scan_batch_limit，默认 2000）卡在文件层且早于「已有原件」过滤，归档库超 N 个文件后新文件永远轮不到。",
+        "同票原件只在单次运行内按 original_rank 取件，跨轮次后到的更优原件与重复件不会再登记。",
+        "内置默认源 run(\"vault_main\") 会被注册表第一个 vault 源顶替，首跑标记打在错的源上。",
+        "run_all 只吞 DataSourceError、bootstrap_all 完全不隔离，单个源配错或未挂载会把整轮判成失败。",
+        "arch_data_source.interval_minutes 按源定时实际未实现（run_all/build_jobs 从不读取）。",
+        "一次定时接入在 arch_sync_run 留两条口径不同的记录，内层恒记 trigger_type='manual'。"
+      ]
+    },
+    {
+      "n": 14,
+      "facts": [
+        "Mubea_Invoice-Insight 统计服务的进程级组织范围缓存键不含 principal.orgs，改授权后统计页仍按旧范围，重启才恢复。",
+        "Mubea_Invoice-Insight 的 ROUTE_GUARDS 有 6 条指向不存在路由的死规则，且 fail-closed 会把 OPTIONS 预检按未登记方法拦下（401 且无 CORS 头）。",
+        "Mubea_Invoice-Insight 的自检项 default_admin_password_in_use 绑在 must_change_pwd 上，默认配置下恒为 false，默认口令仍在用也会判为安全。",
+        "Mubea_Invoice-Insight 中委托 rbac:manage 账号可通过 PUT /api/users/{id} 给自己或他人授予任意组织，绕过组织隔离。",
+        "Mubea_Invoice-Insight 的隐藏组织只在档案/统计收敛，异常中心、异常导出、上传组织字典仍按原始授权放行，隐藏项还能被 company_code 显式查询。"
+      ]
+    },
+    {
+      "n": 15,
+      "facts": [
+        "Mubea_Invoice-Insight 的 SAP_DELIVERY_AUTO 只读启动快照 settings，运行期键 sap.delivery.auto 不生效，设置页开关无效。",
+        "Mubea_Invoice-Insight 的 sap_archived 降级守卫不是所有写入点都有，幂等判据也不读 arch_sap_delivery.state。",
+        "Mubea_Invoice-Insight 的放弃投递标记 delivery_abandoned 不被投递链路与反查写回识别，放弃后仍会被写进 SAP。",
+        "Mubea_Invoice-Insight 的 SAP 投递在 sub 失败时会丢掉已拿到的 pdfid，重试重新 ADD 会在 SAP 生成第二条 AIFP。",
+        "Mubea_Invoice-Insight 的 _precheck 必填项不含 PONO/ITEM_DESCRIPTION，缺 PO 或无明细的票每轮被 VBS 挡回并烧 attempts。"
+      ]
+    },
+    {
+      "n": 16,
+      "facts": [
+        "Mubea_Invoice-Insight 的发票类别（supplier/reimburse）是落库字段，只有供应商发票投递 SAP，报销类发票只反查凭证不投递，手工上传必须选择类别。",
+        "Mubea_Invoice-Insight 的二次识别与查验已改为后台队列：入队即返回 job_id、进度页轮询，识别完整时只查验不重复识别。",
+        "Mubea_Invoice-Insight 的组织隔离口径是授权 ∩ 隐藏，异常中心/导出/统计/大屏/上传/作业台账都按此过滤。",
+        "Mubea_Invoice-Insight 的 SAP 投递是不可逆写入：头行 ADD 成功即持久化，SUB 失败不重 ADD。"
+      ]
+    },
+    {
+      "n": 17,
+      "facts": [
+        "Mubea_Invoice-Insight 售前 DOCX/PPTX 的真源是生成脚本里的硬编码文案，改 Markdown 不会同步任何 docx/pptx/xlsx。",
+        "慕贝尔报价单 QT-MUB-20260825-01 含税 55,000 元（不含税 51,886.79 + 税 3,113.21），有效期至 2026-09-24。",
+        "慕贝尔报价单 22 人天 × 2,500 = 55,000 恰等于年费价，但报价单又写「二开本期免费」，对外口径需统一。",
+        "Mubea_Invoice-Insight 本地 .venv 缺 python-docx/python-pptx（只有 openpyxl 3.1.5），跑售前生成脚本会 ModuleNotFoundError，需另建 venv 安装。"
+      ]
+    },
+    {
+      "n": 18,
+      "facts": [
+        "Mubea_Invoice-Insight 的部署目录是 C:\\Project\\Mubea_Invoice-Insight，dist 下的交付物统一放部署机 C:\\Project\\pkg 下运行。",
+        "Mubea_Invoice-Insight 的 C:\\Project\\pkg 下按版本放一键包目录（pkg_v0.1.x_<日期>），诊断包也用 pkg_ 前缀 + ASCII 命名。",
+        "Mubea_Invoice-Insight 现场一键包不替换部署目录里的任何文件，产物只写包内 diagnostics\\，双击 一键收集.bat 即可运行。",
+        "数电/铁路/海外票结构性没有发票代码（全电票只有 20 位票号），发票代码为空属正常，档案详情第一格应显示发票号码。",
+        "Mubea_Invoice-Insight 的 PO 号可从识别备注提取，但斜杠组合里必须挑 10 位且 45/47/55 开头的 Mubea PO。",
+        "铁路电子客票结构性没有销售方（规范只有购方），销售方为空属正常。",
+        "SAP 凭证号唯一来源是 SAP ZFI_AIDOC，只有 found 才投影回主表。",
+        "Mubea_Invoice-Insight 档案详情信息优先级：识别结果与查验结论高于完整性巡检，标题栏先显示查验状态。"
+      ]
+    },
+    {
+      "n": 19,
+      "facts": [
+        "Mubea_Invoice-Insight 的 voucher_no 唯一权威是 SAP ZFI_AIDOC，只有 found 才写；全电票本无发票代码。",
+        "Mubea_Invoice-Insight 的「档案完整性巡检 通过」只校验原件 sha256 与票号/开票日期/价税合计三项必备元数据，与税局查验无关。",
+        "Mubea_Invoice-Insight 的查验通过不保证回填主表：直连查验只写 arch_verification 与 verify_state，只有 vault_import 归集才映射字段且只补空。",
+        "Mubea_Invoice-Insight 的 invoice_kind=full_electronic 由 20 位票号规则推出，与 invoice_type 完全解耦。"
+      ]
+    },
+    {
+      "n": 20,
+      "facts": [
+        "Mubea_Invoice-Insight 档案列表支持批量查验（复用二次查验队列，force=false）与批量投递 SAP（走 POST /api/sap/delivery/batch）。",
+        "Mubea_Invoice-Insight 的 tests/test_i18n.py::test_no_new_hardcoded_chinese_in_backend 会因后端新增中文常量（如火车票法定票种名）而失败，需按数据类豁免或调基线。"
+      ]
+    },
+    {
+      "n": 21,
+      "facts": [
+        "PC 上真正在跑的是仓库目录 C:\\CodeRepository\\Mubea_Invoice-Insight（含 .venv 与仓库内便携 MySQL 3307），C:\\Project\\Mubea_Invoice-Insight 只是 10-14 的残留、不是运行目录。",
+        "日常开发以 Mac 为主，PC 只作测试环境。",
+        "PC 上平时停服务，只有要测试时才启动。",
+        "ssh pc 里用 Start-Process 起的后台进程会随 SSH 会话退出被结束，需要保活时要改用 WMI 或计划任务。",
+        "PC 从仓库目录跑时，发版 SOP 的一次性补齐（remark→PO 回填、历史 PO 清洗等）要手工执行，单靠快进代码不会执行。"
+      ]
+    },
+    {
+      "n": 22,
+      "facts": [
+        "财务对删除发票的需求口径：只有管理员能删、支持单张加批量、要回收站且随时能恢复、原件不删、已投递 SAP 的票先在 SAP 冲销。",
+        "回收站恢复会让已删票重新回到 SAP 投递候选（投递候选只看 is_deleted=0），对 not_found 票可能重复投递，恢复功能需加人工确认。",
+        "平台用 ZFI_AIDOC 反查 SAP 凭证时只能查有没有凭证，查不到凭证是否已被冲销。"
+      ]
+    },
+    {
+      "n": 23,
+      "facts": [
+        "从 Windows 桌面版 Outlook 拖附件进「发票上传」虚线框只在 Windows + 桌面版 Outlook + Edge/Chrome 成立，网页版邮箱拖不进、需先另存附件。",
+        "Vue 3 只把容器 innerHTML 当模板，页面级事件处理器挂在 #app 容器自身属性上不生效，静态检查全绿也抓不到，必须靠真实浏览器用例守。"
+      ]
+    },
+    {
+      "n": 24,
+      "facts": [
+        "SAP 投递定时作业默认不注册：注册需接 SAP 且 interval>0，代码兜底默认 0，而设置页与运维手册写 10，默认配置下失败票只能人工重投。",
+        "SAP 投递与凭证反查作业无显式等待关系，投递只靠 arch_voucher_lookup 最新结论为 not_found 做硬前提。",
+        "SAP 投递失败通知缺口：单张投递失败不进异常中心、不发通知，只有整批全失败才通知 admin；24h/72h 超时巡查才生成 sap_failed 异常，且通知发给没有 sap:operate 的 uploader。",
+        "SAP 投递审计缺口：调度器投递路径不写 arch_audit_log，HTTP 投递只留中间件自动审计且 target_id 为空、无失败原因。",
+        "sap_timeout_watch 已于 2026-10-18 恢复注册，运维手册里「已下线」的说法已过时。"
+      ]
+    },
+    {
+      "n": 25,
+      "facts": [
+        "SAP 投递的 ITEMID 不由本系统指定：Python 按明细行序生成 002 起，但 VBS 显式置空，实际行号由 SAP 追加时分配。",
+        "桥的 availability() 不检查 SAP GUI 是否装好、也不检查 aifp_*.vbs 是否在位，存在部署盲区。",
+        "SAP 投递不支持 HTTP 桥（sap_http_bridge 无 AIFP 端点），但产品介绍材料写了「同机直连或独立 HTTP 桥」，与代码冲突。",
+        "SapConnectionError（超时/登录失败）不算接入层不可达，会落宽泛 except 记 failed 并消耗 SAP_DELIVERY_MAX_ATTEMPTS。"
+      ]
+    },
+    {
+      "n": 26,
+      "facts": [
+        "SAP 投递失败分类：超时/登录失败（SapConnectionError）落宽泛 except → failed、消耗 SAP_DELIVERY_MAX_ATTEMPTS、不写 sap_failed；只有 BridgeError 才归还 attempts 保持 prepared。",
+        "「放弃投递」按钮除权限外还受状态限制：已归档或已有凭证的票，管理员也没有入口。",
+        "自动投递与自动重试依赖 sap_delivery 作业已注册（需接 SAP 且 interval>0），出厂默认 interval=0 时不注册。"
+      ]
+    },
+    {
+      "n": 27,
+      "facts": [
+        "m-select 复核用的隔离实例做法：复制 demo.db 到 /tmp 并关掉 worker 与查验监控，避免影响真实库。"
+      ]
+    },
+    {
+      "n": 28,
+      "facts": [
+        "SAP 投递只支持本机 COM（同机部署），独立 HTTP 桥只服务凭证号反查；售前材料不得宣称投递可走 HTTP 桥。",
+        "SAP 投递的接入层异常（SapConnectionError/ConfigError）按「接入层不可达」处理：归还 attempts、保持 prepared、不写 sap_failed、不消耗重试额度；SAP 明确拒绝或无 pdfid 仍算业务失败。",
+        "SAP 超时督办通知收件人由 uploader 改为 admin（只有持 sap:operate 的人能处置），同一张卡住的票在 24 小时窗口内不重复提醒。",
+        "定时投递作业默认不注册（interval 默认 0），上生产需显式设 >0；投递每轮上限默认 20 张，同时用于自动补入队、消费队列、超时巡查三处。"
+      ]
+    },
+    {
+      "n": 29,
+      "facts": [
+        "上传记录（原「处理队列」）改为永久保留的服务端台账，arch_recognition_job 只增不删、不做保留期清理（用户决策：记录永久保留）。",
+        "所有列表每页条数统一默认 25、上限 200，由系统设置与用户偏好两级决定，六个列表共用同一分页组件。",
+        "上传记录默认「只看我的」（scope=mine），档案岗/管理员可切全组织；列表不下发 result_json，详情按需拉取。",
+        "部署包额外步骤必须在应用启动补齐表结构之后执行；v0.1.25 因顺序颠倒在现场报 Unknown column 'ui_prefs'，修复为额外步骤前加 5a/7 幂等补列补索引（ensure_schema.py）。",
+        "生产不是 git 仓库，回传件里「读取 git 版本失败」属正常告警；内置 MySQL 已起时 3307 端口占用也正常。"
+      ]
+    },
+    {
+      "n": 30,
+      "facts": [
+        "PUT /api/auth/me 的 ui_prefs 用 UNSET 哨兵区分「没提交」与「提交 null」，避免把未提交误判为清空偏好。",
+        "列表 page_size 缺省只认系统默认（ui.page_size），个人偏好由前端读 me.ui_prefs 后显式传参，后端不自动套用。"
+      ]
+    },
+    {
+      "n": 31,
+      "facts": [
+        "投递范围口径：上游负责供应商邮件票投递，本系统只投手工上传的票（only_manual_upload 默认 true）。",
+        "UI 用词硬规则：FIDOC 动作一律写「关联 FIDOC」，禁止单独「关联」。",
+        "SAP 去向拆三列模型：voucher_state / delivery_state / delivered_by，旧 sap_state 列已删（v0.2.2）。",
+        "现场 PowerShell 环境被裁剪：Get-FileHash / Compress-Archive 不存在，现场脚本要改用 .NET 实现。",
+        "APP_VERSION_NOTE 必须与 APP_VERSION 一致（已连续两版漏改），已加守卫测试。",
+        "迁移删旧列走三段式：干跑 → --apply → 校验旧列与新三列映射一致后才 --drop-legacy，不一致拒绝删列。",
+        "vault_sync 失败必须带 reason（子步骤名 + 错误文本）；只有核心建档步骤失败才置整体 ok=false，查验/识别等尾巴步骤失败只降级记录。",
+        "现场排查包要做成只读一键脚本（如 0-一键核查.bat），必须在 SAP GUI 已登录的桌面会话运行，不写库不投递。"
+      ]
+    },
+    {
+      "n": 32,
+      "facts": [
+        "凭证反查传 20 位全电票号原样，后 8 位由 ABAP 内部截取；查询年度取运行期 sap.voucher.year_floor（默认 2025），与发票年无关。",
+        "AIDOC 只回答「有没有会计凭证」，代码把 not_found 当成「没进过 SAP」；全仓没有按 BILL_NO 查 ZFI_AIFP 的实现。",
+        "投递用的 pdfid 是我方 ADD 的 EV_PDFID 返回值，不是查重选出来的；重试因 state=prepared 且 pdfid 保留而复用、只补 sub。",
+        "SapBridgeError 不在瞬态名单，会烧满 attempts=3 且不写 arch_invoice，sap_state 仍停在 not_found。",
+        "部署清单只覆盖 app/、scripts/、start_server.py、.env.example，不含 sap_gui_com_bridge/VBS，现场 VBS 无法远程核对。",
+        "桥层三处吞证据：stderr 不进日志/异常、退出码不进异常消息、桥层 logger 未接入 app.log。"
+      ]
+    },
+    {
+      "n": 33,
+      "facts": [
+        "FIDOC 改词口径：动作词「投递」→「关联」、对象「SAP」→「FIDOC」，仅指「把票送进 SAP 归档」这条链路；对照真源是 zh-CN.json，规范在 tmp/fidoc_rename_spec.md。",
+        "UI 用词硬规则：FIDOC 动作一律写「关联 FIDOC」，禁止单独「关联」。",
+        "i18n 双语一致性验收：key 集合/顺序/占位符/无汉字，再用 check_i18n_frontend.mjs 校验前端引用覆盖。",
+        "共享工作区协作约束：只动名下文件，不 git commit、不跑全局格式化、不改 CHANGELOG/VERSION。"
+      ]
+    },
+    {
+      "n": 34,
+      "facts": [
+        "FIDOC 改词保留「SAP 去向」列名与 SAP 凭证反查/连接/单据库/GUI/桥及「SAP 处理异常」等异常分类名；代码块内标识符、列名与列 COMMENT 不动。",
+        "「MIRO 投递台账」应改为「MIRO 过账台账」（SAP 上游 MIRO 台账，非本系统关联链路）。",
+        "FIDOC 改词验收：正文旧词组命中 0，代码块内改动行必须为 0。",
+        "配图 .mmd 改词后同名 .png 需重渲染（node scripts/render_diagrams.mjs），否则成品图仍是旧文案。"
+      ]
+    },
+    {
+      "n": 35,
+      "facts": [
+        "Mubea_Invoice-Insight 的 SAP 凭证反查口径：批量查询返回 not_found 的条目必须逐条单条复核后才落 not_found，批量与单条不一致记 batch_disagree 指标日志。",
+        "投递前置必须同步 requery：SAP 查到则不投并回写 voucher_found，桥不可达则不投且不写投递状态机；upstream_delivered 不进投递候选。",
+        "全量反查作业 sap_voucher_recheck 每轮全量扫 not_found（不限批）、单条查询、查到一张立即 apply 一张并逐张写 voucher_recheck_sweep 审计；因全量轮占用单线程调度器，反查被收进夜间窗口并做 24 小时间隔节流。"
+      ]
+    },
+    {
+      "n": 36,
+      "facts": [
+        "查验结果共享盘的回执文件约定为 {归档根}/{项目}/delivery_{YYYYMM}.jsonl（append-only），是继识别结果、XLSX 之后的第三条通道。",
+        "AIFP 回执历史回填的唯一数据源是 app.sap.aifp 日志，缓存（recognition_cache/recognition_history）与 Excel 行都不含 aifp_pdfid。",
+        "批量写入路径（SAP_AIFP_BATCH_WRITE）未挂回执，已加硬护栏：开批量且回执开启时拒绝并回退逐条，必须先补回执才能开批量。",
+        "回执写入与 AIFP 主流程隔离：全链路 try/except、异常只 warning，未配置归档根时零副作用，桩模式不写回执。"
+      ]
+    },
+    {
+      "n": 37,
+      "facts": [
+        "Mubea_Invoice-Insight 全量 pytest 慢的根因是 app/services/pdf_service.py 的二维码解码阶梯（dpi=300 整页渲染 + scale 3/5 放大到 2.2 亿像素，每页约 15.8s），不是用例数量。",
+        "日常跑测试用 pytest -m 'not slow'，slow marker 已登记在 pyproject；真浏览器烟测与 deploy 打包用例标 slow 保留。",
+        "不能把 admin_client 改成 module/session 级共享 fixture：登录态会与登出、改密、角色变更用例冲突，提速应靠去除空转等待。"
+      ]
+    },
+    {
+      "n": 38,
+      "facts": [
+        "报销类发票不参与 FIDOC 关联：显示、筛选、统计、动作四处口径统一（2026-10-29 只读复核 PASS）。",
+        "本机无 MySQL 时双后端 SQL 只能静态核对，MySQL 实跑是测试覆盖盲区。",
+        "归档台账（报销台账/MIRO 过账结果/AP Posted Files）的过账/投递结果写 delivered_by=upstream，界面显示「上游已投递」；过账≠关联 FIDOC，不计入关联数。"
+      ]
+    },
+    {
+      "n": 39,
+      "facts": [
+        "只有供应商发票能查 SAP 凭证号：报销类不入队、不领批、不重查，手动单查返回 400，批量重查按「跳过」返回，「SAP 凭证未查到」督办候选也排除报销类。",
+        "报销类凭证状态显示「不查询」（not_applicable），不落库、读取时按 invoice_category 派生；详情页「重新查询」与行内「重查」置灰。",
+        "报销类 SAP 去向：没查过/查不到 → 「无需关联 FIDOC」，已查到凭证 → 「已有凭证（无需关联 FIDOC）」；供应商发票不受影响。",
+        "归档台账（报销台账/MIRO 过账结果/AP Posted Files）的过账/投递结果写 delivered_by=upstream，界面显示「上游已投递」，过账≠关联 FIDOC。",
+        "统计口径：凭证查询状态总览与 FIDOC 关联数/成功率只统计供应商发票。",
+        "FIDOC 关联成功率的统计分母未排除 delivered_by='upstream' 的票，上游已投递的供应商票会摊薄成功率（待产品决策）。"
+      ]
+    },
+    {
+      "n": 40,
+      "facts": [
+        "QQ 邮箱把 GitHub 通知归档到「其他文件夹/邮件归档」，收件箱里看不到，查 GitHub Actions 失败邮件要去该文件夹。",
+        "Mubea_Invoice-Insight 的 release workflow 硬要求 CHANGELOG 尾部有 [vX.Y.Z]: compare 行，缺失会让 Extract release notes 整条失败（曾连续 18 次 Release 失败）；现由 gen_release_notes.py 自动推导缺链接，段落缺失仍硬失败。",
+        "补发历史 Release 用 workflow_dispatch 重跑、不挪标签。"
+      ]
+    },
+    {
+      "n": 41,
+      "facts": [
+        "pyc-only 交付可行：85 个 .py 在 Python 3.12.13 下编译为 legacy .pyc 并删除源码后 import 与 SQLite 服务均正常，运行期失败 0。",
+        "版本锁定是 pyc-only 的硬约束：3.12 编的 pyc 用 3.14 导入直接 ImportError: bad magic number；仓库无 .python-version 时 uv sync --frozen 默认落到 3.14.5，需 --python 3.12 对齐目标运行时。",
+        "pyc-only 零防篡改：在 app/main.pyc 旁放同名 app/main.py 会被优先加载执行，必须加启动哈希自检才算防护。",
+        "pyc-only 保护面只到 app/：scripts/（58 个 .py）与 sap_gui_com_bridge/（10 个 .py）及 start_server.py 仍是源码。",
+        "采用 pyc-only 的代价：pyc 体积比源码增约 4.6%（tar.gz 增 24.4%），且依赖 ast 读源码的测试会失败（实测 10/54 用例失败，集中在 test_version 与 i18n 中文棘轮）。"
+      ]
+    },
+    {
+      "n": 42,
+      "facts": [
+        "客户口径：发票作废（按钮中文「作废」/英文「Void FP」）= 标记作废不删除、允许撤销，且作废时同时清空 SAP 凭证号；同一发票号不允许重复上传/归集，要票只能复用系统现有档案。",
+        "作废边界：本系统不碰 SAP MIRO，已投递 AIFP 的 FIDOC 行撤不回；作废只改本系统判定，SAP 侧清理由客户负责。",
+        "作废票设计：退出凭证反查/投递/二次查验/督办/异常生成/统计等全部自动链路，列表默认可见并打「已作废」标签，可撤销恢复原状态与凭证号。",
+        "生产升级不得影响已激活许可：部署脚本用 robocopy /E 且不带 /PURGE，清理范围不含 license/、.mysql/、storage/、.run/；已激活许可无需重新导入。",
+        "现场升级路径：替换包放 C:\\Project\\pkg\\，安装目录 C:\\Project\\Mubea_Invoice-Insight，用「1-一键替换(配许可码+只勾China).bat」（-KeepDatabase 保留数据库）。",
+        "发版线决策：feat-license-guard（许可闸门 + 只发 .pyc + 签名清单）合进 main，此后发版只留一条线，生产 Python 项目只发 .pyc 不分发源码。",
+        "上游暂存区忽略口径：Failed 与 To-be-identified 目录的票号登记进 arch_staged_ignore，只影响统计口径（不建档案/不写异常/不拦截建档），staged_ignore_refresh 作业每 6 小时刷新。",
+        "「上游有结果、本系统无档案」的根因：原件停在共享盘 Failed Identified Files 暂存区，不在系统接入范围内，按暂存区忽略口径处理。",
+        "发版构建排除项必须含本机凭据与 .DS_Store，并配包内自检与不变量用例。",
+        "部署自检 diag 与启动首轮 staged_ignore 登记存在时序竞争：登记要扫网络盘约 20 秒，先跑的 dry-run 读到空表，会出现「半边生效」的 ignored_staged 数字，不是功能故障。"
+      ]
+    },
+    {
+      "n": 43,
+      "facts": [
+        "推荐元数据完整性检查改为按票面有无该栏判定：数电票豁免发票代码、铁路电子客票豁免销售方、海外票豁免中国发票代码栏；巡检与回填统一调 field_applicability()。",
+        "数据治理口径：backfill_integrity_metadata.py 只从本系统已存证据（最近查验通过原文/字段表）补空，不覆盖人工值、结构性空值不猜、幂等、写审计，接进部署额外步骤。",
+        "字段待补录曾放在部署额外步骤同步跑，因重读网络盘扫描件（1,468 份）卡住升级 3 小时以上；改为应用启动后后台作业分批补录，升级只做秒级清单生成。",
+        "1,468 张缺购销方的真因是上游 2026-08 历史批次只推原件、没推识别与查验结果，系统内无可恢复来源；决策做成可闭环的补录督办清单（字段待补录）。",
+        "报销类档案不绑定 company_code 是产品口径允许的（对业务账号按公共池可见），启动日志「未绑定主体」不是告警。",
+        "只读进度脚本 check_field_missing_progress.py 随包发布，连接串取自 app.core.config，读 arch_sync_run 的 field_missing_backfill 记录，是现场盯补录进度的主路径（作业历史面板隐藏）。"
+      ]
+    },
+    {
+      "n": 44,
+      "facts": [
+        "生产库 arch_invoice 票种只有 full_electronic 与 overseas，不存在 paper/electronic（非数电）票种，invoice_code 全量为空——这是数电票豁免发票代码判定的数据依据。"
+      ]
+    },
+    {
+      "n": 45,
+      "facts": [
+        "海外票豁免只到 invoice_code，invoice_num 仍必备（文案与实现口径一致）。",
+        "巡检/文档口径：票面本来没有的栏位不计缺失（数电票无发票代码、铁路电子客票无销售方、海外票无中国发票代码栏）。",
+        "index.html 硬编码汉字棘轮基线为 2，HTML 注释会被剥离（i18n 棘轮规则）。"
+      ]
+    },
+    {
+      "n": 46,
+      "facts": [
+        "field_missing 为异常第 9 类（severity=info）；候选与闭环只调 FieldMissingService，判据只调 field_applicability()，不各写一份。",
+        "补录接口真实前缀是单数 /api/archive，不是 /api/archives。",
+        "补录只补空不覆盖：白名单 5 列、审计 before/after、补完自动闭环，幂等开单 dedup_key=field_missing:{id}。",
+        "字段待补录后台异步参数：每块 20 张、每轮最多 100 张、单轮 10 分钟预算，默认约 3~8 小时跑完；deploy_overwrite.ps1 删掉第 13 项同步自动补录，剩 12 项，升级只做清单生成。"
+      ]
+    },
+    {
+      "n": 47,
+      "facts": [
+        "异常分类从八类改为九类（新增 field_missing 字段待补录），方案设计配图 .mmd 与同名 PNG 需同步改。",
+        "字段待补录真浏览器 E2E 用 /tmp 库副本 + 临时许可的隔离服务，跑完清理 gitignored license/ 与端口，避免污染 dev 库与仓库。"
+      ]
+    },
+    {
+      "n": 48,
+      "facts": [
+        "状态配色语义约定：琥珀=待办、蓝=在途/信息、绿=完成、红=失败/异常、灰=中性；作废态用红（2026-11-04 用户口径），in_exception 与 voided 同红靠文案区分。",
+        "「SAP 去向」chip 的「已作废」是派生码文案，只改色板无效，需按档案状态取色。"
+      ]
+    },
+    {
+      "n": 49,
+      "facts": [
+        "Mubea_Invoice-Insight 列表页滚动区机制（方案1）：`.list-page`/`.table-card`/`.table-scroll` 三组类让表格独立横纵向滚动、表头吸顶、分页常驻底部，非列表页显式 `flex: 0 0 auto` 保持整页滚动；已接入 7 个列表页（发票档案/审计日志/供应商分析/用户管理/异常中心/发票上传记录/完整性巡检结果），判断标准是「页面主体是列表 + 分页/筛选」，仪表盘与表单页不接。",
+        "用户拍板列表页横滚方案选方案1（表格独立滚动区）并要求全局适用到所有类似页面，方案2（视口底部常驻同步横滚条）与方案3（列瘦身/列定制）被否。",
+        "异常中心接列表滚动区必须先让出高度：KPI 8 类改两列（223→166px）、筛选收进「更多筛选」（170→120px）；表格 1300px 下限的取舍是 1366 屏「操作」列需横向拖才点得到，备选把操作列做成 sticky 右列未做。",
+        "发票上传页接列表滚动区时上传表单占高过大（拖拽区 p-10、图标 36px），需收紧到 p-4、24px 并收表单/记录卡 padding，表单从 331px 降到 253px 记录表才有 3 行；1280×720 下记录表仍只有 1–2 行。",
+        "列表页密度档 1+2 已上线：行高 42→34、表头 38→30、分页 63→55、main 边距 28→20、卡片间距 16→12、列表页卡片内边距收一格，字号不动；档 3（全站控件一起收）未做，涉及 20+ 处 class、风险大。",
+        "CHANGELOG 口径：未发布改动写 [Unreleased]，不能写进已发版段（v0.5.0 段曾误加改动后被恢复）；发版时 [Unreleased] 改名成 `## [vX.Y.Z] - 日期` 并补 compare 链接。",
+        "生产现场是 Windows 桌面，缩放使有效可视宽度比 1366 更窄（用户截图 14 列只露 7 列），横向溢出比实测 388px 更大；列表页方案只依赖视口高度，不受影响。",
+        "Mubea_Invoice-Insight 现场升级口径：v0.5.1 已验证覆盖替换即可升级，无新表、新作业、一次性数据动作，许可不用重新导入；现场核对三条（许可有效、版本号、列表页横滚条可见）。",
+        "Mubea_Invoice-Insight 发版交付口径：替换包 + 生产部署包 + pkg 目录；app/ 与 sap_gui_com_bridge/ 只发 .pyc、0 源码，scripts/ 与 start_server.py 作为运维脚本保留源码；MANIFEST.sha256 逐文件核验；deploy_overwrite.ps1 带历版幂等额外步骤；《先读我.txt》追加本版升级说明。",
+        "升级回传件含客户数据（案卷 PDF、共享盘 jsonl），只读解到 /tmp 分析，不提交进仓库。",
+        "共享盘未匹配里属上游暂存区的票号按 ignored_staged 口径计，不算缺档（2026-11-05 口径）。",
+        "生产档案推荐元数据 503 行真缺失字段（对应字段待补录清单 501 条未闭环）是否安排人工补，待现场决策。",
+        "共享盘归集重跑可补 17 个字段（scripts/diag_verify_agg.py --apply --yes，只补空、幂等），是否执行待决策。",
+        "Mubea_Invoice-Insight 生产现场入口是 http://10.163.0.184:18000。"
+      ]
+    }
+  ]
+}
