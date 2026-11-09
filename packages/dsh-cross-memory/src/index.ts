@@ -2603,6 +2603,7 @@ export class MemoriesRuntime {
             : {},
           maxOutputTokens: this.settings.extractMaxOutputTokens,
           maxMemories: this.settings.extractMaxMemories,
+          recordScope: this.settings.recordScope,
           timeoutMs: this.settings.extractTimeoutMs,
           signal,
         })
@@ -2841,6 +2842,7 @@ export class MemoriesRuntime {
             model,
             maxOutputTokens: this.settings.extractMaxOutputTokens,
             maxMemories: this.settings.extractMaxMemories,
+            recordScope: this.settings.recordScope,
             timeoutMs: this.settings.extractTimeoutMs,
             signal: this.lifecycle.signal,
           })

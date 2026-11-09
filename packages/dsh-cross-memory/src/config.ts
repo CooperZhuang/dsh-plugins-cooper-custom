@@ -331,6 +331,22 @@ export const DEFAULT_EXTRACT_TIMEOUT_MS = 120_000
  */
 export const DEFAULT_EXTRACT_MAX_MEMORIES = 8
 
+/**
+ * What the extractor is allowed to keep, by default.
+ *
+ * `work` (the default) keeps the material a working session actually needs —
+ * project architecture and conventions, commands, gotchas, decisions and their
+ * reasons, and pre-sales material (quotes, proposals, customer terms, effort
+ * estimates, contracts, bids) — and leaves personal life alone unless the user
+ * asked for it. `both` also keeps personal background, relationships, habits and
+ * creative collaborations.
+ *
+ * Measured on this machine's own store: 90% of entries were work/toolchain and
+ * project material, and a benchmark-driven push toward personal memory added
+ * nothing the user's real sessions needed.
+ */
+export const DEFAULT_RECORD_SCOPE = 'work' as const
+
 /** Default idle hours a session must accumulate before it is mined. */
 export const DEFAULT_MIN_IDLE_HOURS = 6
 
@@ -499,7 +515,8 @@ export const Config = z.object({
   /** Timeout for one extraction call. */
   extractTimeoutMs: z.number().default(DEFAULT_EXTRACT_TIMEOUT_MS).description('Timeout for one extraction call.').volatile(),
   /** Max drafts one extraction may produce. */
-  extractMaxMemories: z.number().default(DEFAULT_EXTRACT_MAX_MEMORIES).description('Maximum memories one extraction pass may store.').volatile(),
+    extractMaxMemories: z.number().default(DEFAULT_EXTRACT_MAX_MEMORIES).description('Maximum memories one extraction pass may store.').volatile(),
+  recordScope: z.union([z.const('work'), z.const('both')]).default(DEFAULT_RECORD_SCOPE).description('What the extractor may keep. `work` (default) keeps project/tooling/pre-sales material and leaves personal life alone unless asked; `both` also keeps personal background, relationships, habits and creative work.').volatile(),
   /** Minutes between periodic extraction checks over every open session. */
   extractIntervalMinutes: z.number().default(DEFAULT_EXTRACT_INTERVAL_MINUTES).description('How often to check every open session for new material and mine it in slices. Fractions are allowed. 0 disables the periodic check, leaving mining to the settle timer and the exit flush. Peak hours and the quota gate still apply; a session with nothing new costs no model call.').volatile(),
   /** A session must have been idle this long before it is mined. */
@@ -610,6 +627,8 @@ export interface MemoriesSettings {
   extractMaxOutputTokens: number
   extractTimeoutMs: number
   extractMaxMemories: number
+  /** What the extractor may keep: `work` (default) or `both`. */
+  recordScope: 'work' | 'both'
   extractIntervalMinutes: number
   minIdleHours: number
   maxAgeDays: number
@@ -704,6 +723,7 @@ export const MEMORIES_SETTINGS_DEFAULTS: MemoriesSettings = {
   extractMaxOutputTokens: DEFAULT_EXTRACT_MAX_OUTPUT_TOKENS,
   extractTimeoutMs: DEFAULT_EXTRACT_TIMEOUT_MS,
   extractMaxMemories: DEFAULT_EXTRACT_MAX_MEMORIES,
+  recordScope: DEFAULT_RECORD_SCOPE,
   extractIntervalMinutes: DEFAULT_EXTRACT_INTERVAL_MINUTES,
   minIdleHours: DEFAULT_MIN_IDLE_HOURS,
   maxAgeDays: DEFAULT_MAX_AGE_DAYS,
@@ -864,6 +884,7 @@ export function normalizeSettings(input: Partial<MemoriesSettings> | undefined):
     extractMaxOutputTokens: positive(value.extractMaxOutputTokens, DEFAULT_EXTRACT_MAX_OUTPUT_TOKENS),
     extractTimeoutMs: positive(value.extractTimeoutMs, DEFAULT_EXTRACT_TIMEOUT_MS),
     extractMaxMemories: positive(value.extractMaxMemories, DEFAULT_EXTRACT_MAX_MEMORIES),
+    recordScope: value.recordScope ?? DEFAULT_RECORD_SCOPE,
     extractIntervalMinutes: decimal(value.extractIntervalMinutes, DEFAULT_EXTRACT_INTERVAL_MINUTES),
     minIdleHours: decimal(value.minIdleHours, DEFAULT_MIN_IDLE_HOURS),
     maxAgeDays: positive(value.maxAgeDays, DEFAULT_MAX_AGE_DAYS, 0),

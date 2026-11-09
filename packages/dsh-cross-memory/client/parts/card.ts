@@ -222,6 +222,15 @@ const FIELDS = [
     hint: { zh: '一次抽取最多写入多少条记忆。', en: 'Maximum memories one extraction pass may store.' },
   },
   {
+    field: 'recordScope', kind: 'select',
+    options: [
+      { value: 'work', label: { zh: '工作（默认）', en: 'Work (default)' } },
+      { value: 'both', label: { zh: '工作 + 生活', en: 'Work + personal' } },
+    ],
+    label: { zh: '记录范围', en: 'What to record' },
+    hint: { zh: '「工作」只记项目/工具链/售前材料，生活琐事（生日、家人、宠物、兴趣、共同创作）不主动记，除非你明说要记；「工作 + 生活」会连生活事实一起记。', en: '`Work` keeps project, tooling and pre-sales material and leaves personal life alone unless you ask; `Work + personal` keeps personal background, relationships, habits and creative work too.' },
+  },
+  {
     field: 'extractIntervalMinutes', kind: 'number', min: 0, step: 5,
     label: { zh: '周期性抽取间隔（分钟）', en: 'Periodic extraction interval (minutes)' },
     hint: { zh: '每隔这么久检查一次所有打开的会话，只要有新内容且会话当时空闲就抽一段——长会话因此不会因为「只在停止输入后抽一次」而丢掉中间的内容。没有新内容时不产生模型调用；仍受错峰时段与额度闸门限制。0 关闭周期检查。', en: 'How often to check every open session and mine a slice when there is new material and the session is momentarily idle — so a long working session does not lose its middle to a single end-of-session pass. A session with nothing new costs no model call; peak hours and the quota gate still apply. 0 disables the check.' },
