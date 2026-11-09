@@ -1,10 +1,15 @@
 {
-  "scope": "work + mustCover(fixed)",
+  "scope": "work + mustCover(fixed) + noPointer",
   "goldSet": "fixed-gold.json",
   "sessions": 50,
   "gold": 218,
-  "covered": 142,
-  "coverage": 0.6514,
+  "covered": 151,
+  "coverage": 0.6927,
+  "previous": {
+    "scope": "work + mustCover(fixed)",
+    "covered": 142,
+    "coverage": 0.6514
+  },
   "perSession": [
     {
       "n": 0,
@@ -24,7 +29,7 @@
     {
       "n": 3,
       "gold": 2,
-      "covered": 1
+      "covered": 2
     },
     {
       "n": 4,
@@ -44,7 +49,7 @@
     {
       "n": 7,
       "gold": 8,
-      "covered": 6
+      "covered": 7
     },
     {
       "n": 8,
@@ -59,32 +64,32 @@
     {
       "n": 10,
       "gold": 5,
-      "covered": 4
+      "covered": 5
     },
     {
       "n": 11,
       "gold": 5,
-      "covered": 2
+      "covered": 4
     },
     {
       "n": 12,
       "gold": 12,
-      "covered": 6
+      "covered": 5
     },
     {
       "n": 13,
       "gold": 9,
-      "covered": 7
+      "covered": 8
     },
     {
       "n": 14,
       "gold": 5,
-      "covered": 4
+      "covered": 5
     },
     {
       "n": 15,
       "gold": 5,
-      "covered": 4
+      "covered": 0
     },
     {
       "n": 16,
@@ -94,17 +99,17 @@
     {
       "n": 17,
       "gold": 4,
-      "covered": 4
+      "covered": 2
     },
     {
       "n": 18,
       "gold": 8,
-      "covered": 4
+      "covered": 3
     },
     {
       "n": 19,
       "gold": 4,
-      "covered": 1
+      "covered": 3
     },
     {
       "n": 20,
@@ -114,12 +119,12 @@
     {
       "n": 21,
       "gold": 5,
-      "covered": 5
+      "covered": 4
     },
     {
       "n": 22,
       "gold": 3,
-      "covered": 2
+      "covered": 3
     },
     {
       "n": 23,
@@ -129,7 +134,7 @@
     {
       "n": 24,
       "gold": 5,
-      "covered": 4
+      "covered": 5
     },
     {
       "n": 25,
@@ -139,7 +144,7 @@
     {
       "n": 26,
       "gold": 3,
-      "covered": 0
+      "covered": 3
     },
     {
       "n": 27,
@@ -149,12 +154,12 @@
     {
       "n": 28,
       "gold": 4,
-      "covered": 2
+      "covered": 4
     },
     {
       "n": 29,
       "gold": 5,
-      "covered": 4
+      "covered": 3
     },
     {
       "n": 30,
@@ -179,7 +184,7 @@
     {
       "n": 34,
       "gold": 4,
-      "covered": 4
+      "covered": 3
     },
     {
       "n": 35,
@@ -189,7 +194,7 @@
     {
       "n": 36,
       "gold": 4,
-      "covered": 4
+      "covered": 3
     },
     {
       "n": 37,
@@ -199,12 +204,12 @@
     {
       "n": 38,
       "gold": 3,
-      "covered": 2
+      "covered": 3
     },
     {
       "n": 39,
       "gold": 6,
-      "covered": 4
+      "covered": 6
     },
     {
       "n": 40,
@@ -214,12 +219,12 @@
     {
       "n": 41,
       "gold": 5,
-      "covered": 4
+      "covered": 5
     },
     {
       "n": 42,
       "gold": 10,
-      "covered": 3
+      "covered": 5
     },
     {
       "n": 43,
@@ -234,7 +239,7 @@
     {
       "n": 45,
       "gold": 3,
-      "covered": 1
+      "covered": 2
     },
     {
       "n": 46,
@@ -254,17 +259,13 @@
     {
       "n": 49,
       "gold": 14,
-      "covered": 8
+      "covered": 6
     }
   ],
   "missed": [
     {
       "n": 0,
       "fact": "Mubea_Invoice-Insight 的代码路径：Mac 为 /Users/cooper/Documents/Code/Mubea_Invoice-Insight，PC 为 C:\\CodeRepository\\Mubea_Invoice-Insight。"
-    },
-    {
-      "n": 3,
-      "fact": "PC 侧 Mubea_Invoice-Insight 的 venv 解释器是 uv 托管的 CPython 3.13.14，pyvenv.cfg 指向 uv 托管的 cpython-3.13，系统装的 3.14.6 未被 venv 使用。"
     },
     {
       "n": 6,
@@ -284,15 +285,11 @@
     },
     {
       "n": 6,
-      "fact": "编辑技能要走 RED→GREEN：先跑改之前的基线场景，且基线必须隔离记忆，否则子代理会读到刚写的记忆、测不出技能本身的作用。"
+      "fact": "区分 PC SSH 会话与桌面会话的判据是 (Get-Process -Id $PID).SessionId（0=SSH，explorer 桌面=1）；无凭据推代码走 git bundle → scp → PC 本地 git fetch，禁止把 $env:GH_TOKEN=… 注入命令行（会落 shell 历史/日志）。"
     },
     {
       "n": 6,
       "fact": "DSH 的 subagent 与 spawn_teammate 是两套机制，wait_agent 只观测 Team 成员，不能用来等 subagent。"
-    },
-    {
-      "n": 7,
-      "fact": "共享盘数据源取值顺序固定为库 arch_system_setting → .env → 代码默认，空串是显式关闭语义（不再回落 .env）。"
     },
     {
       "n": 7,
@@ -307,20 +304,12 @@
       "fact": "PC 没有为 GitHub 注册 SSH 密钥（ssh -T git@github.com 返回 Permission denied publickey）。"
     },
     {
-      "n": 10,
-      "fact": "归集钩子挂在 RecognitionImportService/VerifyImportService 共享的 _fill_invoice_fields 上无法区分 auto:recognition / auto:verify，且 source 枚举缺 _enrich_from_content 取值。"
+      "n": 11,
+      "fact": "org.* 配置项属于 ingest 组，设置手册应写进「接入节奏」行而非「识别与查验」行。"
     },
     {
-      "n": 11,
-      "fact": "测试基础设施坑：clean_operational 不清 arch_audit_log，且 SQLite 无 AUTOINCREMENT、删表后 id 复用，断言不能依赖 target_id/id 顺序。"
-    },
-    {
-      "n": 11,
-      "fact": "主体归集 sweep 的审计 source 必须是 auto:sweep、actor=scheduler，不能沿用 resolve_unattributed 硬编码的 manual。"
-    },
-    {
-      "n": 11,
-      "fact": "成本中心兜底只属于 xlsx 驱动的报销路径，sweep（only_with_buyer）不得使用。"
+      "n": 12,
+      "fact": "识别策略：已有完整识别结果（recognition_state=succeeded 且票号/日期/销售方/购买方/价税合计齐全）只查验不重复识别。"
     },
     {
       "n": 12,
@@ -348,19 +337,27 @@
     },
     {
       "n": 13,
-      "fact": "数据源取值顺序的固定契约：库 arch_system_setting（含空串显式值）→ .env → 默认，且要求所有取值点（扫描/取件/回写）都走 source_value。"
-    },
-    {
-      "n": 13,
       "fact": "arch_data_source.interval_minutes 按源定时实际未实现（run_all/build_jobs 从不读取）。"
-    },
-    {
-      "n": 14,
-      "fact": "Mubea_Invoice-Insight 的 ROUTE_GUARDS 有 6 条指向不存在路由的死规则，且 fail-closed 会把 OPTIONS 预检按未登记方法拦下（401 且无 CORS 头）。"
     },
     {
       "n": 15,
       "fact": "Mubea_Invoice-Insight 的 SAP_DELIVERY_AUTO 只读启动快照 settings，运行期键 sap.delivery.auto 不生效，设置页开关无效。"
+    },
+    {
+      "n": 15,
+      "fact": "Mubea_Invoice-Insight 的 sap_archived 降级守卫不是所有写入点都有，幂等判据也不读 arch_sap_delivery.state。"
+    },
+    {
+      "n": 15,
+      "fact": "Mubea_Invoice-Insight 的放弃投递标记 delivery_abandoned 不被投递链路与反查写回识别，放弃后仍会被写进 SAP。"
+    },
+    {
+      "n": 15,
+      "fact": "Mubea_Invoice-Insight 的 SAP 投递在 sub 失败时会丢掉已拿到的 pdfid，重试重新 ADD 会在 SAP 生成第二条 AIFP。"
+    },
+    {
+      "n": 15,
+      "fact": "Mubea_Invoice-Insight 的 _precheck 必填项不含 PONO/ITEM_DESCRIPTION，缺 PO 或无明细的票每轮被 VBS 挡回并烧 attempts。"
     },
     {
       "n": 16,
@@ -379,12 +376,20 @@
       "fact": "Mubea_Invoice-Insight 的 SAP 投递是不可逆写入：头行 ADD 成功即持久化，SUB 失败不重 ADD。"
     },
     {
+      "n": 17,
+      "fact": "Mubea_Invoice-Insight 售前 DOCX/PPTX 的真源是生成脚本里的硬编码文案，改 Markdown 不会同步任何 docx/pptx/xlsx。"
+    },
+    {
+      "n": 17,
+      "fact": "慕贝尔报价单 22 人天 × 2,500 = 55,000 恰等于年费价，但报价单又写「二开本期免费」，对外口径需统一。"
+    },
+    {
       "n": 18,
       "fact": "Mubea_Invoice-Insight 的 C:\\Project\\pkg 下按版本放一键包目录（pkg_v0.1.x_<日期>），诊断包也用 pkg_ 前缀 + ASCII 命名。"
     },
     {
       "n": 18,
-      "fact": "数电/铁路/海外票结构性没有发票代码（全电票只有 20 位票号），发票代码为空属正常，档案详情第一格应显示发票号码。"
+      "fact": "Mubea_Invoice-Insight 现场一键包不替换部署目录里的任何文件，产物只写包内 diagnostics\\，双击 一键收集.bat 即可运行。"
     },
     {
       "n": 18,
@@ -395,44 +400,20 @@
       "fact": "SAP 凭证号唯一来源是 SAP ZFI_AIDOC，只有 found 才投影回主表。"
     },
     {
+      "n": 18,
+      "fact": "Mubea_Invoice-Insight 档案详情信息优先级：识别结果与查验结论高于完整性巡检，标题栏先显示查验状态。"
+    },
+    {
       "n": 19,
       "fact": "Mubea_Invoice-Insight 的 voucher_no 唯一权威是 SAP ZFI_AIDOC，只有 found 才写；全电票本无发票代码。"
     },
     {
-      "n": 19,
-      "fact": "Mubea_Invoice-Insight 的「档案完整性巡检 通过」只校验原件 sha256 与票号/开票日期/价税合计三项必备元数据，与税局查验无关。"
+      "n": 21,
+      "fact": "PC 从仓库目录跑时，发版 SOP 的一次性补齐（remark→PO 回填、历史 PO 清洗等）要手工执行，单靠快进代码不会执行。"
     },
     {
-      "n": 19,
-      "fact": "Mubea_Invoice-Insight 的 invoice_kind=full_electronic 由 20 位票号规则推出，与 invoice_type 完全解耦。"
-    },
-    {
-      "n": 22,
-      "fact": "平台用 ZFI_AIDOC 反查 SAP 凭证时只能查有没有凭证，查不到凭证是否已被冲销。"
-    },
-    {
-      "n": 24,
-      "fact": "SAP 投递定时作业默认不注册：注册需接 SAP 且 interval>0，代码兜底默认 0，而设置页与运维手册写 10，默认配置下失败票只能人工重投。"
-    },
-    {
-      "n": 26,
-      "fact": "SAP 投递失败分类：超时/登录失败（SapConnectionError）落宽泛 except → failed、消耗 SAP_DELIVERY_MAX_ATTEMPTS、不写 sap_failed；只有 BridgeError 才归还 attempts 保持 prepared。"
-    },
-    {
-      "n": 26,
-      "fact": "「放弃投递」按钮除权限外还受状态限制：已归档或已有凭证的票，管理员也没有入口。"
-    },
-    {
-      "n": 26,
-      "fact": "自动投递与自动重试依赖 sap_delivery 作业已注册（需接 SAP 且 interval>0），出厂默认 interval=0 时不注册。"
-    },
-    {
-      "n": 28,
-      "fact": "SAP 投递只支持本机 COM（同机部署），独立 HTTP 桥只服务凭证号反查；售前材料不得宣称投递可走 HTTP 桥。"
-    },
-    {
-      "n": 28,
-      "fact": "定时投递作业默认不注册（interval 默认 0），上生产需显式设 >0；投递每轮上限默认 20 张，同时用于自动补入队、消费队列、超时巡查三处。"
+      "n": 29,
+      "fact": "上传记录默认「只看我的」（scope=mine），档案岗/管理员可切全组织；列表不下发 result_json，详情按需拉取。"
     },
     {
       "n": 29,
@@ -455,32 +436,20 @@
       "fact": "UI 用词硬规则：FIDOC 动作一律写「关联 FIDOC」，禁止单独「关联」。"
     },
     {
+      "n": 34,
+      "fact": "FIDOC 改词保留「SAP 去向」列名与 SAP 凭证反查/连接/单据库/GUI/桥及「SAP 处理异常」等异常分类名；代码块内标识符、列名与列 COMMENT 不动。"
+    },
+    {
       "n": 35,
       "fact": "Mubea_Invoice-Insight 的 SAP 凭证反查口径：批量查询返回 not_found 的条目必须逐条单条复核后才落 not_found，批量与单条不一致记 batch_disagree 指标日志。"
     },
     {
-      "n": 38,
-      "fact": "归档台账（报销台账/MIRO 过账结果/AP Posted Files）的过账/投递结果写 delivered_by=upstream，界面显示「上游已投递」；过账≠关联 FIDOC，不计入关联数。"
-    },
-    {
-      "n": 39,
-      "fact": "报销类 SAP 去向：没查过/查不到 → 「无需关联 FIDOC」，已查到凭证 → 「已有凭证（无需关联 FIDOC）」；供应商发票不受影响。"
-    },
-    {
-      "n": 39,
-      "fact": "统计口径：凭证查询状态总览与 FIDOC 关联数/成功率只统计供应商发票。"
-    },
-    {
-      "n": 41,
-      "fact": "采用 pyc-only 的代价：pyc 体积比源码增约 4.6%（tar.gz 增 24.4%），且依赖 ast 读源码的测试会失败（实测 10/54 用例失败，集中在 test_version 与 i18n 中文棘轮）。"
+      "n": 36,
+      "fact": "回执写入与 AIFP 主流程隔离：全链路 try/except、异常只 warning，未配置归档根时零副作用，桩模式不写回执。"
     },
     {
       "n": 42,
       "fact": "作废边界：本系统不碰 SAP MIRO，已投递 AIFP 的 FIDOC 行撤不回；作废只改本系统判定，SAP 侧清理由客户负责。"
-    },
-    {
-      "n": 42,
-      "fact": "作废票设计：退出凭证反查/投递/二次查验/督办/异常生成/统计等全部自动链路，列表默认可见并打「已作废」标签，可撤销恢复原状态与凭证号。"
     },
     {
       "n": 42,
@@ -497,10 +466,6 @@
     {
       "n": 42,
       "fact": "发版构建排除项必须含本机凭据与 .DS_Store，并配包内自检与不变量用例。"
-    },
-    {
-      "n": 42,
-      "fact": "部署自检 diag 与启动首轮 staged_ignore 登记存在时序竞争：登记要扫网络盘约 20 秒，先跑的 dry-run 读到空表，会出现「半边生效」的 ignored_staged 数字，不是功能故障。"
     },
     {
       "n": 43,
@@ -523,10 +488,6 @@
       "fact": "巡检/文档口径：票面本来没有的栏位不计缺失（数电票无发票代码、铁路电子客票无销售方、海外票无中国发票代码栏）。"
     },
     {
-      "n": 45,
-      "fact": "index.html 硬编码汉字棘轮基线为 2，HTML 注释会被剥离（i18n 棘轮规则）。"
-    },
-    {
       "n": 46,
       "fact": "field_missing 为异常第 9 类（severity=info）；候选与闭环只调 FieldMissingService，判据只调 field_applicability()，不各写一份。"
     },
@@ -537,6 +498,10 @@
     {
       "n": 47,
       "fact": "字段待补录真浏览器 E2E 用 /tmp 库副本 + 临时许可的隔离服务，跑完清理 gitignored license/ 与端口，避免污染 dev 库与仓库。"
+    },
+    {
+      "n": 49,
+      "fact": "用户拍板列表页横滚方案选方案1（表格独立滚动区）并要求全局适用到所有类似页面，方案2（视口底部常驻同步横滚条）与方案3（列瘦身/列定制）被否。"
     },
     {
       "n": 49,
@@ -557,6 +522,10 @@
     {
       "n": 49,
       "fact": "共享盘未匹配里属上游暂存区的票号按 ignored_staged 口径计，不算缺档（2026-11-05 口径）。"
+    },
+    {
+      "n": 49,
+      "fact": "共享盘归集重跑可补 17 个字段（scripts/diag_verify_agg.py --apply --yes，只补空、幂等），是否执行待决策。"
     },
     {
       "n": 49,
