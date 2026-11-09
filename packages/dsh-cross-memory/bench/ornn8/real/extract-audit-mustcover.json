@@ -1,0 +1,214 @@
+{
+  "scope": "work + mustCoverCandidates",
+  "sessions": 50,
+  "goldFacts": 267,
+  "covered": 217,
+  "coverage": 0.8127,
+  "avgScore": 4.12,
+  "missed": 50,
+  "noise": 29,
+  "missedList": [
+    {
+      "n": 0,
+      "fact": "三个 gitignore 的密钥/配置文件（.env、sap_http_bridge/config.ini、scripts/sap_selftest.local.env）需手动传输，且 .env 是 PC Windows 配置（路径/DSN），macOS 上可能要按需调整"
+    },
+    {
+      "n": 6,
+      "fact": "mubea-release-upgrade 技能新增 §5.1「PC GitHub 凭据伪证对照表」：SSH 侧信号（could not read Username、token invalid、gh auth token 空、cmdkey NONE 等）都是伪证，不能据此判定凭据失效，也不要注入 $env:GH_TOKEN，应走 git bundle/scp 等免凭据通道"
+    },
+    {
+      "n": 6,
+      "fact": "本机 MySQL 未起（3307 无监听），真实数据肉眼验证应从 PC 用 scripts/db_snapshot.ps1 同步整库快照，自动化测试用 SQLite 夹具"
+    },
+    {
+      "n": 7,
+      "fact": "storage_path 的口径是相对 SOURCE_VAULT_ROOT，入库/回写漏掉 AI/Invoice Insight 这一层会导致详情页 410（代码注释标为最易写错处）"
+    },
+    {
+      "n": 7,
+      "fact": "生产登录自启计划任务（MubeaInvoiceInsight-App-User / -MySQL-User）从未运行、D 盘满盘——这是「打不开」的根因侧，属生产运维事实"
+    },
+    {
+      "n": 8,
+      "fact": "gh 默认把令牌存 keyring，hosts.yml 只有用户名、无 oauth_token 是正常现象，不要据此判「没登录」"
+    },
+    {
+      "n": 9,
+      "fact": "ssh pc 会话（Session 0）读不到 PC 交互桌面的凭据库，判定凭据必须在 PC 桌面窗口跑 gh auth status 验证"
+    },
+    {
+      "n": 10,
+      "fact": "全局日限额与「今日 N」计数口径未定义：沿用 arch_verification 同表会把人工二次查验算进去"
+    },
+    {
+      "n": 10,
+      "fact": "审计双写风险：接口层已自己写 _audit(assign_company_code)，helper 再写会产出两条且缺 actor_role"
+    },
+    {
+      "n": 10,
+      "fact": "候选条件要求 buyer 非空与同段「成本中心兜底」自相矛盾，只有成本中心的票永远进不了扫描"
+    },
+    {
+      "n": 11,
+      "fact": "§6.2 列出但计划未覆盖的测试场景：rows_written == applied、company_code IS NULL 计数、非启用主体不收集、不可解析票保持原状"
+    },
+    {
+      "n": 12,
+      "fact": "全系统逻辑一致性复核 36 项修复完成（34 全修 + 2 部分），报告在 docs/审计与验证报告/系统逻辑一致性复核_20261017.md"
+    },
+    {
+      "n": 12,
+      "fact": "疑似重复票改为「既有档案 + duplicate 副本 + duplicate 异常」，不再被 uk_invoice_num 静默合并"
+    },
+    {
+      "n": 12,
+      "fact": "组织隔离统一为「授权 ∩ 隐藏」，补齐 /api/invoices、/api/verify/records、/api/sap/status、/api/analytics/*、/api/dashboard/* 过滤"
+    },
+    {
+      "n": 12,
+      "fact": "arch_invoice_file 增加唯一索引 uk_file_invoice_sha_role(invoice_id, sha256, file_role, storage)；生产升级要先跑 scripts/dedupe_invoice_files.py --apply 再重启"
+    },
+    {
+      "n": 12,
+      "fact": "sap_pending / sap_archived 标记废弃，不再接受任何跃迁目标"
+    },
+    {
+      "n": 12,
+      "fact": "macOS 没有单进程全量测试限制，仅 Windows 有（conftest.py 的 pytest_collection_finish 对非 nt 直接 return）"
+    },
+    {
+      "n": 13,
+      "fact": "接入没有并发闸门：has_original → 算 sha → INSERT 是 check-then-act，arch_invoice_file 无唯一键，并发会登记两条 original"
+    },
+    {
+      "n": 13,
+      "fact": "arch_data_source.interval_minutes 在 schema/仓储/UI 都有但 run_all/build_jobs 从不读取，按源定时未实现；dry_run 仍写 arch_sync_run 并推进 last_scan_at/首跑标记"
+    },
+    {
+      "n": 17,
+      "fact": "build_deck.py 输出的是系统设计文档（docs/电子发票归档管理系统_系统设计方案.pptx），不是售前 PPT 的生成脚本，别混淆"
+    },
+    {
+      "n": 21,
+      "fact": "PC 计划任务 MubeaInvoiceInsight-App-User 登录时启动 start_server.py、便携 MySQL 占用 3307 端口这一环境事实未记"
+    },
+    {
+      "n": 23,
+      "fact": "邮箱自动接入不在本期范围，邮箱处理在上游 Mubea_CN-Invoice-Mailbox（架构/范围事实）"
+    },
+    {
+      "n": 24,
+      "fact": "sap.delivery.interval_minutes 代码兜底默认 0、注册表/设置页/运维手册却写 10 的配置口径不一致未记"
+    },
+    {
+      "n": 25,
+      "fact": "SapConnectionError 不是 BridgeError 子类、落宽泛 except 消耗 attempts 且不写 sap_failed 的错误分类缺口未记"
+    },
+    {
+      "n": 28,
+      "fact": "i18n stats.sap_state.failed（zh/en）仍是旧口径，属代码侧未改的遗留"
+    },
+    {
+      "n": 29,
+      "fact": "通用规则：改公共查询列清单 + 声明额外步骤的版本，额外步骤前必须先跑 ensure_schema.py 前置迁移"
+    },
+    {
+      "n": 30,
+      "fact": "六个列表统一走 clamp_page / resolve_page_size / paging.total_pages，默认 25、上限 200"
+    },
+    {
+      "n": 30,
+      "fact": "无偏好用户每请求多一次 settings 查询的取舍（传 db 绕过 2 秒缓存，换保存即时生效）"
+    },
+    {
+      "n": 31,
+      "fact": "AIDOC 只答「有没有会计凭证」，全仓没有按 BUKRS+BILL_NO 查 ZFI_AIFP 的只读实现"
+    },
+    {
+      "n": 31,
+      "fact": "v0.2.2 起 vault_sync sources[].ok=false 必须带 reason，只有核心建档失败才置整体 false"
+    }
+  ],
+  "noiseList": [
+    {
+      "n": 0,
+      "item": "extracted_logs.tar.zst 上游已删，可从 800a5cf 取回"
+    },
+    {
+      "n": 2,
+      "item": "设计文档 §5 数据流图与文字对「先本机还是先 PC」自相矛盾"
+    },
+    {
+      "n": 2,
+      "item": "设计文档 §8.1 的「12 项」与 §4.6.2/§8.2 的「19 项」自相矛盾"
+    },
+    {
+      "n": 3,
+      "item": "双端测试工作流设计文档 revision 3 已通过评审，五项历史问题全部解决"
+    },
+    {
+      "n": 4,
+      "item": "test_health_reports_sap_gui_state 签名为 (configured, monkeypatch)，该文件实测 3 failed / 13 passed"
+    },
+    {
+      "n": 4,
+      "item": "test.sh 的 pc 模式忽略 --no-upload，且旧 pc-junit.xml 会把基础设施失败误映射成 exit 2"
+    },
+    {
+      "n": 6,
+      "item": "/api/health 曾写死版本 1.0.0，已改为取 APP_VERSION"
+    },
+    {
+      "n": 6,
+      "item": "PC 仓库已快进到 v0.1.7（ed8b995），与 origin/main 同步"
+    },
+    {
+      "n": 7,
+      "item": "生产「打不开」不是应用故障：报障时段应用零请求但后台作业全 success（一次性故障事件结论，非持久事实）"
+    },
+    {
+      "n": 9,
+      "item": "「PC 的 GitHub 凭据在 ssh pc 会话里不可用」把会话隔离伪证当成了凭据损坏，结论错误（后被 08 纠正）"
+    },
+    {
+      "n": 12,
+      "item": "「提交即 push，不再询问」与会话内事实相反（助手明确征求推送确认），属全局偏好误植到本会话"
+    },
+    {
+      "n": 16,
+      "item": "售前材料里的「七类异常」「25 项字段」「14+ 维度」「五步流水线」「三级角色」需按代码实测核对（任务清单，数字本身在售前文档可查）"
+    },
+    {
+      "n": 19,
+      "item": "抽屉「票种」绑 invoice_type、「发票代码」绑 invoice_code、invoice_kind 渲染为「发票形态」——纯 UI 绑定细节，app.js 可查"
+    },
+    {
+      "n": 21,
+      "item": "PC 已升到 v0.1.19（97fdc7e）并完成一次性回填，服务已停（版本/服务状态快照，会过期）"
+    },
+    {
+      "n": 22,
+      "item": "用户要求先确认需求、不改代码，未到可开工程度不动手（与已有全局偏好重复）"
+    },
+    {
+      "n": 22,
+      "item": "发票删除功能现状：v0.1.6 已有管理员软删除，界面按钮叫「删除档案」（代码可查）"
+    },
+    {
+      "n": 23,
+      "item": "上传页拖拽提示的浏览器用例：离线桩 /api/*，不依赖后端和数据库（一次性测试细节）"
+    },
+    {
+      "n": 23,
+      "item": "v0.1.22 库现状快照（2026-10-27）：档案 9,546，供应商未归集 0（一次性状态）"
+    },
+    {
+      "n": 23,
+      "item": "生产已升级到 v0.1.22（2026-10-27），拖拽提示需业务同事 Ctrl+F5 验证（版本状态+一次性任务）"
+    },
+    {
+      "n": 26,
+      "item": "SAP 投递文档复核：六个点名疑点全部成立，行号抽查未发现指错（一次性复核结果）"
+    }
+  ]
+}
