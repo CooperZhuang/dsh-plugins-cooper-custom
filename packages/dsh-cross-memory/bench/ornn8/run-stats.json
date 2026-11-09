@@ -2,56 +2,56 @@
   "personas": {
     "P20": {
       "extractions": 442,
-      "stored": 660,
-      "empty": 114,
+      "stored": 556,
+      "empty": 116,
       "exams": 170,
       "answers": 170
     },
     "P14": {
       "extractions": 350,
-      "stored": 1057,
-      "empty": 35,
+      "stored": 906,
+      "empty": 37,
       "exams": 82,
       "answers": 82
     },
     "P17": {
       "extractions": 239,
-      "stored": 286,
-      "empty": 118,
+      "stored": 244,
+      "empty": 121,
       "exams": 172,
       "answers": 172
     },
-    "P12": {
-      "extractions": 378,
-      "stored": 476,
-      "empty": 61,
-      "exams": 79,
-      "answers": 79
-    },
     "P16": {
       "extractions": 204,
-      "stored": 267,
-      "empty": 69,
+      "stored": 236,
+      "empty": 72,
       "exams": 123,
       "answers": 123
     },
+    "P12": {
+      "extractions": 378,
+      "stored": 393,
+      "empty": 81,
+      "exams": 79,
+      "answers": 79
+    },
     "P01": {
       "extractions": 145,
-      "stored": 151,
-      "empty": 67,
+      "stored": 138,
+      "empty": 71,
       "exams": 88,
       "answers": 88
     }
   },
   "llm_calls": {
     "extract": {
-      "input": 5987628,
-      "output": 669391,
+      "input": 6190077,
+      "output": 596302,
       "calls": 1308
     },
     "answer": {
-      "input": 2309120,
-      "output": 22064,
+      "input": 2403741,
+      "output": 24283,
       "calls": 714
     }
   }
