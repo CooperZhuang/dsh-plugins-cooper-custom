@@ -1,0 +1,264 @@
+{
+  "method": "per-turn extraction",
+  "goldSet": "fixed-gold.json",
+  "sessions": 50,
+  "gold": 218,
+  "covered": 154,
+  "coverage": 0.7064,
+  "windowExtraction": {
+    "covered": 151,
+    "coverage": 0.6927
+  },
+  "perSession": [
+    {
+      "n": 0,
+      "gold": 3,
+      "covered": 3
+    },
+    {
+      "n": 1,
+      "gold": 0,
+      "covered": 0
+    },
+    {
+      "n": 2,
+      "gold": 1,
+      "covered": 1
+    },
+    {
+      "n": 3,
+      "gold": 2,
+      "covered": 0
+    },
+    {
+      "n": 4,
+      "gold": 1,
+      "covered": 0
+    },
+    {
+      "n": 5,
+      "gold": 1,
+      "covered": 0
+    },
+    {
+      "n": 6,
+      "gold": 9,
+      "covered": 7
+    },
+    {
+      "n": 7,
+      "gold": 8,
+      "covered": 7
+    },
+    {
+      "n": 8,
+      "gold": 3,
+      "covered": 3
+    },
+    {
+      "n": 9,
+      "gold": 2,
+      "covered": 1
+    },
+    {
+      "n": 10,
+      "gold": 5,
+      "covered": 4
+    },
+    {
+      "n": 11,
+      "gold": 5,
+      "covered": 2
+    },
+    {
+      "n": 12,
+      "gold": 12,
+      "covered": 10
+    },
+    {
+      "n": 13,
+      "gold": 9,
+      "covered": 7
+    },
+    {
+      "n": 14,
+      "gold": 5,
+      "covered": 5
+    },
+    {
+      "n": 15,
+      "gold": 5,
+      "covered": 3
+    },
+    {
+      "n": 16,
+      "gold": 4,
+      "covered": 0
+    },
+    {
+      "n": 17,
+      "gold": 4,
+      "covered": 3
+    },
+    {
+      "n": 18,
+      "gold": 8,
+      "covered": 7
+    },
+    {
+      "n": 19,
+      "gold": 4,
+      "covered": 2
+    },
+    {
+      "n": 20,
+      "gold": 2,
+      "covered": 2
+    },
+    {
+      "n": 21,
+      "gold": 5,
+      "covered": 4
+    },
+    {
+      "n": 22,
+      "gold": 3,
+      "covered": 3
+    },
+    {
+      "n": 23,
+      "gold": 2,
+      "covered": 2
+    },
+    {
+      "n": 24,
+      "gold": 5,
+      "covered": 3
+    },
+    {
+      "n": 25,
+      "gold": 4,
+      "covered": 3
+    },
+    {
+      "n": 26,
+      "gold": 3,
+      "covered": 0
+    },
+    {
+      "n": 27,
+      "gold": 1,
+      "covered": 0
+    },
+    {
+      "n": 28,
+      "gold": 4,
+      "covered": 4
+    },
+    {
+      "n": 29,
+      "gold": 5,
+      "covered": 5
+    },
+    {
+      "n": 30,
+      "gold": 2,
+      "covered": 2
+    },
+    {
+      "n": 31,
+      "gold": 8,
+      "covered": 8
+    },
+    {
+      "n": 32,
+      "gold": 6,
+      "covered": 3
+    },
+    {
+      "n": 33,
+      "gold": 4,
+      "covered": 4
+    },
+    {
+      "n": 34,
+      "gold": 4,
+      "covered": 3
+    },
+    {
+      "n": 35,
+      "gold": 3,
+      "covered": 3
+    },
+    {
+      "n": 36,
+      "gold": 4,
+      "covered": 3
+    },
+    {
+      "n": 37,
+      "gold": 3,
+      "covered": 1
+    },
+    {
+      "n": 38,
+      "gold": 3,
+      "covered": 3
+    },
+    {
+      "n": 39,
+      "gold": 6,
+      "covered": 5
+    },
+    {
+      "n": 40,
+      "gold": 3,
+      "covered": 3
+    },
+    {
+      "n": 41,
+      "gold": 5,
+      "covered": 3
+    },
+    {
+      "n": 42,
+      "gold": 10,
+      "covered": 9
+    },
+    {
+      "n": 43,
+      "gold": 6,
+      "covered": 4
+    },
+    {
+      "n": 44,
+      "gold": 1,
+      "covered": 1
+    },
+    {
+      "n": 45,
+      "gold": 3,
+      "covered": 1
+    },
+    {
+      "n": 46,
+      "gold": 4,
+      "covered": 3
+    },
+    {
+      "n": 47,
+      "gold": 2,
+      "covered": 2
+    },
+    {
+      "n": 48,
+      "gold": 2,
+      "covered": 2
+    },
+    {
+      "n": 49,
+      "gold": 14,
+      "covered": 0
+    }
+  ]
+}
