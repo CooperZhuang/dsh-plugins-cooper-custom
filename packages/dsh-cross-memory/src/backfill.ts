@@ -284,7 +284,9 @@ export async function findSessionLogs(sessionsDir: string): Promise<{ file: stri
     }
     for (const entry of entries) {
       const path = join(dir, entry.name)
-      if (entry.isDirectory()) {
+      // Symlinks are followed: a workspace whose logs are linked in (a test
+      // scratch home, a relocated store) is still a history worth reading.
+      if (entry.isDirectory() || entry.isSymbolicLink()) {
         await walk(path, depth + 1)
         continue
       }

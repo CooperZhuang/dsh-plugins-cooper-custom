@@ -295,11 +295,8 @@ export async function collectRagExcerpts(
   // Newest first: the same score prefers the later conversation, which is the one
   // a follow-up is more likely to continue.
   const ordered = logs.sort((left, right) => right.modifiedAt - left.modifiedAt).slice(0, maxSessions)
-  const out: RawExcerpt[] = []
-  const seen = new Set<string>()
-  let used = 0
+  const candidates: { excerpt: RawExcerpt; score: number }[] = []
   for (const log of ordered) {
-    if (out.length >= maxExcerpts) break
     const sessionId = normalizeSession(basename(dirname(log.file)))
     // The session asking must not answer itself from its own log: the log holds
     // the very turns being recalled, which reads as a perfect match and crowds
@@ -307,18 +304,79 @@ export async function collectRagExcerpts(
     if (excludeSessionId !== undefined && sessionId === normalizeSession(excludeSessionId)) continue
     const messages = await readTranscript(sessionsDir, sessionId)
     if (messages === undefined) continue
-    for (const excerpt of selectExcerpts(messages, query, { maxExcerpts, maxChars, maxBytes })) {
-      if (out.length >= maxExcerpts) break
-      const key = excerpt.text.slice(0, 80)
-      if (seen.has(key)) continue
-      const cost = Buffer.byteLength(excerpt.text, 'utf8') + 16
-      if (used + cost > maxBytes) continue
-      seen.add(key)
-      used += cost
-      out.push({ ...excerpt, sessionId })
+    // Chunk by TURN, not by message: the question that matches a passage is the
+    // one the answer sits under, and a per-message excerpt can only ever return
+    // the question back. The turn is the unit a recall is about.
+    for (const item of selectTurnExcerpts(messages, query, { maxExcerpts, maxChars, maxBytes })) {
+      candidates.push({ excerpt: { ...item.excerpt, sessionId }, score: item.score })
     }
   }
+  // Merge across sessions by score: one conversation that happens to hold several
+  // matching turns must not crowd out the conversation that holds the answer.
+  candidates.sort((left, right) => right.score - left.score)
+  const out: RawExcerpt[] = []
+  const seen = new Set<string>()
+  let used = 0
+  for (const item of candidates) {
+    if (out.length >= maxExcerpts) break
+    const key = item.excerpt.text.slice(0, 80)
+    if (seen.has(key)) continue
+    const cost = Buffer.byteLength(item.excerpt.text, 'utf8') + 16
+    if (used + cost > maxBytes) continue
+    seen.add(key)
+    used += cost
+    out.push(item.excerpt)
+  }
   return out
+}
+
+/** One user turn and the assistant turns that answered it. */
+export interface TurnChunk {
+  readonly seq: number
+  readonly text: string
+}
+
+/** Group a transcript into user→assistant turns, dropping turns with no prose. */
+export function turnChunks(messages: readonly BackfillMessage[]): TurnChunk[] {
+  const chunks: TurnChunk[] = []
+  let current: { seq: number; lines: string[] } | undefined
+  for (const message of messages) {
+    if (message.role === 'user') {
+      if (current !== undefined && current.lines.length > 0) chunks.push({ seq: current.seq, text: current.lines.join('\n') })
+      current = { seq: message.seq, lines: [message.text] }
+    } else if (current !== undefined) {
+      current.lines.push(message.text)
+    }
+  }
+  if (current !== undefined && current.lines.length > 0) chunks.push({ seq: current.seq, text: current.lines.join('\n') })
+  return chunks
+}
+
+/** Select the best-matching turns, same scorer as {@link selectExcerpts}. */
+function selectTurnExcerpts(
+  messages: readonly BackfillMessage[],
+  query: string,
+  limits: RawRecallLimits = {},
+): { excerpt: RawExcerpt; score: number }[] {
+  const maxExcerpts = limits.maxExcerpts ?? 3
+  const maxChars = limits.maxChars ?? 400
+  const queryTokens = tokens(query)
+  if (queryTokens.size === 0) return []
+  const scored: { chunk: TurnChunk; score: number }[] = []
+  for (const chunk of turnChunks(messages)) {
+    if (chunk.text.trim().length < 24) continue
+    const window = bestWindow(chunk.text.trim(), queryTokens, maxChars)
+    if (window.score < 2) continue
+    scored.push({ chunk, score: window.score })
+  }
+  scored.sort((left, right) => right.score - left.score)
+  // Scored across sessions: the caller merges, so this pass is not bounded by the
+  // per-session excerpt count — a session that fills the budget on its own would
+  // otherwise hide every other session from the ranking.
+  return scored.slice(0, maxExcerpts).map((item) => {
+    const text = redactSecrets(item.chunk.text.trim()).replace(/\s+/gu, ' ').slice(0, maxChars)
+    return { excerpt: { sessionId: '', seq: item.chunk.seq, role: 'assistant' as const, text }, score: item.score }
+  }).filter((item) => item.excerpt.text.length >= 24)
 }
 
 export async function collectExcerpts(
