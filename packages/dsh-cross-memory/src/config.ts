@@ -243,10 +243,10 @@ export const DEFAULT_RAW_RECALL_BYTES = 2_400
 export const DEFAULT_RAW_RECALL_EXCERPTS = 3
 
 export const DEFAULT_RAG_RECALL = true
-export const DEFAULT_RAG_RECALL_BYTES = 2_400
-export const DEFAULT_RAG_RECALL_EXCERPTS = 4
+export const DEFAULT_RAG_RECALL_BYTES = 12_000
+export const DEFAULT_RAG_RECALL_EXCERPTS = 6
 export const DEFAULT_RAG_RECALL_SESSIONS = 0
-export const DEFAULT_RAG_RECALL_CHARS = 600
+export const DEFAULT_RAG_RECALL_CHARS = 2_000
 
 /**
  * Default number of distinct strong-field terms a recall needs.
