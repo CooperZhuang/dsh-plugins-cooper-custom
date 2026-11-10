@@ -28,6 +28,7 @@ on:
           - packages/dsh-folder-path
           - packages/dsh-rtk-slim
           - packages/dsh-open-in-dsh
+          - packages/dsh-workspace-sort
       dry-run:
         description: 只做 npm publish --dry-run，不真正发布
         required: false
