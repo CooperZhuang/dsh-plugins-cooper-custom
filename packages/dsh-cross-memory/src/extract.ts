@@ -963,8 +963,11 @@ export type ExtractionOutcome =
  * @returns the cap to actually use.
  */
 export function effectiveMaxMemories(requested: number, messages: number): number {
-  if (requested <= 0) return requested
-  return Math.min(requested * 2, Math.max(requested, Math.ceil(messages / 12)))
+  // Scaling the cap with the window size was tried and REVERTED: asking for more
+  // memories on a big window produced more noise, and the noise displaced the
+  // good entries — measured on the fixed gold set, 69.3% -> 65.1%.
+  void messages
+  return requested
 }
 
 export async function runExtraction(llm: LlmRuntime, request: ExtractionRequest): Promise<ExtractionOutcome> {
