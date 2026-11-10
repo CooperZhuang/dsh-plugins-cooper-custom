@@ -1417,7 +1417,7 @@ export class MemoriesRuntime {
       // Nothing in the store answers this turn. The raw channel still can: the
       // fact the extraction dropped is in the transcript, not in the store.
       if (ragExcerpts.length > 0) {
-        const text = renderRecall([], this.settings.recallMaxBytes, [], ragExcerpts)
+        const text = renderRecall([], this.settings.recallMaxBytes + this.settings.ragRecallBytes, [], ragExcerpts)
         if (text !== undefined) {
           this.recallCounts.set(session, used + 1)
           this.log.info('dsh-cross-memory: session %s recalled no memory, used %d raw excerpt(s) from the full history',
@@ -1572,7 +1572,12 @@ export class MemoriesRuntime {
     const excerpts = this.settings.rawRecall && this.settings.rawRecallBytes > 0
       ? await this.rawExcerpts(picked.map((item) => item.entry), query)
       : []
-    const text = renderRecall(picked.map((item) => item.entry), this.settings.recallMaxBytes, [], [...excerpts, ...ragExcerpts])
+    // The raw half has its own budget: the memory half's `recallMaxBytes` is
+    // spent on memories, and sharing it would drop every excerpt whenever a
+    // conversation recalls several entries — measured, the excerpts were cut in
+    // exactly the turns that needed them.
+    const recallBudget = this.settings.recallMaxBytes + (ragExcerpts.length > 0 ? this.settings.ragRecallBytes : 0)
+    const text = renderRecall(picked.map((item) => item.entry), recallBudget, [], [...excerpts, ...ragExcerpts])
     if (text === undefined) return undefined
     // Info, not `decision`: a delta is the rarer half of this path — at most
     // `recallMaxPerConversation` per conversation — and the silence below is the
