@@ -1,6 +1,6 @@
 {
   "name": "dsh-workspace-sort",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "按每个工作区最近一次人工提问的时间重排左侧工作区顺序（树形分组下按子树汇总），顺序写入宿主。Reorders the sidebar workspaces by their most recent human prompt and writes the order to the host.",
   "type": "module",

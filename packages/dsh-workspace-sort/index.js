@@ -1,31 +1,47 @@
 /**
  * Host half of `dsh-workspace-sort`.
  *
- * The sidebar order itself is a Client-side job: only the browser holds both
- * the Workspace order (`ctx.workspaces.list`) and the Session summaries whose
+ * The ordering itself is a Client job: only the browser holds both the
+ * Workspace order (`ctx.workspaces.list`) and the Session summaries whose
  * `updatedAt` is the last human prompt, and only the browser can call the
- * durable `workspaces.insertBefore`. What the Host still owes the browser half
- * is configuration and an audit trail, so this file is deliberately small:
+ * durable `workspaces.insertBefore`. The Host owes the browser three things and
+ * nothing else:
  *
- *   * `GET  /dsh-workspace-sort/api/state` — the resolved knobs, so the browser
- *     half never hard-codes a default that the profile cannot change;
- *   * `POST /dsh-workspace-sort/api/state` — the last reorder decision, kept in
- *     memory and echoed back by `GET`, so a reload or `curl` can answer "why did
- *     my workspace list move?";
- *   * one log line per applied reorder, because a durable order write that only
- *     exists in a page's memory is not auditable.
+ *   * the resolved knobs (`GET /dsh-workspace-sort/api/state`), so defaults live
+ *     in the profile instead of the bundle;
+ *   * the user's pins and rule switches, persisted as plain JSON under
+ *     `$DSH_HOME/workspace-sort/prefs.json` (`GET` on the state route,
+ *     `POST /dsh-workspace-sort/api/prefs` to write). They are stored here
+ *     rather than in `localStorage` because the desktop Web server binds an
+ *     ephemeral port (`port: 0`), so the page origin — and with it every
+ *     `localStorage` entry — changes on each restart;
+ *   * an audit trail: the last reorder decision is kept in memory for `GET`, and
+ *     every applied reorder logs one line.
+ *
+ * Deliberately absent: file moves, directory renames, Workspace removal,
+ * session migration, process spawning. This plugin changes ordering state only.
  *
  * `enabled: false` mounts this half inert: no route is registered, so the
  * browser half stays silent rather than inventing its own defaults.
  *
  * @module dsh-workspace-sort
  */
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { dirname, join } from 'node:path'
 
-/** Route path, hand-mirrored in `src/client.js`: the two halves cannot import each other. */
+/** Route paths, hand-mirrored in `src/client.js`: the two halves cannot import each other. */
 export const STATE_ROUTE = '/dsh-workspace-sort/api/state'
+export const PREFS_ROUTE = '/dsh-workspace-sort/api/prefs'
 
-/** A reorder report is a handful of ids; anything larger is not this request. */
-const MAX_REPORT_BYTES = 64 * 1024
+/** A reorder report or a pin set is small; anything larger is not this request. */
+const MAX_BODY_BYTES = 64 * 1024
+
+/** A browser cannot pin more Workspaces than the registry has; this is a sanity cap. */
+const MAX_PINS = 500
+
+/** Defaults mirrored in the browser bundle, used before the file exists. */
+const DEFAULT_PREFS = { auto: true, runningFirst: false, pins: [] }
 
 /**
  * The part of the profile row's `config` block this plugin reads.
@@ -33,7 +49,16 @@ const MAX_REPORT_BYTES = 64 * 1024
  * @typedef {object} WorkspaceSortConfig
  * @property {boolean} [enabled] Mount the plugin at all (false leaves the order untouched).
  * @property {boolean} [aggregate] Rank a container by its whole subtree (default true).
- * @property {boolean} [initialSort] Apply the activity order as soon as a page loads (default true).
+ * @property {boolean} [initialSort] Apply the order as soon as a page loads (default true).
+ */
+
+/**
+ * The browser-side preferences this plugin persists.
+ *
+ * @typedef {object} WorkspaceSortPrefs
+ * @property {boolean} auto Resolve the order automatically on the next prompt.
+ * @property {boolean} runningFirst Lead the unpinned partition with running Workspaces.
+ * @property {string[]} pins Workspace ids in pin order.
  */
 
 /**
@@ -58,15 +83,27 @@ export function apply(ctx, config = {}) {
     initialSort: config.initialSort !== false,
   }
 
+  let prefs = { ...DEFAULT_PREFS }
   let lastReport
+  /** The first read must settle before any handler answers, or a GET could report defaults. */
+  const ready = readStoredPrefs(ctx.logger).then((stored) => {
+    prefs = stored
+  })
 
-  const handler = async (request, response) => {
+  /**
+   * Answer one request on the state route: knobs, prefs, and the last decision.
+   *
+   * @param {import('node:http').IncomingMessage} request - the route request.
+   * @param {import('node:http').ServerResponse} response - the route response.
+   */
+  const stateHandler = async (request, response) => {
     if (!isLoopback(request)) {
       sendJson(response, 403, { ok: false, reason: 'loopback-only' })
       return
     }
     if (request.method === 'GET' || request.method === 'HEAD') {
-      sendJson(response, 200, { ok: true, config: resolved, lastReport })
+      await ready
+      sendJson(response, 200, { ok: true, config: resolved, prefs, lastReport })
       return
     }
     if (request.method !== 'POST') {
@@ -92,24 +129,124 @@ export function apply(ctx, config = {}) {
         options.aggregate !== false,
         options.initialSort !== false,
       )
-      sendJson(response, 200, { ok: true, config: resolved })
+      sendJson(response, 200, { ok: true })
       return
     }
     const moves = Array.isArray(body.moves) ? body.moves : []
     ctx.logger?.info?.(
-      'dsh-workspace-sort: reordered %d workspace(s), newest activity %s',
+      'dsh-workspace-sort: reordered %d workspace(s), newest activity %s%s',
       moves.length,
       typeof body.newest === 'number' && body.newest > 0 ? new Date(body.newest).toISOString() : 'none',
+      body.manual === true ? ' (manual)' : '',
     )
-    sendJson(response, 200, { ok: true, config: resolved })
+    sendJson(response, 200, { ok: true })
+  }
+
+  /**
+   * Persist the browser's prefs. The file is written atomically: tmp then rename,
+   * so a crash never leaves a half-written pin set.
+   *
+   * @param {import('node:http').IncomingMessage} request - the route request.
+   * @param {import('node:http').ServerResponse} response - the route response.
+   */
+  const prefsHandler = async (request, response) => {
+    if (!isLoopback(request)) {
+      sendJson(response, 403, { ok: false, reason: 'loopback-only' })
+      return
+    }
+    if (request.method !== 'POST') {
+      sendJson(response, 405, { ok: false, reason: 'method-not-allowed' }, { allow: ['POST'] })
+      return
+    }
+    let body
+    try {
+      body = await readJsonBody(request)
+    } catch (error) {
+      sendJson(response, 400, { ok: false, reason: 'bad-request', message: messageOf(error) })
+      return
+    }
+    const next = sanitizePrefs(body)
+    try {
+      await writeStoredPrefs(next)
+    } catch (error) {
+      ctx.logger?.warn?.('dsh-workspace-sort: could not persist prefs: %o', error)
+      sendJson(response, 500, { ok: false, reason: 'write-failed', message: messageOf(error) })
+      return
+    }
+    prefs = next
+    sendJson(response, 200, { ok: true, prefs })
   }
 
   ctx.inject(['webServer'], (host) => {
-    host.effect(
-      () => host.webServer.register({ kind: 'exact', path: STATE_ROUTE, handler }),
-      'dsh-workspace-sort: state route',
-    )
+    host.effect(() => {
+      const offState = host.webServer.register({ kind: 'exact', path: STATE_ROUTE, handler: stateHandler })
+      const offPrefs = host.webServer.register({ kind: 'exact', path: PREFS_ROUTE, handler: prefsHandler })
+      return () => {
+        offState()
+        offPrefs()
+      }
+    }, 'dsh-workspace-sort: routes')
   })
+}
+
+/**
+ * Where this plugin keeps its own small state file.
+ *
+ * @returns the absolute path of `prefs.json`.
+ */
+function prefsFile() {
+  const home =
+    typeof process.env.DSH_HOME === 'string' && process.env.DSH_HOME.length > 0
+      ? process.env.DSH_HOME
+      : join(homedir(), '.dsh')
+  return join(home, 'workspace-sort', 'prefs.json')
+}
+
+/**
+ * Reduce arbitrary JSON to the preference shape, dropping anything unusable.
+ *
+ * @param value - whatever the browser (or a damaged file) supplied.
+ * @returns a valid {@link WorkspaceSortPrefs}.
+ */
+function sanitizePrefs(value) {
+  const record = value !== null && typeof value === 'object' ? value : {}
+  const pins = Array.isArray(record.pins)
+    ? record.pins.filter((id) => typeof id === 'string' && id.length > 0).slice(0, MAX_PINS)
+    : []
+  return {
+    auto: record.auto !== false,
+    runningFirst: record.runningFirst === true,
+    pins: [...new Set(pins)],
+  }
+}
+
+/**
+ * Read the stored prefs, falling back to defaults on a missing or damaged file.
+ *
+ * @param {HostContext['logger']} logger - the plugin logger.
+ * @returns the stored {@link WorkspaceSortPrefs}.
+ */
+async function readStoredPrefs(logger) {
+  try {
+    return sanitizePrefs(JSON.parse(await readFile(prefsFile(), 'utf8')))
+  } catch (error) {
+    if (error?.code !== 'ENOENT') logger?.warn?.('dsh-workspace-sort: prefs unreadable, using defaults: %o', error)
+    return { ...DEFAULT_PREFS }
+  }
+}
+
+/**
+ * Write the prefs atomically (tmp file then rename).
+ *
+ * @param prefs - the value to store.
+ * @returns a promise that settles once the rename is durable.
+ */
+async function writeStoredPrefs(prefs) {
+  const file = prefsFile()
+  await mkdir(dirname(file), { recursive: true })
+  const tmp = `${file}.tmp`
+  await writeFile(tmp, `${JSON.stringify(prefs, null, 1)}\n`, 'utf8')
+  await rename(tmp, file)
 }
 
 /**
@@ -139,7 +276,7 @@ async function readJsonBody(request) {
   let bytes = 0
   for await (const chunk of request) {
     bytes += chunk.length
-    if (bytes > MAX_REPORT_BYTES) throw new Error('report too large')
+    if (bytes > MAX_BODY_BYTES) throw new Error('body too large')
     chunks.push(chunk)
   }
   if (chunks.length === 0) return null

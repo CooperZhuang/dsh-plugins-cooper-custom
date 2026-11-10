@@ -72,9 +72,9 @@ dsh plugin --profile desktop add dsh-cross-memory
 
 ### dsh-workspace-sort
 
-- 侧栏「视图选项 → 最近更新」只排每个工作区内部的会话；工作区本身的顺序只有拖拽。本插件补这一层：每个工作区按「最近一次你发出的提问」排序，容器目录按整个子树汇总。
-- 排序走官方 `workspaces.insertBefore`，写进宿主的 `workspaces` 持久顺序（与拖拽等价）；手动拖拽优先，直到下一次提问才重排。
-- 首次装载会按活动把当前列表排一次；`enabled` / `aggregate` / `initialSort` 三项配置在插件的 load 行里。
+- 侧栏「视图选项 → 最近更新」只排每个工作区内部的会话；工作区本身的顺序只有拖拽。本插件补这一层：按最近一次人工提问排序、容器目录按子树汇总、可置顶、可选运行中优先。
+- 排序走官方 `workspaces.insertBefore`，写进宿主持久顺序（与拖拽等价）；手动拖拽优先到下一次提问。面板挂在 `sidebar.footer.action` + `shell.overlay` 两个官方 Slot 上，不查 DOM 类名。
+- 只做排序：没有路径迁移、没有移除工作区、没有打开目录、不起子进程。置顶与开关存 `$DSH_HOME/workspace-sort/prefs.json`（桌面端端口随机，localStorage 会丢）。
 
 ## 在插件市场里
 

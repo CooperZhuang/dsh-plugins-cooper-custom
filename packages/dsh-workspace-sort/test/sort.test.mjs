@@ -4,6 +4,7 @@ import test from 'node:test'
 import {
   activityByWorkspace,
   desiredOrder,
+  isRunning,
   newestActivity,
   owningParent,
   ownActivity,
@@ -15,7 +16,8 @@ import {
 const workspace = (id, path, sessionIds = []) => ({ workspaceId: id, path, sessionIds })
 
 /** Build Session summaries keyed by id; `blank` marks the unsent New Session draft. */
-const summaries = (entries) => Object.fromEntries(entries.map(([id, updatedAt, blank]) => [id, { updatedAt, blank }]))
+const summaries = (entries) =>
+  Object.fromEntries(entries.map(([id, updatedAt, blank, running]) => [id, { updatedAt, blank, running: running === true }]))
 
 /** Apply `insertBefore(id, before)` moves to a local order, the way the Host does. */
 const applyMoves = (order, moves) => {
@@ -158,4 +160,45 @@ test('newestActivity reports the freshest stamp, 0 when nothing counts', () => {
   const rows = [workspace('a', '/a', ['x']), workspace('b', '/b', ['y'])]
   assert.equal(newestActivity(activityByWorkspace(rows, summaries([['x', 10], ['y', 30]]))), 30)
   assert.equal(newestActivity(activityByWorkspace(rows, {})), 0)
+})
+
+test('pins lead in pin order and keep their place regardless of activity', () => {
+  const rows = [workspace('a', '/a', ['x']), workspace('b', '/b', ['y']), workspace('c', '/c', ['z'])]
+  const byId = summaries([
+    ['x', 100],
+    ['y', 300],
+    ['z', 200],
+  ])
+  // No pins: pure activity.
+  assert.deepEqual(desiredOrder(rows, byId), ['b', 'c', 'a'])
+  // Pins keep their own order ahead of the activity ranking.
+  assert.deepEqual(desiredOrder(rows, byId, { pins: ['a', 'c'] }), ['a', 'c', 'b'])
+  // A pin for a Workspace that no longer exists is ignored, not emitted.
+  assert.deepEqual(desiredOrder(rows, byId, { pins: ['ghost', 'b'] }), ['b', 'c', 'a'])
+})
+
+test('running-first leads the unpinned partition without touching pins', () => {
+  const rows = [workspace('idle-old', '/i1', ['i1']), workspace('run', '/r', ['r']), workspace('idle-new', '/i2', ['i2'])]
+  const byId = summaries([
+    ['i1', 100],
+    ['r', 50, false, true],
+    ['i2', 200],
+  ])
+  assert.deepEqual(desiredOrder(rows, byId), ['idle-new', 'idle-old', 'run'])
+  assert.deepEqual(desiredOrder(rows, byId, { runningFirst: true }), ['run', 'idle-new', 'idle-old'])
+  assert.deepEqual(
+    desiredOrder(rows, byId, { runningFirst: true, pins: ['idle-old'] }),
+    ['idle-old', 'run', 'idle-new'],
+  )
+})
+
+test('isRunning only looks at the Workspace own members', () => {
+  const rows = [workspace('a', '/a', ['x']), workspace('b', '/b', ['y'])]
+  const byId = summaries([
+    ['x', 1, false, true],
+    ['y', 1],
+  ])
+  assert.equal(isRunning(rows[0], byId), true)
+  assert.equal(isRunning(rows[1], byId), false)
+  assert.equal(isRunning(workspace('empty', '/e'), byId), false)
 })

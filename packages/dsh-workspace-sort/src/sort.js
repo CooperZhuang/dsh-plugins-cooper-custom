@@ -106,22 +106,52 @@ export function activityByWorkspace(workspaces, byId, options = {}) {
 }
 
 /**
- * The Workspace ids in display order: newest activity first.
+ * Whether any Session of this Workspace is running right now.
  *
- * Ties keep the current relative order, which is what keeps an untouched
- * Workspace from wandering between two runs.
+ * @param workspace - the Workspace row.
+ * @param byId - Session summaries keyed by Session id.
+ * @returns true when at least one member Session reports `running`.
+ */
+export function isRunning(workspace, byId) {
+  const ids = Array.isArray(workspace?.sessionIds) ? workspace.sessionIds : []
+  for (const id of ids) if (byId?.[id]?.running === true) return true
+  return false
+}
+
+/**
+ * The Workspace ids in display order.
+ *
+ * Pinned Workspaces keep their pin order at the front; the rest follow activity.
+ * With `runningFirst` a Workspace holding a running Session leads the unpinned
+ * partition, so a long agent run does not sink out of sight. Ties keep the
+ * current relative order, which is what keeps an untouched Workspace from
+ * wandering between two runs.
  *
  * @param workspaces - Workspaces in Host order.
  * @param byId - Session summaries keyed by Session id.
- * @param options - forwarded to `activityByWorkspace`.
- * @returns Workspace ids sorted by activity, newest first.
+ * @param options - `aggregate` (forwarded), `pins` in pin order, `runningFirst`.
+ * @returns Workspace ids sorted for display.
  */
 export function desiredOrder(workspaces, byId, options = {}) {
   const activity = activityByWorkspace(workspaces, byId, options)
-  return workspaces
-    .map((workspace, index) => ({ id: workspace.workspaceId, index, score: activity.get(workspace.workspaceId) ?? 0 }))
-    .sort((left, right) => right.score - left.score || left.index - right.index)
-    .map((row) => row.id)
+  const pins = Array.isArray(options.pins) ? options.pins : []
+  const runningFirst = options.runningFirst === true
+  const known = new Map(workspaces.map((workspace) => [workspace.workspaceId, workspace]))
+  const pinnedRows = pins.map((id) => known.get(id)).filter((workspace) => workspace !== undefined)
+  const pinnedIds = new Set(pinnedRows.map((workspace) => workspace.workspaceId))
+  const rest = workspaces
+    .map((workspace, index) => ({
+      workspace,
+      index,
+      score: activity.get(workspace.workspaceId) ?? 0,
+      running: runningFirst && isRunning(workspace, byId),
+    }))
+    .filter((row) => !pinnedIds.has(row.workspace.workspaceId))
+    .sort(
+      (left, right) =>
+        Number(right.running) - Number(left.running) || right.score - left.score || left.index - right.index,
+    )
+  return [...pinnedRows.map((workspace) => workspace.workspaceId), ...rest.map((row) => row.workspace.workspaceId)]
 }
 
 /**
