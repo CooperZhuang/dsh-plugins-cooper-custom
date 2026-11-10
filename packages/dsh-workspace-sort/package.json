@@ -1,0 +1,62 @@
+{
+  "name": "dsh-workspace-sort",
+  "version": "0.1.0",
+  "private": true,
+  "description": "按每个工作区最近一次人工提问的时间重排左侧工作区顺序（树形分组下按子树汇总），顺序写入宿主。Reorders the sidebar workspaces by their most recent human prompt and writes the order to the host.",
+  "type": "module",
+  "main": "index.js",
+  "icon": "./icon.svg",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./lib/client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "lib/client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node scripts/build-client.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=20",
+    "dsh": "^0.2.1-0 || ^0.2.2-0"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "dsh-plugin",
+    "client-plugin",
+    "cordis-plugin",
+    "workspace",
+    "sidebar",
+    "sort"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CooperZhuang/dsh-plugins-cooper-custom.git",
+    "directory": "packages/dsh-workspace-sort"
+  },
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-api-workspace-controller",
+        "@deepseek-ai/dsh-client-ui-session"
+      ]
+    }
+  }
+}

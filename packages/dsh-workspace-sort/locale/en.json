@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Workspace activity sort",
+    "description": "Reorders the sidebar workspaces by their most recent human prompt, aggregating a container folder over its whole subtree, and writes the order to the host."
+  }
+}
