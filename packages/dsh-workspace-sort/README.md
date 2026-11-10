@@ -1,4 +1,4 @@
-# dsh-workspace-sort
+# @cooper-zhuang/dsh-workspace-sort
 
 DSH（DeepSeek Harness）Web 插件：给左侧「工作区」那一层补排序能力——按最近一次人工提问自动排、置顶几个常驻、运行中的排前面，并提供一个只看排序的小面板。
 

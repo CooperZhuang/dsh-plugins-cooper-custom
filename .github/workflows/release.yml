@@ -12,7 +12,10 @@ name: Release
 on:
   push:
     tags:
+      # 无作用域包：<pkg>@<version>
       - 'dsh-*@*'
+      # 作用域包：@<scope>/<pkg>@<version>（例如 @cooper-zhuang/dsh-workspace-sort@0.2.0）
+      - '@*/*@*'
   workflow_dispatch:
     inputs:
       package:
@@ -69,7 +72,25 @@ jobs:
             dry="${{ inputs.dry-run }}"
           else
             tag="${GITHUB_REF_NAME}"
-            pkg="${tag%@*}"
+            # tag 的形式是 <包名>@<版本>，包名可能是作用域名（@scope/pkg），
+            # 目录名不等于包名，所以按 packages/*/package.json 的 name 反查目录。
+            name="${tag%@*}"
+            pkg="$(node -e '
+              const fs = require("fs"), path = require("path");
+              const want = process.argv[1];
+              for (const dir of fs.readdirSync("packages")) {
+                const file = path.join("packages", dir, "package.json");
+                if (!fs.existsSync(file)) continue;
+                if (JSON.parse(fs.readFileSync(file, "utf8")).name === want) {
+                  process.stdout.write(dir);
+                  break;
+                }
+              }
+            ' "$name")"
+            if [ -z "${pkg}" ]; then
+              echo "::error::no package named ${name}"
+              exit 1
+            fi
             dry="false"
           fi
           if [ ! -f "packages/${pkg}/package.json" ]; then

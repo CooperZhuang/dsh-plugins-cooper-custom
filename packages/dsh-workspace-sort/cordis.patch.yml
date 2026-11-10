@@ -21,7 +21,7 @@
 #               loads; false waits for the next human prompt.
 - insert:
     - id: workspace-sort
-      name: dsh-workspace-sort
+      name: "@cooper-zhuang/dsh-workspace-sort"
       # config:
       #   enabled: true
       #   aggregate: true

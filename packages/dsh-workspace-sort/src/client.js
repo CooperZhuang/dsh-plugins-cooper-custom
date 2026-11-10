@@ -30,7 +30,7 @@
  * `src/sort.js` (inlined by `scripts/build-client.mjs`) holds the pure rules.
  */
 window.__ModuleLoader__.load({
-  id: 'dsh-workspace-sort',
+  id: '@cooper-zhuang/dsh-workspace-sort',
   factory(require) {
     'use strict'
 
