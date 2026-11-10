@@ -123,6 +123,8 @@ importers:
         specifier: ^7.0.2
         version: 7.0.2
 
+  packages/dsh-workspace-sort: {}
+
 packages:
 
   '@deepseek-ai/cordis-plugin-loader@1.1.0':
