@@ -242,6 +242,11 @@ export const DEFAULT_RAW_RECALL_BYTES = 2_400
 /** Most raw excerpts one recall block may carry. */
 export const DEFAULT_RAW_RECALL_EXCERPTS = 3
 
+export const DEFAULT_RAG_RECALL = false
+export const DEFAULT_RAG_RECALL_BYTES = 2_400
+export const DEFAULT_RAG_RECALL_EXCERPTS = 4
+export const DEFAULT_RAG_RECALL_SESSIONS = 24
+
 /**
  * Default number of distinct strong-field terms a recall needs.
  *
@@ -461,6 +466,19 @@ export const Config = z.object({
   rawRecall: z.boolean().default(DEFAULT_RAW_RECALL).description('Also put original conversation excerpts from the memory source sessions into the on-demand recall block. Off by default: it injects prose from earlier sessions, and it is read from the persisted session logs on this machine only.').volatile(),
   rawRecallBytes: z.number().default(DEFAULT_RAW_RECALL_BYTES).description('Byte budget for the original-excerpt half of one recall block.').volatile(),
   rawRecallExcerpts: z.number().default(DEFAULT_RAW_RECALL_EXCERPTS).description('Most original conversation excerpts one recall block may carry.').volatile(),
+  /**
+   * Read the raw channel across the whole history, not just the sessions the
+   * recalled memories came from.
+   *
+   * The anchored version only sees a conversation the extraction already picked
+   * a memory from, so anything the extraction dropped is unreachable. This one
+   * scores every persisted session's prose against the query — a real retrieval
+   * path, at the cost of opening more logs.
+   */
+  ragRecall: z.boolean().default(DEFAULT_RAG_RECALL).description('Retrieve original conversation excerpts from ALL persisted sessions, not only the ones the recalled memories came from. Lexical, local-only, no model call.').volatile(),
+  ragRecallBytes: z.number().default(DEFAULT_RAG_RECALL_BYTES).description('Byte budget for the full-history excerpt half of one recall block.').volatile(),
+  ragRecallExcerpts: z.number().default(DEFAULT_RAG_RECALL_EXCERPTS).description('Most full-history excerpts one recall block may carry.').volatile(),
+  ragRecallSessions: z.number().default(DEFAULT_RAG_RECALL_SESSIONS).description('How many session logs the full-history retrieval may open per recall, newest first.').volatile(),
   /** Shortest user turn worth a recall decision. */
   recallMinQueryChars: z.number().default(DEFAULT_RECALL_MIN_QUERY_CHARS).description('Shortest user turn, in characters, that may trigger a recall delta. Short acknowledgements are skipped instead of scanning the store.').volatile(),
   /** Distinct strong-field terms a recall needs before it is credited. */
@@ -603,6 +621,10 @@ export interface MemoriesSettings {
   rawRecall: boolean
   rawRecallBytes: number
   rawRecallExcerpts: number
+  ragRecall: boolean
+  ragRecallBytes: number
+  ragRecallExcerpts: number
+  ragRecallSessions: number
   recallMinQueryChars: number
   recallMinTerms: number
   /** Whether memories written after the summary are announced as a delta. */
@@ -705,6 +727,10 @@ export const MEMORIES_SETTINGS_DEFAULTS: MemoriesSettings = {
   rawRecall: DEFAULT_RAW_RECALL,
   rawRecallBytes: DEFAULT_RAW_RECALL_BYTES,
   rawRecallExcerpts: DEFAULT_RAW_RECALL_EXCERPTS,
+  ragRecall: DEFAULT_RAG_RECALL,
+  ragRecallBytes: DEFAULT_RAG_RECALL_BYTES,
+  ragRecallExcerpts: DEFAULT_RAG_RECALL_EXCERPTS,
+  ragRecallSessions: DEFAULT_RAG_RECALL_SESSIONS,
   recallMinQueryChars: DEFAULT_RECALL_MIN_QUERY_CHARS,
   recallMinTerms: DEFAULT_RECALL_MIN_TERMS,
   injectDelta: DEFAULT_INJECT_DELTA,
@@ -866,6 +892,10 @@ export function normalizeSettings(input: Partial<MemoriesSettings> | undefined):
     rawRecall: value.rawRecall ?? DEFAULT_RAW_RECALL,
     rawRecallBytes: positive(value.rawRecallBytes, DEFAULT_RAW_RECALL_BYTES, 0),
     rawRecallExcerpts: positive(value.rawRecallExcerpts, DEFAULT_RAW_RECALL_EXCERPTS, 0),
+    ragRecall: value.ragRecall ?? DEFAULT_RAG_RECALL,
+    ragRecallBytes: positive(value.ragRecallBytes, DEFAULT_RAG_RECALL_BYTES, 0),
+    ragRecallExcerpts: positive(value.ragRecallExcerpts, DEFAULT_RAG_RECALL_EXCERPTS, 0),
+    ragRecallSessions: positive(value.ragRecallSessions, DEFAULT_RAG_RECALL_SESSIONS, 0),
     recallMinQueryChars: positive(value.recallMinQueryChars, DEFAULT_RECALL_MIN_QUERY_CHARS, 0),
     recallMinTerms: positive(value.recallMinTerms, DEFAULT_RECALL_MIN_TERMS, 0),
     injectDelta: value.injectDelta ?? DEFAULT_INJECT_DELTA,

@@ -58,7 +58,7 @@ import { citationRoots, citationWarning, ignoredUnder, missingCitations } from '
 import { planRetention, retentionKey } from './retention.js'
 import { MemoryLog, createFileSink, createLogExporter, pluginLogger } from './log.js'
 import { collectExtractionWindow, collectWindow, resolveLlmRoute, runExtraction, selectKnownTitles } from './extract.js'
-import { collectExcerpts } from './raw-recall.js'
+import { collectExcerpts, collectRagExcerpts } from './raw-recall.js'
 import type { ExtractionRoute, KnownTitleCandidate } from './extract.js'
 import { decodeSessionLog, findSessionLogs, parseSessionLog, planWindows, zstdAvailable } from './backfill.js'
 import type { BackfillLog, BackfillWindow } from './backfill.js'
@@ -1552,7 +1552,13 @@ export class MemoriesRuntime {
     const excerpts = this.settings.rawRecall && this.settings.rawRecallBytes > 0
       ? await this.rawExcerpts(picked.map((item) => item.entry), query)
       : []
-    const text = renderRecall(picked.map((item) => item.entry), this.settings.recallMaxBytes, [], excerpts)
+    // The full-history channel: the anchored excerpts above only reach sessions
+    // the extraction already picked a memory from, so anything it dropped is
+    // unreachable. This one scores every persisted session against the query.
+    const ragExcerpts = this.settings.ragRecall && this.settings.ragRecallBytes > 0
+      ? await this.ragExcerpts(query)
+      : []
+    const text = renderRecall(picked.map((item) => item.entry), this.settings.recallMaxBytes, [], [...excerpts, ...ragExcerpts])
     if (text === undefined) return undefined
     // Info, not `decision`: a delta is the rarer half of this path — at most
     // `recallMaxPerConversation` per conversation — and the silence below is the
@@ -1598,6 +1604,16 @@ export class MemoriesRuntime {
    * @param query - the current user turn.
    * @returns scrubbed excerpts, empty when disabled or unavailable.
    */
+  private async ragExcerpts(query: string): Promise<RawExcerpt[]> {
+    if (this.settings.ragRecallExcerpts <= 0) return []
+    return await collectRagExcerpts(join(this.deployment.dshHome, 'sessions'), query, {
+      maxExcerpts: this.settings.ragRecallExcerpts,
+      maxBytes: this.settings.ragRecallBytes,
+      maxChars: 600,
+      maxSessions: this.settings.ragRecallSessions,
+    }).catch(() => [])
+  }
+
   private async rawExcerpts(entries: readonly MemoryEntry[], query: string): Promise<RawExcerpt[]> {
     if (this.settings.rawRecallExcerpts <= 0) return []
     const sources = entries

@@ -656,7 +656,10 @@ test('a capped window cools down, and retries the moment the cap it blamed chang
           yield { type: 'finish', reason: { kind: 'max-tokens' } } as unknown as StreamChunk
           return
         }
-        yield textChunk('{"memories":[{"scope":"project","title":"A fact","body":"A fact.","tags":["x"],"quote":"worth remembering"}]}')
+        const facts = Array.from({ length: 8 }, (_, index) => ({
+          scope: 'project', title: `A fact ${index}`, body: 'A fact.', tags: ['x'], quote: 'worth remembering',
+        }))
+        yield textChunk(JSON.stringify({ memories: facts }))
         yield stopChunk()
       })()
     },

@@ -262,6 +262,60 @@ export async function readTranscript(
  * @param limits - count/character/byte caps (byte cap applies across sessions).
  * @returns excerpts with their session id filled in.
  */
+/**
+ * Full-history RAG selection.
+ *
+ * `collectExcerpts` only reads the sessions a recalled memory came from, so it
+ * is anchored to the extraction. This one reads EVERY persisted session on this
+ * machine and picks the excerpts that lexically match the query best, which is
+ * what makes the raw channel a real retrieval path rather than a footnote.
+ *
+ * Zero model calls: the same tokenizer and scorer as `selectExcerpts`, so the
+ * cost is reading the logs (cached) and the text it injects.
+ *
+ * @param sessionsDir - `<dshHome>/sessions`.
+ * @param query - the current user turn.
+ * @param limits - same knobs as `selectExcerpts`, plus `maxSessions` to bound the
+ * number of logs opened.
+ * @returns the best matching excerpts across all sessions, empty when none match.
+ */
+export async function collectRagExcerpts(
+  sessionsDir: string,
+  query: string,
+  limits: RawRecallLimits & { readonly maxSessions?: number } = {},
+): Promise<RawExcerpt[]> {
+  const maxSessions = limits.maxSessions ?? 24
+  const maxExcerpts = limits.maxExcerpts ?? 4
+  const maxChars = limits.maxChars ?? 600
+  const maxBytes = limits.maxBytes ?? 2400
+  const queryTokens = tokens(query)
+  if (queryTokens.size === 0) return []
+  const logs = await findSessionLogs(sessionsDir).catch(() => [])
+  // Newest first: the same score prefers the later conversation, which is the one
+  // a follow-up is more likely to continue.
+  const ordered = logs.sort((left, right) => right.modifiedAt - left.modifiedAt).slice(0, maxSessions)
+  const out: RawExcerpt[] = []
+  const seen = new Set<string>()
+  let used = 0
+  for (const log of ordered) {
+    if (out.length >= maxExcerpts) break
+    const sessionId = normalizeSession(basename(dirname(log.file)))
+    const messages = await readTranscript(sessionsDir, sessionId)
+    if (messages === undefined) continue
+    for (const excerpt of selectExcerpts(messages, query, { maxExcerpts, maxChars, maxBytes })) {
+      if (out.length >= maxExcerpts) break
+      const key = excerpt.text.slice(0, 80)
+      if (seen.has(key)) continue
+      const cost = Buffer.byteLength(excerpt.text, 'utf8') + 16
+      if (used + cost > maxBytes) continue
+      seen.add(key)
+      used += cost
+      out.push({ ...excerpt, sessionId })
+    }
+  }
+  return out
+}
+
 export async function collectExcerpts(
   sessionsDir: string,
   sources: readonly { readonly sessionId: string; readonly quote?: string }[],
