@@ -316,10 +316,9 @@ export async function collectRagExcerpts(
     for (const token of new Set(tokens(turn.chunk.text))) df.set(token, (df.get(token) ?? 0) + 1)
   }
   const candidates: { excerpt: RawExcerpt; score: number }[] = []
-  for (const turn of turns) {
-    for (const item of selectTurnExcerpts([turn.chunk], query, df, { maxExcerpts, maxChars, maxBytes })) {
-      candidates.push({ excerpt: { ...item.excerpt, sessionId: turn.sessionId }, score: item.score })
-    }
+  for (const item of selectTurnExcerpts(turns.map((turn) => turn.chunk), query, df, { maxExcerpts, maxChars, maxBytes })) {
+    const turn = turns.find((candidate) => candidate.chunk.seq === item.excerpt.seq)
+    candidates.push({ excerpt: { ...item.excerpt, sessionId: turn?.sessionId ?? '' }, score: item.score })
   }
   // Merge across sessions by score: one conversation that happens to hold several
   // matching turns must not crowd out the conversation that holds the answer.

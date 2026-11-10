@@ -246,6 +246,7 @@ export const DEFAULT_RAG_RECALL = false
 export const DEFAULT_RAG_RECALL_BYTES = 2_400
 export const DEFAULT_RAG_RECALL_EXCERPTS = 4
 export const DEFAULT_RAG_RECALL_SESSIONS = 24
+export const DEFAULT_RAG_RECALL_CHARS = 600
 
 /**
  * Default number of distinct strong-field terms a recall needs.
@@ -479,6 +480,7 @@ export const Config = z.object({
   ragRecallBytes: z.number().default(DEFAULT_RAG_RECALL_BYTES).description('Byte budget for the full-history excerpt half of one recall block.').volatile(),
   ragRecallExcerpts: z.number().default(DEFAULT_RAG_RECALL_EXCERPTS).description('Most full-history excerpts one recall block may carry.').volatile(),
   ragRecallSessions: z.number().default(DEFAULT_RAG_RECALL_SESSIONS).description('How many session logs the full-history retrieval may open per recall, newest first.').volatile(),
+  ragRecallChars: z.number().default(DEFAULT_RAG_RECALL_CHARS).description('Longest one full-history excerpt may be, in characters.').volatile(),
   /** Shortest user turn worth a recall decision. */
   recallMinQueryChars: z.number().default(DEFAULT_RECALL_MIN_QUERY_CHARS).description('Shortest user turn, in characters, that may trigger a recall delta. Short acknowledgements are skipped instead of scanning the store.').volatile(),
   /** Distinct strong-field terms a recall needs before it is credited. */
@@ -625,6 +627,7 @@ export interface MemoriesSettings {
   ragRecallBytes: number
   ragRecallExcerpts: number
   ragRecallSessions: number
+  ragRecallChars: number
   recallMinQueryChars: number
   recallMinTerms: number
   /** Whether memories written after the summary are announced as a delta. */
@@ -731,6 +734,7 @@ export const MEMORIES_SETTINGS_DEFAULTS: MemoriesSettings = {
   ragRecallBytes: DEFAULT_RAG_RECALL_BYTES,
   ragRecallExcerpts: DEFAULT_RAG_RECALL_EXCERPTS,
   ragRecallSessions: DEFAULT_RAG_RECALL_SESSIONS,
+  ragRecallChars: DEFAULT_RAG_RECALL_CHARS,
   recallMinQueryChars: DEFAULT_RECALL_MIN_QUERY_CHARS,
   recallMinTerms: DEFAULT_RECALL_MIN_TERMS,
   injectDelta: DEFAULT_INJECT_DELTA,
@@ -896,6 +900,7 @@ export function normalizeSettings(input: Partial<MemoriesSettings> | undefined):
     ragRecallBytes: positive(value.ragRecallBytes, DEFAULT_RAG_RECALL_BYTES, 0),
     ragRecallExcerpts: positive(value.ragRecallExcerpts, DEFAULT_RAG_RECALL_EXCERPTS, 0),
     ragRecallSessions: positive(value.ragRecallSessions, DEFAULT_RAG_RECALL_SESSIONS, 0),
+    ragRecallChars: positive(value.ragRecallChars, DEFAULT_RAG_RECALL_CHARS, 0),
     recallMinQueryChars: positive(value.recallMinQueryChars, DEFAULT_RECALL_MIN_QUERY_CHARS, 0),
     recallMinTerms: positive(value.recallMinTerms, DEFAULT_RECALL_MIN_TERMS, 0),
     injectDelta: value.injectDelta ?? DEFAULT_INJECT_DELTA,

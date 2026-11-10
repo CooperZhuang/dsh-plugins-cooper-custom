@@ -112,6 +112,11 @@ const FIELDS = [
     hint: { zh: '一次补注最多带几条全量检索片段；0 等于关闭。', en: 'Most full-history excerpts one recall block may carry. 0 disables them.' },
   },
   {
+    field: 'ragRecallChars', kind: 'number', min: 0, step: 100,
+    label: { zh: '全量检索单条字数上限', en: 'Full-history excerpt length' },
+    hint: { zh: '一条全量检索片段最多多少字；太短会只截到提问、截不到回答。', en: 'Longest one full-history excerpt may be. Too short clips the question and loses the answer.' },
+  },
+  {
     field: 'ragRecallSessions', kind: 'number', min: 0, step: 1,
     label: { zh: '全量检索会话数上限', en: 'Session logs opened per recall' },
     hint: { zh: '全量检索最多打开几份 session 日志（按最近修改排序）；0 等于关闭。', en: 'How many session logs full-history retrieval may open, newest first. 0 disables it.' },

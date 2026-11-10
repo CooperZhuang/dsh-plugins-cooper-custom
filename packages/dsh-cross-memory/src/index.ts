@@ -1623,7 +1623,7 @@ export class MemoriesRuntime {
     return await collectRagExcerpts(join(this.deployment.dshHome, 'sessions'), query, {
       maxExcerpts: this.settings.ragRecallExcerpts,
       maxBytes: this.settings.ragRecallBytes,
-      maxChars: 600,
+      maxChars: this.settings.ragRecallChars,
       maxSessions: this.settings.ragRecallSessions,
       excludeSessionId: sessionId,
     }).catch(() => [])
