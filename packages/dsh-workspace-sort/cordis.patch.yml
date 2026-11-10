@@ -1,0 +1,28 @@
+# The dsh-workspace-sort bundle patch: one row over the profile root.
+#
+# The row carries both halves. The Host half serves config, the stored pins and
+# the last reorder report on `/dsh-workspace-sort/api/state`, and persists pins
+# plus the two rule switches on `/dsh-workspace-sort/api/prefs` into
+# `$DSH_HOME/workspace-sort/prefs.json` (never localStorage: the desktop Web
+# server binds an ephemeral port, so the page origin changes on every restart).
+# The browser half
+# (`dsh.client.platform: web`) sorts the sidebar Workspaces by their newest
+# human prompt and writes that order through the official
+# `workspaces.insertBefore` command, so the order is Host-durable exactly like a
+# drag.
+#
+# Every knob is optional and lives here, not in the browser bundle:
+#   enabled     false mounts the Host half inert (no route), so the page stays
+#               silent and the workspace order is left exactly as it was.
+#   aggregate   true (default) ranks a container Workspace by its whole subtree;
+#               false ranks it by its own Sessions only, which makes container
+#               folders such as Code/Mubea sink to the bottom.
+#   initialSort true (default) applies the activity order as soon as a page
+#               loads; false waits for the next human prompt.
+- insert:
+    - id: workspace-sort
+      name: dsh-workspace-sort
+      # config:
+      #   enabled: true
+      #   aggregate: true
+      #   initialSort: true

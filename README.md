@@ -2,7 +2,9 @@
 
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）的自研插件 monorepo。每个插件都是独立发布到 npm 的包，带自己的 `package.json`、`cordis.patch.yml`、`src`/`lib` 与测试。
 
-插件代码（宿主半边、浏览器半边、测试、构建与评测脚本）全部是 TypeScript：宿主 `src/` 经 `tsc` 编译到 `lib/`，浏览器半边在 `client/`，测试是 `test/*.test.ts`，构建脚本是 `scripts/*.mts`。只有 `lib/` 下的运行产物是 JavaScript；`dsh-open-in-dsh` 另有 PowerShell / shell / VBScript 写的系统菜单安装器。
+插件代码（宿主半边、浏览器半边、测试、构建与评测脚本）默认是 TypeScript：宿主 `src/` 经 `tsc` 编译到 `lib/`，浏览器半边在 `client/`，测试是 `test/*.test.ts`，构建脚本是 `scripts/*.mts`。只有 `lib/` 下的运行产物是 JavaScript；`dsh-open-in-dsh` 另有 PowerShell / shell / VBScript 写的系统菜单安装器。
+
+例外：`dsh-workspace-sort` 是手写 JavaScript + 15 行拼装脚本（`scripts/build-client.mjs`），没有 `tsc` 步骤。它只做一件事（按活动重排工作区顺序），不引内核包、不装依赖，读起来比编译产物短。
 
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](#许可证)
 
@@ -13,6 +15,7 @@
 | [`dsh-rtk-slim`](packages/dsh-rtk-slim) | [![npm](https://img.shields.io/npm/v/dsh-rtk-slim.svg)](https://www.npmjs.com/package/dsh-rtk-slim) | 工具输出瘦身：大文本压缩进 spill，原文按路径取回 | 全平台 |
 | [`dsh-folder-path`](packages/dsh-folder-path) | [![npm](https://img.shields.io/npm/v/dsh-folder-path.svg)](https://www.npmjs.com/package/dsh-folder-path) | 粘贴文件夹时插入完整路径，而不是尝试上传 | Windows / macOS |
 | [`dsh-open-in-dsh`](packages/dsh-open-in-dsh) | [![npm](https://img.shields.io/npm/v/dsh-open-in-dsh.svg)](https://www.npmjs.com/package/dsh-open-in-dsh) | 从系统里用 DSH 打开文件夹（资源管理器 / Finder / QSpace） | Windows / macOS |
+| [`dsh-workspace-sort`](packages/dsh-workspace-sort) | 内部包（未发布） | 侧栏工作区按最近一次人工提问排序，顺序写进宿主 | 全平台 |
 
 ## 快速开始
 
@@ -66,6 +69,12 @@ dsh plugin --profile desktop add dsh-cross-memory
 - Windows：资源管理器右键动词「通过 DSH 打开」；macOS：Finder 快速操作与 QSpace Pro「服务」项，另有 `dsh-open` 启动器负责启动或交接桌面端。
 - 目录作为工作区切入并可新建空白会话；交接走 macOS Unix socket 或回环 HTTP 路由。
 - QSpace 为 macOS 可选集成，未安装时其余入口自动隐藏。
+
+### dsh-workspace-sort
+
+- 侧栏「视图选项 → 最近更新」只排每个工作区内部的会话；工作区本身的顺序只有拖拽。本插件补这一层：按最近一次人工提问排序、容器目录按子树汇总、可置顶、可选运行中优先。
+- 排序走官方 `workspaces.insertBefore`，写进宿主持久顺序（与拖拽等价）；手动拖拽优先到下一次提问。面板挂在 `sidebar.footer.action` + `shell.overlay` 两个官方 Slot 上，不查 DOM 类名。
+- 只做排序：没有路径迁移、没有移除工作区、没有打开目录、不起子进程。置顶与开关存 `$DSH_HOME/workspace-sort/prefs.json`（桌面端端口随机，localStorage 会丢）。
 
 ## 在插件市场里
 

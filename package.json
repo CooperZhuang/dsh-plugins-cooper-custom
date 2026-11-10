@@ -5,13 +5,14 @@
   "description": "DeepSeek Harness 自研插件 monorepo：dsh-cross-memory / dsh-session-ops / dsh-rtk-slim / dsh-folder-path / dsh-open-in-dsh",
   "devDependencies": {},
   "scripts": {
-    "build": "pnpm --dir packages/dsh-cross-memory build && pnpm --dir packages/dsh-session-ops build && pnpm --dir packages/dsh-rtk-slim build && pnpm --dir packages/dsh-folder-path build && pnpm --dir packages/dsh-open-in-dsh build",
-    "test": "pnpm run test:cross-memory && pnpm run test:session-ops && pnpm run test:folder-path && pnpm run test:rtk-slim && pnpm run test:open-in-dsh",
+    "build": "pnpm --dir packages/dsh-cross-memory build && pnpm --dir packages/dsh-session-ops build && pnpm --dir packages/dsh-rtk-slim build && pnpm --dir packages/dsh-folder-path build && pnpm --dir packages/dsh-open-in-dsh build && pnpm --dir packages/dsh-workspace-sort build",
+    "test": "pnpm run test:cross-memory && pnpm run test:session-ops && pnpm run test:folder-path && pnpm run test:rtk-slim && pnpm run test:open-in-dsh && pnpm run test:workspace-sort",
     "test:cross-memory": "pnpm --dir packages/dsh-cross-memory test",
     "test:session-ops": "pnpm --dir packages/dsh-session-ops test",
     "test:folder-path": "pnpm --dir packages/dsh-folder-path test",
     "test:rtk-slim": "pnpm --dir packages/dsh-rtk-slim test",
     "test:open-in-dsh": "pnpm --dir packages/dsh-open-in-dsh test",
+    "test:workspace-sort": "pnpm --dir packages/dsh-workspace-sort test",
     "verify:profile": "node scripts/verify-profile-links.mts"
   }
 }
