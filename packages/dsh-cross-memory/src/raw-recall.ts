@@ -284,7 +284,9 @@ export async function collectRagExcerpts(
   query: string,
   limits: RawRecallLimits & { readonly maxSessions?: number; readonly excludeSessionId?: string } = {},
 ): Promise<RawExcerpt[]> {
-  const maxSessions = limits.maxSessions ?? 24
+  // 0 means every log: a cap that is too small silently drops the conversation
+  // that holds the answer (measured: the target sat at rank 26 with a cap of 24).
+  const maxSessions = limits.maxSessions === 0 ? Number.POSITIVE_INFINITY : (limits.maxSessions ?? 24)
   const excludeSessionId = limits.excludeSessionId
   const maxExcerpts = limits.maxExcerpts ?? 4
   const maxChars = limits.maxChars ?? 600

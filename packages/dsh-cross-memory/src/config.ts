@@ -245,7 +245,7 @@ export const DEFAULT_RAW_RECALL_EXCERPTS = 3
 export const DEFAULT_RAG_RECALL = false
 export const DEFAULT_RAG_RECALL_BYTES = 2_400
 export const DEFAULT_RAG_RECALL_EXCERPTS = 4
-export const DEFAULT_RAG_RECALL_SESSIONS = 24
+export const DEFAULT_RAG_RECALL_SESSIONS = 0
 export const DEFAULT_RAG_RECALL_CHARS = 600
 
 /**
@@ -479,7 +479,7 @@ export const Config = z.object({
   ragRecall: z.boolean().default(DEFAULT_RAG_RECALL).description('Retrieve original conversation excerpts from ALL persisted sessions, not only the ones the recalled memories came from. Lexical, local-only, no model call.').volatile(),
   ragRecallBytes: z.number().default(DEFAULT_RAG_RECALL_BYTES).description('Byte budget for the full-history excerpt half of one recall block.').volatile(),
   ragRecallExcerpts: z.number().default(DEFAULT_RAG_RECALL_EXCERPTS).description('Most full-history excerpts one recall block may carry.').volatile(),
-  ragRecallSessions: z.number().default(DEFAULT_RAG_RECALL_SESSIONS).description('How many session logs the full-history retrieval may open per recall, newest first.').volatile(),
+  ragRecallSessions: z.number().default(DEFAULT_RAG_RECALL_SESSIONS).description('How many session logs the full-history retrieval may open per recall, newest first. 0 opens all of them.').volatile(),
   ragRecallChars: z.number().default(DEFAULT_RAG_RECALL_CHARS).description('Longest one full-history excerpt may be, in characters.').volatile(),
   /** Shortest user turn worth a recall decision. */
   recallMinQueryChars: z.number().default(DEFAULT_RECALL_MIN_QUERY_CHARS).description('Shortest user turn, in characters, that may trigger a recall delta. Short acknowledgements are skipped instead of scanning the store.').volatile(),
@@ -850,6 +850,12 @@ function positive(value: number | undefined, fallback: number, min = 1): number 
   return value < min ? min : Math.trunc(value)
 }
 
+/** Like {@link positive}, but `0` is a meaningful value (the behaviour is off/unlimited). */
+function nonNegative(value: number | undefined, fallback: number): number {
+  if (value === undefined || !Number.isFinite(value)) return fallback
+  return value < 0 ? 0 : Math.trunc(value)
+}
+
 /** Clamp one ratio into `[0, 1]`, where `0` disables the behaviour it gates. */
 function clampUnit(value: number | undefined, fallback: number): number {
   if (value === undefined || !Number.isFinite(value)) return fallback
@@ -899,7 +905,7 @@ export function normalizeSettings(input: Partial<MemoriesSettings> | undefined):
     ragRecall: value.ragRecall ?? DEFAULT_RAG_RECALL,
     ragRecallBytes: positive(value.ragRecallBytes, DEFAULT_RAG_RECALL_BYTES, 0),
     ragRecallExcerpts: positive(value.ragRecallExcerpts, DEFAULT_RAG_RECALL_EXCERPTS, 0),
-    ragRecallSessions: positive(value.ragRecallSessions, DEFAULT_RAG_RECALL_SESSIONS, 0),
+    ragRecallSessions: nonNegative(value.ragRecallSessions, DEFAULT_RAG_RECALL_SESSIONS),
     ragRecallChars: positive(value.ragRecallChars, DEFAULT_RAG_RECALL_CHARS, 0),
     recallMinQueryChars: positive(value.recallMinQueryChars, DEFAULT_RECALL_MIN_QUERY_CHARS, 0),
     recallMinTerms: positive(value.recallMinTerms, DEFAULT_RECALL_MIN_TERMS, 0),
