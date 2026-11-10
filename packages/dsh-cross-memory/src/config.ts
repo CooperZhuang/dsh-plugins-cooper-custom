@@ -242,7 +242,7 @@ export const DEFAULT_RAW_RECALL_BYTES = 2_400
 /** Most raw excerpts one recall block may carry. */
 export const DEFAULT_RAW_RECALL_EXCERPTS = 3
 
-export const DEFAULT_RAG_RECALL = false
+export const DEFAULT_RAG_RECALL = true
 export const DEFAULT_RAG_RECALL_BYTES = 2_400
 export const DEFAULT_RAG_RECALL_EXCERPTS = 4
 export const DEFAULT_RAG_RECALL_SESSIONS = 0
@@ -476,7 +476,7 @@ export const Config = z.object({
    * scores every persisted session's prose against the query — a real retrieval
    * path, at the cost of opening more logs.
    */
-  ragRecall: z.boolean().default(DEFAULT_RAG_RECALL).description('Retrieve original conversation excerpts from ALL persisted sessions, not only the ones the recalled memories came from. Lexical, local-only, no model call.').volatile(),
+  ragRecall: z.boolean().default(DEFAULT_RAG_RECALL).description('Retrieve original conversation excerpts from ALL persisted sessions, not only the ones the recalled memories came from. Lexical, local-only, no model call. On by default: the raw channel is the main retrieval path, the memory summary is the projection.').volatile(),
   ragRecallBytes: z.number().default(DEFAULT_RAG_RECALL_BYTES).description('Byte budget for the full-history excerpt half of one recall block.').volatile(),
   ragRecallExcerpts: z.number().default(DEFAULT_RAG_RECALL_EXCERPTS).description('Most full-history excerpts one recall block may carry.').volatile(),
   ragRecallSessions: z.number().default(DEFAULT_RAG_RECALL_SESSIONS).description('How many session logs the full-history retrieval may open per recall, newest first. 0 opens all of them.').volatile(),
