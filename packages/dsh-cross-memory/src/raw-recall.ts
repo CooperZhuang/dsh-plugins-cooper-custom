@@ -282,9 +282,10 @@ export async function readTranscript(
 export async function collectRagExcerpts(
   sessionsDir: string,
   query: string,
-  limits: RawRecallLimits & { readonly maxSessions?: number } = {},
+  limits: RawRecallLimits & { readonly maxSessions?: number; readonly excludeSessionId?: string } = {},
 ): Promise<RawExcerpt[]> {
   const maxSessions = limits.maxSessions ?? 24
+  const excludeSessionId = limits.excludeSessionId
   const maxExcerpts = limits.maxExcerpts ?? 4
   const maxChars = limits.maxChars ?? 600
   const maxBytes = limits.maxBytes ?? 2400
@@ -300,6 +301,10 @@ export async function collectRagExcerpts(
   for (const log of ordered) {
     if (out.length >= maxExcerpts) break
     const sessionId = normalizeSession(basename(dirname(log.file)))
+    // The session asking must not answer itself from its own log: the log holds
+    // the very turns being recalled, which reads as a perfect match and crowds
+    // out the earlier conversation the recall is for.
+    if (excludeSessionId !== undefined && sessionId === normalizeSession(excludeSessionId)) continue
     const messages = await readTranscript(sessionsDir, sessionId)
     if (messages === undefined) continue
     for (const excerpt of selectExcerpts(messages, query, { maxExcerpts, maxChars, maxBytes })) {

@@ -1349,6 +1349,12 @@ export class MemoriesRuntime {
     if (remaining <= 0) return undefined
     if (this.sessionOff(session)) return undefined
     const query = this.latestUserText(session)
+    // The full-history channel is computed before the eligibility gate: a turn
+    // with no matching memory still has its original conversation in the logs,
+    // and the gate returning nothing must not hide that.
+    const ragExcerpts = query !== undefined && this.settings.ragRecall && this.settings.ragRecallBytes > 0
+      ? await this.ragExcerpts(query, session.id)
+      : []
     // A one-word acknowledgement has nothing a memory could be about; skipping it
     // also avoids a full store scan on every "好" the user types.
     if (query === undefined || !isSubstantiveTurn(query)) return undefined
@@ -1408,6 +1414,20 @@ export class MemoriesRuntime {
       }
     }
     if (eligible.length === 0) {
+      // Nothing in the store answers this turn. The raw channel still can: the
+      // fact the extraction dropped is in the transcript, not in the store.
+      if (ragExcerpts.length > 0) {
+        const text = renderRecall([], this.settings.recallMaxBytes, [], ragExcerpts)
+        if (text !== undefined) {
+          this.recallCounts.set(session, used + 1)
+          this.log.info('dsh-cross-memory: session %s recalled no memory, used %d raw excerpt(s) from the full history',
+            session.id, ragExcerpts.length)
+          return createUserMessage({
+            content: [{ type: 'text', text }],
+            source: { kind: MEMORY_SOURCE_KIND, form: 'recall' },
+          })
+        }
+      }
       // Alias fallback, before the archive is consulted.
       //
       // The strict gate asks for two pieces of evidence, and a turn that names a
@@ -1545,18 +1565,12 @@ export class MemoriesRuntime {
       if (renderRecall([...picked, candidate].map((item) => item.entry), this.settings.recallMaxBytes) === undefined) break
       picked.push(candidate)
     }
-    if (picked.length === 0) return undefined
+    if (picked.length === 0 && ragExcerpts.length === 0) return undefined
     // The second retrieval channel: original turns from the sessions these
     // memories came from, so a detail the extraction dropped can still be read.
     // Off by default (privacy: prose from other sessions), bounded separately.
     const excerpts = this.settings.rawRecall && this.settings.rawRecallBytes > 0
       ? await this.rawExcerpts(picked.map((item) => item.entry), query)
-      : []
-    // The full-history channel: the anchored excerpts above only reach sessions
-    // the extraction already picked a memory from, so anything it dropped is
-    // unreachable. This one scores every persisted session against the query.
-    const ragExcerpts = this.settings.ragRecall && this.settings.ragRecallBytes > 0
-      ? await this.ragExcerpts(query)
       : []
     const text = renderRecall(picked.map((item) => item.entry), this.settings.recallMaxBytes, [], [...excerpts, ...ragExcerpts])
     if (text === undefined) return undefined
@@ -1604,13 +1618,14 @@ export class MemoriesRuntime {
    * @param query - the current user turn.
    * @returns scrubbed excerpts, empty when disabled or unavailable.
    */
-  private async ragExcerpts(query: string): Promise<RawExcerpt[]> {
+  private async ragExcerpts(query: string, sessionId: string): Promise<RawExcerpt[]> {
     if (this.settings.ragRecallExcerpts <= 0) return []
     return await collectRagExcerpts(join(this.deployment.dshHome, 'sessions'), query, {
       maxExcerpts: this.settings.ragRecallExcerpts,
       maxBytes: this.settings.ragRecallBytes,
       maxChars: 600,
       maxSessions: this.settings.ragRecallSessions,
+      excludeSessionId: sessionId,
     }).catch(() => [])
   }
 
