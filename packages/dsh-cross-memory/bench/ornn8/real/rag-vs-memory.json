@@ -1,0 +1,585 @@
+{
+  "questions": 82,
+  "ragAvg": 0.671,
+  "memoryAvg": 0.11,
+  "ragBetter": 34,
+  "memoryBetter": 3,
+  "tie": 45,
+  "bothZero": 44,
+  "judgments": [
+    {
+      "i": 0,
+      "rag": 0,
+      "memory": 1,
+      "better": "memory",
+      "note": "actual 只说先加载 PC SSH skill 再查两端；memory 给出 git 快进+哈希核对两端的同步方法，部分覆盖"
+    },
+    {
+      "i": 1,
+      "rag": 2,
+      "memory": 1,
+      "better": "rag",
+      "note": "actual 要点是代码已推送只需快进+跳过可再生成；rag 给出跳过清单与实传文件，memory 只给原则"
+    },
+    {
+      "i": 2,
+      "rag": 2,
+      "memory": 0,
+      "better": "rag",
+      "note": "actual 是重建虚拟环境；rag 提到 .venv 需 uv sync 重建，memory 截断未覆盖"
+    },
+    {
+      "i": 3,
+      "rag": 0,
+      "memory": 1,
+      "better": "memory",
+      "note": "actual 是认可方向并去加载 skill；memory 复述了本机开发/ssh 测 PC 的工作方式，未提加载 skill"
+    },
+    {
+      "i": 4,
+      "rag": 2,
+      "memory": 2,
+      "better": "tie",
+      "note": "actual 是开场白；rag/memory 都给出凭证号列与 blob 取件的完整做法，覆盖要点"
+    },
+    {
+      "i": 5,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "actual 与问题错位（是凭证号/PDF 的回答），rag/memory 答的是数据库快照同步，未覆盖 actual"
+    },
+    {
+      "i": 6,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "actual 是 dist 同步报告；rag/memory 都说不知道"
+    },
+    {
+      "i": 7,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "actual 是日志分析+数据同步；rag/memory 都说不知道"
+    },
+    {
+      "i": 8,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "actual 是 org_resolver 解析逻辑；rag/memory 都说不知道"
+    },
+    {
+      "i": 9,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "actual 分析 1440 张成因；rag/memory 只复述自检数字，未给原因"
+    },
+    {
+      "i": 10,
+      "rag": 2,
+      "memory": 0,
+      "better": "rag",
+      "note": "rag 给出「PC 凭据不可用」结论与实测证据（git/gh/cmdkey），memory 直说没核实"
+    },
+    {
+      "i": 11,
+      "rag": 2,
+      "memory": 0,
+      "better": "rag",
+      "note": "actual 只是去 PC 实测的意向，rag 完成实测并给结论，memory 说不知道"
+    },
+    {
+      "i": 12,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "两者都直接说不知道，未覆盖系统逻辑审计内容"
+    },
+    {
+      "i": 13,
+      "rag": 2,
+      "memory": 0,
+      "better": "rag",
+      "note": "rag 覆盖状态机收敛、唯一索引、3 提交未推、口径澄清三部分，memory 全说不知道"
+    },
+    {
+      "i": 14,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "rag 只有工具调用无审计结论，memory 说无法访问文件"
+    },
+    {
+      "i": 15,
+      "rag": 1,
+      "memory": 0,
+      "better": "rag",
+      "note": "actual 仅是先看文件的意向，rag 同意向并开工；memory 说不知道"
+    },
+    {
+      "i": 16,
+      "rag": 1,
+      "memory": 0,
+      "better": "rag",
+      "note": "actual 仅是映射审计面的意向，rag 同意向并列出文件；memory 说不知道"
+    },
+    {
+      "i": 17,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "actual 是完整审计报告，rag 仅工具调用、memory 拒绝"
+    },
+    {
+      "i": 18,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "actual 是 SAP 审计发现，rag 仅工具调用、memory 拒绝"
+    },
+    {
+      "i": 19,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "rag 说无工具无法执行、memory 说不知道，均未覆盖"
+    },
+    {
+      "i": 20,
+      "rag": 1,
+      "memory": 0,
+      "better": "rag",
+      "note": "rag 提到「售前 PPT 必须实拍截图并遮盖隐私/logo」的偏好，与截图需求部分相关，但未答 PPT 版本与优化范围。"
+    },
+    {
+      "i": 21,
+      "rag": 1,
+      "memory": 0,
+      "better": "rag",
+      "note": "actual 只是开工序言；rag 详细说明缺工具与仓库内容无法认领任务并给出替代路径，memory 仅说不知道。"
+    },
+    {
+      "i": 22,
+      "rag": 1,
+      "memory": 0,
+      "better": "rag",
+      "note": "rag 说明无工具无法执行，并指出资料只含任务指令、无代码依据，memory 仅说不知道。"
+    },
+    {
+      "i": 23,
+      "rag": 1,
+      "memory": 0,
+      "better": "rag",
+      "note": "rag 逐条说明无法实测产物来源并列出未覆盖的调查项，memory 仅说不知道。"
+    },
+    {
+      "i": 24,
+      "rag": 2,
+      "memory": 0,
+      "better": "rag",
+      "note": "rag 给出现有 create_uploader_accounts.py、uploader=发票经办 及批量约定，仅缺默认密码细节。"
+    },
+    {
+      "i": 25,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "两者都只说不知道，未覆盖 actual 的原因分析与回传脚本复用。"
+    },
+    {
+      "i": 26,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "两者都只说不知道，未覆盖 dist 一键包与不替换部署目录的落实方式。"
+    },
+    {
+      "i": 27,
+      "rag": 2,
+      "memory": 1,
+      "better": "rag",
+      "note": "rag 给出巡检≠查验回填、归集路径只补空等结论，memory 仅提供 voucher_no 一条。"
+    },
+    {
+      "i": 28,
+      "rag": 2,
+      "memory": 0,
+      "better": "rag",
+      "note": "rag 覆盖 30 个文件（18 改+12 新）及分类清单，memory 不知道。"
+    },
+    {
+      "i": 29,
+      "rag": 2,
+      "memory": 0,
+      "better": "rag",
+      "note": "rag 完整覆盖档案完整性巡检机制与报价单归档决定，memory 三条全不知道。"
+    },
+    {
+      "i": 30,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "actual 是 PC 升级 v0.1.19 并停服的完成报告，rag 只复述问题背景、memory 直接不知道，均未覆盖。"
+    },
+    {
+      "i": 31,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "actual 是 PC 升级报告，与「日常开发以 mac 为主」明显是另一件事，两者仅复读问题。"
+    },
+    {
+      "i": 32,
+      "rag": 2,
+      "memory": 0,
+      "better": "rag",
+      "note": "rag 复现了交互、后端字段、archiveId、i18n 与验证要点；memory 只说不知道。"
+    },
+    {
+      "i": 33,
+      "rag": 2,
+      "memory": 1,
+      "better": "rag",
+      "note": "rag 覆盖了记忆 + mubea-release-upgrade 技能 §4 改写；memory 只记下偏好、未提技能改动。"
+    },
+    {
+      "i": 34,
+      "rag": 1,
+      "memory": 0,
+      "better": "rag",
+      "note": "rag 给出通用提问清单但未查实现，actual 只说先查实现再问；memory 不知道。"
+    },
+    {
+      "i": 35,
+      "rag": 1,
+      "memory": 1,
+      "better": "rag",
+      "note": "两者都复述需求摘要；rag 额外点到 actual 关注的 SAP 改票号问题，memory 未提且有自相矛盾。"
+    },
+    {
+      "i": 36,
+      "rag": 2,
+      "memory": 0,
+      "better": "rag",
+      "note": "rag 给出与 actual 一致的结论（仅 Windows+桌面 Outlook+Edge/Chrome 可行及三种做不到）；memory 不知道。"
+    },
+    {
+      "i": 37,
+      "rag": 2,
+      "memory": 0,
+      "better": "rag",
+      "note": "rag 覆盖了提示已存在但位置时机不对、真正缺口与最小改动；memory 不知道。"
+    },
+    {
+      "i": 38,
+      "rag": 1,
+      "memory": 0,
+      "better": "rag",
+      "note": "rag 给出流水线框架但多数细节标未验证/不知道，未覆盖 actual 的交付物与关键结论；memory 不知道。"
+    },
+    {
+      "i": 39,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "两者都不知道「全处理/最新版本」指什么，actual 的修复清单与验证均未覆盖。"
+    },
+    {
+      "i": 40,
+      "rag": 0,
+      "memory": 1,
+      "better": "memory",
+      "note": "rag 只是开头白；memory 给出了同结构的核查报告但关键结论多为不知道，略优于 rag。"
+    },
+    {
+      "i": 41,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "rag 只给一张全标「未验证」的骨架表、无任何实测结论，memory 全部「不知道」。"
+    },
+    {
+      "i": 42,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "actual 本身只有一句「开始读文件」、无实质结论，两者都无可覆盖内容。"
+    },
+    {
+      "i": 43,
+      "rag": 1,
+      "memory": 0,
+      "better": "rag",
+      "note": "rag 命中「已选方案 B 自绘下拉组件」这一点，但缺少 actual 的高度/字号实测与 A/B/C 对比；memory 无信息。"
+    },
+    {
+      "i": 44,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "两者均无趋势图根因修复与生产快照导入结果。"
+    },
+    {
+      "i": 45,
+      "rag": 1,
+      "memory": 0,
+      "better": "rag",
+      "note": "rag 话题重合 4 点（试跑入口/批量上限/单张刷新/超时收件人）但结论与 actual 相反，memory 无信息。"
+    },
+    {
+      "i": 46,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "两者均无 m-select 逐页实测结果与通过率。"
+    },
+    {
+      "i": 47,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "rag 仅复述任务环境与 manifest 行数、明说拿不到导入结果，memory 无信息。"
+    },
+    {
+      "i": 48,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "actual 仅一句「开始改文档」、无实质结论，两者都无可覆盖内容。"
+    },
+    {
+      "i": 49,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "rag 只复述改动范围与新增配置、明说 8 点全不知道，memory 无信息。"
+    },
+    {
+      "i": 50,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "两者均无处理队列机制、只增不删与设计建议的任何结论。"
+    },
+    {
+      "i": 51,
+      "rag": 2,
+      "memory": 0,
+      "better": "rag",
+      "note": "rag 复现了永久保留、上传记录接口、新增接口、索引与验证数字等 actual 主干；memory 直接说不知道。"
+    },
+    {
+      "i": 52,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "两者基本只说不知道，rag 仅复述用户原话，未覆盖 actual 的 not_found 终态与假阴性排查结论。"
+    },
+    {
+      "i": 53,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "两者均称不知道，未覆盖 actual 交付的现场一键核查脚本包与 5 项自动化操作。"
+    },
+    {
+      "i": 54,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "两者均称不知道，未覆盖 actual 的投递→关联 FIDOC 口径表与改动清单。"
+    },
+    {
+      "i": 55,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "两者均称不知道，未覆盖 actual 对报销类假待办与统计分母的分析结论。"
+    },
+    {
+      "i": 56,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "actual 只是「开始读 spec」的应答，两者均说不知道，无关键信息可覆盖。"
+    },
+    {
+      "i": 57,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "两者均称不知道，未覆盖 actual 的 rename 结果、逐文件改动与 grep 输出报告。"
+    },
+    {
+      "i": 58,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "actual 只是开始执行改写的一句话，两者均说不知道，无关键信息可覆盖。"
+    },
+    {
+      "i": 59,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "actual 只是开始读方案与证据，rag 仅指出提问被截断并复述可见要求，未覆盖任何实际内容。"
+    },
+    {
+      "i": 60,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "rag 只复述要求 1 的原文，未覆盖 actual 的交付文件、回执接入与用例结果；memory 不知道。"
+    },
+    {
+      "i": 61,
+      "rag": 1,
+      "memory": 0,
+      "better": "rag",
+      "note": "actual 只是开工声明，RAG 复述了 task-3 改动范围但未提实施计划与结果。"
+    },
+    {
+      "i": 62,
+      "rag": 2,
+      "memory": 0,
+      "better": "rag",
+      "note": "RAG 给出文件、行数、9 个用例名与 9 passed，覆盖 actual 主体，仅缺真实 CSV 干跑与用法。"
+    },
+    {
+      "i": 63,
+      "rag": 1,
+      "memory": 0,
+      "better": "rag",
+      "note": "actual 只是开工声明，RAG 提到 45s 常量与基线但明说无执行结果。"
+    },
+    {
+      "i": 64,
+      "rag": 1,
+      "memory": 0,
+      "better": "rag",
+      "note": "RAG 给出新键名/attr/默认值与语义，但无 actual 的完成回执、实测取值与测试。"
+    },
+    {
+      "i": 65,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "两者都只说无法完成/不知道，均未覆盖 actual 的复核结论与证据。"
+    },
+    {
+      "i": 66,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "两者均不知道，actual 的 7 文档改动完全未覆盖。"
+    },
+    {
+      "i": 67,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "两者均无法核查/不知道，actual 的测试数字与 PASS/FAIL 结论未覆盖。"
+    },
+    {
+      "i": 68,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "两者均不知道，actual 的 19 次失败归因完全未覆盖。"
+    },
+    {
+      "i": 69,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "RAG 只复述「都做吧」的上下文，未覆盖 actual 的补发 Release/CHANGELOG 结果。"
+    },
+    {
+      "i": 70,
+      "rag": 1,
+      "memory": 0,
+      "better": "rag",
+      "note": "RAG 覆盖许可有效期/宽限/机器绑定与 .pyc 方案，但缺 actual 的 Ed25519、PyArmor、人日与商务结论。"
+    },
+    {
+      "i": 71,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "actual 是完整许可研究结论（Ed25519/PyArmor/.pyc 实测），rag 与 memory 均称资料无相关信息。"
+    },
+    {
+      "i": 72,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "actual 是 .pyc-only 实验的完整结果（85/85、体积、防篡改为零），rag 只说无法执行、memory 称问题截断，均未覆盖。"
+    },
+    {
+      "i": 73,
+      "rag": 2,
+      "memory": 0,
+      "better": "rag",
+      "note": "actual 仅一句「先核准官方来源再写文档」，rag 同口径回应并开始核实，memory 称无信息。"
+    },
+    {
+      "i": 74,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "actual 对作废/清空凭证需求给出代码级现状与落地建议，两侧均称资料未说明。"
+    },
+    {
+      "i": 75,
+      "rag": 2,
+      "memory": 0,
+      "better": "rag",
+      "note": "rag 复现了 actual 的 A/B 结论（not_found 分支、clear-voucher 接口、状态机无作废），memory 称无信息。"
+    },
+    {
+      "i": 76,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "actual 定位待补录记录根因（数电票 invoice_code 为空），两侧均未覆盖。"
+    },
+    {
+      "i": 77,
+      "rag": 2,
+      "memory": 0,
+      "better": "rag",
+      "note": "rag 给出「上游待补票」完整方案并把数据治理内置到升级脚本、作为下一版发，覆盖 actual 的计划意图。"
+    },
+    {
+      "i": 78,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "actual 详解三按钮同一 transition 接口的界面/接口/状态机逻辑，两侧均称未说明。"
+    },
+    {
+      "i": 79,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "actual 说明按钮用途与六种人工介入场景，两侧均未覆盖。"
+    },
+    {
+      "i": 80,
+      "rag": 2,
+      "memory": 0,
+      "better": "rag",
+      "note": "rag 给出三个方案与实测数字（含推荐的表格独立滚动区），覆盖 actual 主体；memory 称无信息。"
+    },
+    {
+      "i": 81,
+      "rag": 0,
+      "memory": 0,
+      "better": "tie",
+      "note": "actual 是方案1 全局落地结果（三组类、接入页面、实测），两侧均称未说明。"
+    }
+  ]
+}
