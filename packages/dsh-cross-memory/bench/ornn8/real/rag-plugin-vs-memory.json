@@ -1,584 +1,583 @@
 {
   "questions": 82,
-  "memoryOnlyAvg": 0.122,
-  "ragPluginAvg": 0.537,
+  "memoryOnlyAvg": 0.134,
+  "ragPluginAvg": 0.598,
   "ragLexAvg": 0.634,
-  "ragPluginBetterThanMemory": 24,
-  "ragLexBetterThanMemory": 31,
+  "ragPluginBetterThanMemory": 29,
   "judgments": [
     {
       "i": 0,
       "memory": 1,
       "ragPlugin": 1,
       "ragLex": 0,
-      "note": "actual 仅为「先加载 skill、检查两端」的过程陈述；memoryOnly 给同步方法、ragPlugin 给同步状态，均部分相关，ragLex 不知道。"
+      "note": "actual 仅为「先加载 PC SSH skill、检查两端」的过程话；memoryOnly 给同步方法、ragPlugin 给两端状态，均部分相关，ragLex 不知道。"
     },
     {
       "i": 1,
       "memory": 1,
-      "ragPlugin": 0,
+      "ragPlugin": 1,
       "ragLex": 2,
-      "note": "actual 核心是已推送到 4d1e4d0、本地 ff、跳过可再生成项；ragLex 覆盖跳过清单与传输细节，memoryOnly 仅原则，ragPlugin 拒答。"
+      "note": "actual 核心是 origin/main=4d1e4d0 已推平加跳过可再生成项；ragLex 覆盖排除清单与执行细节，memoryOnly/ragPlugin 仅确认原则。"
     },
     {
       "i": 2,
-      "memory": 0,
-      "ragPlugin": 0,
-      "ragLex": 1,
-      "note": "question 是同步报告、actual 是重建 venv 的回应，配对错位；候选都在复述同步结果，仅 ragLex 末尾提到 venv 重建。"
+      "memory": 1,
+      "ragPlugin": 1,
+      "ragLex": 2,
+      "note": "actual 是「摸清结构、重建 venv」的计划；ragLex 提到 .venv 需 uv sync 重建，memoryOnly/ragPlugin 只复述同步报告。"
     },
     {
       "i": 3,
       "memory": 2,
       "ragPlugin": 2,
       "ragLex": 0,
-      "note": "actual 为过程陈述「方向合理、先加载 skill」；两者均确认方向并补充跨机测试事实，ragLex 不知道。"
+      "note": "actual 仅表态方向合理；memoryOnly/ragPlugin 均确认方向并补充跨机测试事实，ragLex 不知道。"
     },
     {
       "i": 4,
-      "memory": 1,
+      "memory": 2,
       "ragPlugin": 1,
       "ragLex": 2,
-      "note": "actual 仅「先看现状再回答」；参考下一轮完整回答，ragLex 覆盖凭证号列+401/blob+后端 file id，memoryOnly 缺后端缺口，ragPlugin 缺 401 与后端。"
+      "note": "actual 只是先看现状；memoryOnly/ragLex 覆盖凭证号列与 401/blob 方案，ragPlugin 缺 401 坑与后端 file id 缺口。"
     },
     {
       "i": 5,
       "memory": 0,
       "ragPlugin": 0,
       "ragLex": 0,
-      "note": "actual 与 question 错位（actual 是凭证号问题的回答），相对 actual 无覆盖；若按 question 的 DB 同步问题评则 1/0/2。"
+      "note": "actual 与 question 错位（actual 答凭证号/PDF，候选答数据库同步），相对 actual 记 0。"
     },
     {
       "i": 6,
       "memory": 0,
-      "ragPlugin": 2,
+      "ragPlugin": 1,
       "ragLex": 0,
-      "note": "actual 是 dist 同步完成报告；ragPlugin 覆盖「已完成、校验通过」，其余不知道。"
+      "note": "actual 是 dist 同步报告（含校验数值）；ragPlugin 覆盖已完成与 tar 流操作但缺校验明细，其余不知道。"
     },
     {
       "i": 7,
       "memory": 0,
       "ragPlugin": 2,
       "ragLex": 0,
-      "note": "actual 是数据库同步+日志分析结论；ragPlugin 覆盖核心结论，其余不知道。"
+      "note": "actual 是数据库同步加日志分析结论；ragPlugin 覆盖两项核心结论，其余不知道。"
     },
     {
       "i": 8,
       "memory": 0,
       "ragPlugin": 1,
       "ragLex": 0,
-      "note": "actual 核心是纯数据驱动+org_resolver.py+三档匹配；ragPlugin 覆盖前两点、缺三档规则。"
+      "note": "actual 核心是 org_resolver 三档解析机制；ragPlugin 覆盖纯数据驱动与模块入口、缺三档规则，其余不知道。"
     },
     {
       "i": 9,
       "memory": 1,
       "ragPlugin": 1,
       "ragLex": 1,
-      "note": "actual 关键是 1440 张三档全空的原因；候选只复述自检数字，未给原因。"
+      "note": "actual 给出 1,440 张三档全空的根因；三者只复述自检数字、未给分析。"
     },
     {
       "i": 10,
       "memory": 0,
       "ragPlugin": 2,
       "ragLex": 2,
-      "note": "memory 纯不知道；ragPlugin/ragLex 均给出「不可用」结论与关键证据（git 报错 exit 128、gh 令牌失效、cmdkey 空）。"
+      "note": "PC 凭据不可用的结论、exit 128 证据、记忆草稿两者都给出；memoryOnly 只说不知道。"
     },
     {
       "i": 11,
       "memory": 0,
       "ragPlugin": 2,
       "ragLex": 2,
-      "note": "actual 只是开场白；ragPlugin/ragLex 直接给出完整结论与证据，memory 仍不知道。"
+      "note": "actual 只是『加载技能后去 PC 核实』的计划，两者都实际跑了 ssh pc 只读核实并给结论；memoryOnly 不知道。"
     },
     {
       "i": 12,
       "memory": 0,
       "ragPlugin": 1,
       "ragLex": 0,
-      "note": "ragPlugin 覆盖报告规模（562 行/36 条）与首条 P0，但漏掉 actual 其余 5 条 P0；memory/ragLex 不知道。"
+      "note": "actual 是 36 条审计+6 条 P0；ragPlugin 只给出报告规模与 1 条 P0，ragLex 不知道。"
     },
     {
       "i": 13,
-      "memory": 1,
-      "ragPlugin": 1,
+      "memory": 0,
+      "ragPlugin": 0,
       "ragLex": 2,
-      "note": "ragLex 完整覆盖三部分；memory/ragPlugin 对前两问不知道，仅第三问给了部分相关背景。"
+      "note": "actual 的三部分（状态机收敛/唯一索引、3 个提交与未推送、pytest 全量澄清）ragLex 全覆盖；memoryOnly 与 ragPlugin 全不知道。"
     },
     {
       "i": 14,
       "memory": 0,
       "ragPlugin": 0,
       "ragLex": 0,
-      "note": "actual 给出 5 条审计发现，三方均未覆盖（ragLex 只有开场工具调用）。"
+      "note": "actual 是 8 条审计发现；三者均未给出任何发现，ragLex 只有一条 ls 工具调用。"
     },
     {
       "i": 15,
       "memory": 0,
       "ragPlugin": 0,
       "ragLex": 2,
-      "note": "actual 是开场白；ragLex 同样开始读文件（覆盖），ragPlugin 拒绝、memory 不知道。"
+      "note": "actual 是『确认工作目录→逐个读文件』的计划，ragLex 计划相同且工具调用真的 cd+ls+wc -l。"
     },
     {
       "i": 16,
       "memory": 0,
-      "ragPlugin": 1,
-      "ragLex": 2,
-      "note": "actual 是开场白；ragLex 开始读文件（覆盖），ragPlugin 声明计划但无法完成，memory 不知道。"
+      "ragPlugin": 0,
+      "ragLex": 1,
+      "note": "actual 要先摸清审计面（文件规模）再读关键文件；ragLex 只列了目录、未提文件规模，部分覆盖。"
     },
     {
       "i": 17,
       "memory": 0,
       "ragPlugin": 0,
       "ragLex": 0,
-      "note": "actual 给出完整审计发现，三方均未覆盖（ragLex 只有开场工具调用）。"
+      "note": "actual 是认证/权限段完整审计报告；三者均未给出结论，ragLex 仅列目录。"
     },
     {
       "i": 18,
       "memory": 0,
       "ragPlugin": 0,
       "ragLex": 0,
-      "note": "actual 给出 8 条审计发现，三方均未覆盖（ragLex 只有开场工具调用）。"
+      "note": "actual 是 SAP 投递段 8 条审计发现；三者均未给出发现，ragLex 只发了条消息给父会话。"
     },
     {
       "i": 19,
       "memory": 0,
       "ragPlugin": 0,
-      "ragLex": 1,
-      "note": "actual 是开场白；ragLex 开场后说明无法执行（部分），ragPlugin/memory 拒绝。"
+      "ragLex": 0,
+      "note": "actual 是『先摸清项目现状与售前材料』；三者均未提供，ragLex 明说无法执行。"
     },
     {
       "i": 20,
       "memory": 0,
       "ragPlugin": 0,
       "ragLex": 1,
-      "note": "actual 为计划性回复；ragLex 给出 PPT 实拍截图偏好，其余不知道"
+      "note": "actual 仅计划句；ragLex 给出实拍截图与遮 logo 偏好，部分相关。"
     },
     {
       "i": 21,
       "memory": 0,
       "ragPlugin": 0,
       "ragLex": 0,
-      "note": "三者均不知道，actual 仅计划性回复"
+      "note": "actual 仅计划句且任务被截断，三方均答无法执行，无任务内容可覆盖。"
     },
     {
       "i": 22,
       "memory": 0,
-      "ragPlugin": 2,
-      "ragLex": 1,
-      "note": "ragPlugin 实际调用 team_task_get 读取任务详情，覆盖 actual 计划；ragLex 只声明计划未执行"
+      "ragPlugin": 0,
+      "ragLex": 0,
+      "note": "actual 仅计划句且任务被截断，三方均答无法执行，无任务内容可覆盖。"
     },
     {
       "i": 23,
       "memory": 0,
       "ragPlugin": 0,
       "ragLex": 0,
-      "note": "三者均不知道，actual 仅计划性回复"
+      "note": "actual 仅计划句且任务被截断，三方均答无法执行，无任务内容可覆盖。"
     },
     {
       "i": 24,
       "memory": 0,
-      "ragPlugin": 0,
+      "ragPlugin": 1,
       "ragLex": 1,
-      "note": "ragLex 覆盖脚本存在与行为，但缺 UserRepo/hash_password/黑名单等 actual 细节"
+      "note": "ragPlugin 覆盖角色/建号/组织/密码哈希片段但缺黑名单结论；ragLex 仅覆盖角色。"
     },
     {
       "i": 25,
       "memory": 0,
       "ragPlugin": 0,
       "ragLex": 0,
-      "note": "三者均不知道，未覆盖 actual 的原因分析与脚本"
+      "note": "actual 的 6 条原因与脚本均未被覆盖，三方只说不知道。"
     },
     {
       "i": 26,
       "memory": 0,
       "ragPlugin": 1,
       "ragLex": 0,
-      "note": "ragPlugin 覆盖 dist 一键包口径，未覆盖改造脚本与产出包的计划"
+      "note": "ragPlugin 确认并复述 dist 规矩，未覆盖改造脚本独立运行的计划。"
     },
     {
       "i": 27,
       "memory": 1,
       "ragPlugin": 2,
-      "ragLex": 2,
-      "note": "actual 仅为计划性回复；ragPlugin/ragLex 给出实质结论"
+      "ragLex": 1,
+      "note": "actual 仅计划句，按问题实质评：ragPlugin 覆盖 5 列，ragLex 偏推测。"
     },
     {
       "i": 28,
       "memory": 0,
       "ragPlugin": 0,
       "ragLex": 2,
-      "note": "ragLex 覆盖 30 个文件清单与分类，与 actual 一致"
+      "note": "ragLex 完整覆盖 30 个文件清单与仓库状态。"
     },
     {
       "i": 29,
       "memory": 0,
       "ragPlugin": 1,
       "ragLex": 2,
-      "note": "ragLex 覆盖巡检全貌与报价单归档；ragPlugin 只覆盖巡检部分"
+      "note": "ragLex 完整覆盖巡检 Q1；ragPlugin 覆盖 Q1 核心但 Q2/Q3 不知道。"
     },
     {
       "i": 30,
       "memory": 0,
       "ragPlugin": 2,
       "ragLex": 0,
-      "note": "ragPlugin 给出与 actual 一致的结论（v0.1.19 代码/库/回填已处理、服务已停且无监听），memory 与 ragLex 均未覆盖。"
+      "note": "memory 只说不知道；ragPlugin 一句话覆盖代码/数据库/回填达 v0.1.19 且服务已停的核心结论；ragLex 只复述前置说明并明说不知道 PC 侧做法"
     },
     {
       "i": 31,
       "memory": 0,
       "ragPlugin": 0,
       "ragLex": 0,
-      "note": "actual 与第 30 条完全重复（PC 升级报告），未涉及「日常开发以 mac 为主」，三者回答均未覆盖 actual。"
+      "note": "actual 是 PC 升级停服报告，三者均只复述“日常开发以 Mac 为主”，未覆盖报告内容"
     },
     {
       "i": 32,
       "memory": 0,
-      "ragPlugin": 2,
+      "ragPlugin": 1,
       "ragLex": 2,
-      "note": "ragPlugin/ragLex 覆盖异常中心票号可点开、新标签页看 PDF、无原件/无权限保持文本等关键信息，memory 不知道。"
+      "note": "memory 说不知道；ragPlugin 只覆盖交互改动，缺后端/前端/文案/验证；ragLex 交互、后端、前端、文案、验证全覆盖"
     },
     {
       "i": 33,
       "memory": 1,
       "ragPlugin": 1,
       "ragLex": 2,
-      "note": "三者都记下「没事不用跑 Docker」，ragLex 还覆盖技能 §4 的改动，memory/ragPlugin 漏掉技能同步这一关键动作。"
+      "note": "memory/ragPlugin 只覆盖记忆登记，缺 mubea-release-upgrade 技能 §4 改写；ragLex 两处均覆盖"
     },
     {
       "i": 34,
       "memory": 0,
-      "ragPlugin": 2,
+      "ragPlugin": 0,
       "ragLex": 1,
-      "note": "actual 只是先看实现再提问的开场白；ragPlugin 给出现有删除功能依据的具体提问，ragLex 问题泛化，memory 不知道。"
+      "note": "memory/ragPlugin 说不知道；ragLex 给了通用提问清单，但缺“先看实现再针对性提问”的立场"
     },
     {
       "i": 35,
       "memory": 1,
       "ragPlugin": 1,
       "ragLex": 1,
-      "note": "三者都复述了用户答复要点，但均未覆盖 actual 要核实「改 SAP 票号对平台影响」这一关键动作。"
+      "note": "三者都复述了需求要点，但缺 actual 的关键点“先查实 SAP 票号/反查链路再答”，ragLex 只称资料未说明"
     },
     {
       "i": 36,
       "memory": 0,
-      "ragPlugin": 0,
+      "ragPlugin": 2,
       "ragLex": 2,
-      "note": "ragLex 覆盖可行结论与三种做不到的情形，memory/ragPlugin 因缺少上下文答不知道。"
+      "note": "memory 说不知道；ragPlugin 覆盖可行结论、唯一组合与主要限制；ragLex 覆盖结论、三种做不到与现场要求"
     },
     {
       "i": 37,
       "memory": 0,
-      "ragPlugin": 0,
+      "ragPlugin": 1,
       "ragLex": 2,
-      "note": "ragLex 覆盖「提示已存在但位置/时机不对」与真正缺失的 0 文件静默失败提示，memory/ragPlugin 不知道。"
+      "note": "memory 说不知道；ragPlugin 只覆盖“提示已存在”，缺位置时机问题与真正缺口；ragLex 覆盖已有提示、真正缺口与最小改动方案"
     },
     {
       "i": 38,
       "memory": 0,
       "ragPlugin": 1,
       "ragLex": 1,
-      "note": "ragPlugin 只指出两份文档已存在及其目录，ragLex 给出标注未验证的流水线大纲，均未覆盖 actual 的具体结论与交付。"
+      "note": "memory 说不知道；ragPlugin 只覆盖两份文档的存在与内容，未给流水线逻辑；ragLex 给了流水线梳理但标未验证且缺用户侧说明"
     },
     {
       "i": 39,
       "memory": 0,
       "ragPlugin": 0,
       "ragLex": 0,
-      "note": "三者均不知道，actual 的修复清单、版本与验证结论完全未覆盖。"
+      "note": "三者均说不知道，未覆盖 actual 的修复清单、文档与验证结果"
     },
     {
       "i": 40,
       "memory": 0,
-      "ragPlugin": 1,
+      "ragPlugin": 0,
       "ragLex": 0,
-      "note": "ragPlugin 覆盖默认不注册等部分结论但行号含糊、多项标注没有说明，memory 全不知道，ragLex 只有开场白。"
+      "note": "memory 报告结构但关键项均称不知道；ragPlugin 主项称不知道、补充事实非 actual 关键结论；ragLex 只有开场白无结论"
     },
     {
       "i": 41,
       "memory": 0,
-      "ragPlugin": 1,
+      "ragPlugin": 0,
       "ragLex": 0,
-      "note": "memoryOnly 全项不知道；ragPlugin 给出批量接口、权限等部分 UI 事实但缺「无展示页/全真投/仅 4 个动作」等关键结论；ragLex 表格几乎全标未验证。"
+      "note": "actual 是 UI 事实核查；三者均只说不知道，ragPlugin 仅补后端口径（reimburse 排除、not_required 恢复），未覆盖 actual 的 UI 关键信息。"
     },
     {
       "i": 42,
       "memory": 0,
-      "ragPlugin": 1,
+      "ragPlugin": 0,
       "ragLex": 0,
-      "note": "actual 仅是开场白；ragPlugin 给出调用链与 cscript/COM 进程模型但无 file:line、入参契约不知道；memoryOnly/ragLex 明确无法读文件。"
+      "note": "actual 截断无实质内容（仅一句开始读文件），三者均无法作答。"
     },
     {
       "i": 43,
       "memory": 0,
-      "ragPlugin": 0,
+      "ragPlugin": 1,
       "ragLex": 1,
-      "note": "ragLex 从记忆取到「已选方案 B 自绘下拉组件」这一关键结论，但缺少 actual 的三处可量化诊断与 A/C 方案细节。"
+      "note": "ragPlugin 覆盖缺陷 1（4 种高度 23/31/35/38px、51 个下拉），漏缺陷 2/3 与 A/B/C 方案；ragLex 只提到已选方案 B。"
     },
     {
       "i": 44,
       "memory": 0,
       "ragPlugin": 0,
       "ragLex": 0,
-      "note": "三者均未覆盖趋势图修复与生产快照导入本地库的结果。"
+      "note": "actual 含趋势图根因修复与生产快照导入实测；三者均不知道。"
     },
     {
       "i": 45,
       "memory": 0,
       "ragPlugin": 0,
       "ragLex": 1,
-      "note": "ragLex 复核了 4 个相关话题，但判定与 actual 相反（把 actual 认定为真实的文档说法判为与代码不符），只算部分覆盖。"
+      "note": "actual 为 9 条复核结论；memory/ragPlugin 不知道，ragLex 仅个别点同向且多数结论与 actual 相反。"
     },
     {
       "i": 46,
       "memory": 0,
       "ragPlugin": 0,
       "ragLex": 0,
-      "note": "三者均无 m-select 逐页实测结果。"
+      "note": "actual 为 42 处 m-select 逐页实测结果（40 通过/2 未触达）；三者均无实测信息。"
     },
     {
       "i": 47,
       "memory": 0,
-      "ragPlugin": 0,
+      "ragPlugin": 1,
       "ragLex": 0,
-      "note": "三者均未给出快照导入 sqlite 的逐表行数校验结果。"
+      "note": "ragPlugin 覆盖导入已完成、报告路径与备份副本，缺逐表行数对照；ragLex 只复述任务约束、无结果。"
     },
     {
       "i": 48,
       "memory": 0,
       "ragPlugin": 0,
       "ragLex": 0,
-      "note": "actual 仅是开场白，三者均不知道或无法执行。"
+      "note": "actual 截断无实质内容（仅一句开始改文档），三者均无法作答。"
     },
     {
       "i": 49,
       "memory": 0,
       "ragPlugin": 0,
       "ragLex": 0,
-      "note": "ragLex 只复述改动范围，未覆盖 actual 的 9 个复核问题与测试结果。"
+      "note": "actual 为 9 问题复核与 246 例测试全绿；三者均无复核结论。"
     },
     {
       "i": 50,
       "memory": 0,
-      "ragPlugin": 0,
+      "ragPlugin": 2,
       "ragLex": 0,
-      "note": "三者均未覆盖处理队列的混合面板结论、只增不删事实与后端先行建议。"
+      "note": "ragPlugin 覆盖混合面板、只增不删、后端分页筛选与面板拆分落地，缺默认 25 条与设计建议。"
     },
     {
       "i": 51,
       "memory": 0,
       "ragPlugin": 0,
-      "ragLex": 2,
-      "note": "actual 是上传记录永久保留的完整交付报告；memory/ragPlugin 均称不知道，ragLex 覆盖了永久保留、接口与索引等关键信息"
+      "ragLex": 1,
+      "note": "ragLex 覆盖永久保留口径、上传记录接口与索引，缺每页条数部分；memory/ragPlugin 直接说不知道。"
     },
     {
       "i": 52,
       "memory": 0,
       "ragPlugin": 0,
-      "ragLex": 0,
-      "note": "actual 是回传件排查长文；三者均未覆盖后台作业、假阴性时间线等关键结论"
+      "ragLex": 1,
+      "note": "ragLex 只覆盖异步识别查验与 ZFI_AIDOC 按票号查的原理，凭证找不到等核心排查未覆盖。"
     },
     {
       "i": 53,
       "memory": 0,
-      "ragPlugin": 0,
+      "ragPlugin": 1,
       "ragLex": 0,
-      "note": "actual 交付一键核查脚本包；三者均称不知道，未覆盖任何交付细节"
+      "note": "ragPlugin 给出现有现场核查一键包及只读口径，缺 5 项操作映射与运行步骤。"
     },
     {
       "i": 54,
       "memory": 0,
       "ragPlugin": 2,
       "ragLex": 0,
-      "note": "actual 是投递→关联 FIDOC 改造报告；ragPlugin 覆盖口径与完成状态，memory/ragLex 不知道"
+      "note": "ragPlugin 覆盖投递→关联 FIDOC 口径对照、i18n 与 22 文件改动；ragLex 说不知道。"
     },
     {
       "i": 55,
       "memory": 0,
       "ragPlugin": 2,
       "ragLex": 0,
-      "note": "actual 给出报销类显示建议；ragPlugin 覆盖核心结论与理由，memory/ragLex 不知道"
+      "note": "ragPlugin 覆盖假待办结论与按品类分档建议，缺实测数字（737/2175/74.2%）。"
     },
     {
       "i": 56,
       "memory": 0,
       "ragPlugin": 0,
       "ragLex": 0,
-      "note": "actual 仅为开工意图句、无关键信息；三者均未覆盖"
+      "note": "输入是任务约束说明，actual 仅为开工应答，三者均无实质覆盖。"
     },
     {
       "i": 57,
       "memory": 0,
       "ragPlugin": 0,
       "ragLex": 0,
-      "note": "actual 是 task-2 改名交付报告；三者均称不知道"
+      "note": "actual 是 task-2 完成报告（改名与逐文件改动），三者均说不知道。"
     },
     {
       "i": 58,
       "memory": 0,
       "ragPlugin": 0,
       "ragLex": 0,
-      "note": "actual 仅为改稿过程句、无关键信息；三者均未覆盖"
+      "note": "actual 是执行中应答，三者均未覆盖任何改动结果。"
     },
     {
       "i": 59,
       "memory": 0,
       "ragPlugin": 0,
       "ragLex": 0,
-      "note": "actual 仅为开工意图句、无关键信息；ragLex 只复述了被截断的任务要求"
+      "note": "actual 仅为开工应答；ragLex 只复述可见要求并指出截断，未覆盖。"
     },
     {
       "i": 60,
       "memory": 0,
       "ragPlugin": 0,
-      "ragLex": 1,
-      "note": "actual 是 task-2 交付报告；ragLex 仅部分覆盖协议错诊断与重试要求，其余均不知道"
+      "ragLex": 0,
+      "note": "actual 是 task-2 完成报告（交付文件与用例），三者均未覆盖。"
     },
     {
       "i": 61,
       "memory": 0,
       "ragPlugin": 0,
-      "ragLex": 0,
-      "note": "actual 只是开工声明（先模块后钩子/脚本/配置/测试），三者均未覆盖；ragLex 仅复述任务范围并明说无实施结果。"
+      "ragLex": 1,
+      "note": "actual 只是开工计划（模块→流水线→脚本→配置→测试），ragLex 列出任务范围 U1-U4 与之对应，memory/ragPlugin 只说不知道。"
     },
     {
       "i": 62,
       "memory": 0,
       "ragPlugin": 0,
       "ragLex": 2,
-      "note": "actual 为 task-4 完成报告；仅 ragLex 覆盖两文件/行数/9 个用例名/9 passed 等关键信息，memory 与 ragPlugin 均不知道。"
+      "note": "ragLex 复现了完成结果（两个文件及行数、9 个用例名、9 passed/60 passed），memory/ragPlugin 只说不知道。"
     },
     {
       "i": 63,
       "memory": 0,
       "ragPlugin": 0,
-      "ragLex": 0,
-      "note": "actual 只是开工声明（去找 45s 常量），三者均未覆盖；ragLex 明说无执行结果。"
+      "ragLex": 1,
+      "note": "actual 只是定位 45s 常量的开工意图，ragLex 提到 45s 常量、基线与 4 条 FAILED 但未给方案，其余不知道。"
     },
     {
       "i": 64,
       "memory": 0,
-      "ragPlugin": 0,
-      "ragLex": 0,
-      "note": "actual 为 task-6 键名反转完成报告（键/attr/默认值/测试），三者均未覆盖；ragLex 只给任务要求。"
+      "ragPlugin": 1,
+      "ragLex": 1,
+      "note": "ragPlugin/ragLex 只复述了配置键改名口径（问题里已有），未覆盖 actual 的完成结果、键值表与测试。"
     },
     {
       "i": 65,
       "memory": 0,
       "ragPlugin": 0,
       "ragLex": 0,
-      "note": "actual 为 7 项 PASS + 8 条残留的复核结论，三者均称无法判定或不知道。"
+      "note": "三者均无法访问仓库/代码，只说不知道或无法判定，未覆盖 actual 的复核结论。"
     },
     {
       "i": 66,
       "memory": 0,
       "ragPlugin": 0,
       "ragLex": 0,
-      "note": "actual 为 7 个文档改动完成报告，三者均不知道。"
+      "note": "三者均不知道 task-5 的 7 个文档改动结果，未覆盖 actual 的完成清单与验收证据。"
     },
     {
       "i": 67,
       "memory": 0,
       "ragPlugin": 0,
       "ragLex": 0,
-      "note": "actual 为复核快照与测试数字结论，三者均无法完成核查。"
+      "note": "三者均无法核查（不能访问仓库/执行命令），未覆盖 actual 的回归数字与 PASS/FAIL 结论。"
     },
     {
       "i": 68,
       "memory": 0,
-      "ragPlugin": 0,
+      "ragPlugin": 2,
       "ragLex": 0,
-      "note": "actual 为 19 次 Release 失败原因分析，三者均不知道。"
+      "note": "ragPlugin 覆盖了 19 封邮件位置与 CHANGELOG 缺 compare 链接主因，memory/ragLex 只说不知道。"
     },
     {
       "i": 69,
       "memory": 0,
       "ragPlugin": 0,
       "ragLex": 0,
-      "note": "actual 为补发 14 个 Release 的结果，三者均未覆盖；ragLex 只复述任务要求。"
+      "note": "ragLex 讲的是 deploy_overwrite.ps1 数据治理，与 actual 的补发 14 个 Release 无关；三者均未覆盖。"
     },
     {
       "i": 70,
       "memory": 0,
       "ragPlugin": 1,
       "ragLex": 1,
-      "note": "actual 为许可+源码保护研究结论；ragPlugin 覆盖许可方案细节、ragLex 覆盖许可参数与 pyc 方案，但均缺 PyArmor Pro 建议与商务缺口等关键结论。"
+      "note": "ragPlugin 覆盖许可研究结论（分支/6 人日/Ed25519/11 用例），ragLex 覆盖许可参数与 .pyc 办法，均未覆盖 PyArmor 建议与商务结论。"
     },
     {
       "i": 71,
       "memory": 0,
       "ragPlugin": 1,
       "ragLex": 0,
-      "note": "ragPlugin 覆盖分支名/commit/未改业务代码/3 文档+1 脚本，缺三条结论（许可 6 人日、PyArmor、pyc 零防篡改）；memory/ragLex 不知道。"
+      "note": "actual 是研究完成报告（许可验证/源码保护/商务窟窿），memory 与 ragLex 直接说不知道；ragPlugin 只复述分支名、commit ce84e3c、未改业务代码、3 文档+1 脚本的概要，研究结论全缺。"
     },
     {
       "i": 72,
       "memory": 0,
       "ragPlugin": 0,
       "ragLex": 0,
-      "note": "actual 是 pyc-only 隔离实验的完整实测报告（85/85、体积、三条硬数据）；三者均称不知道或无法执行，未覆盖任何结论。"
+      "note": "actual 给出 pyc-only 能跑的实测结论与硬数据，memory 与 ragPlugin 均称无记录，ragLex 以无执行环境为由拒绝且未覆盖任何结论。"
     },
     {
       "i": 73,
       "memory": 0,
       "ragPlugin": 0,
       "ragLex": 2,
-      "note": "actual 只是先核官方来源再写文档的表态；ragLex 复现同一计划并动手查目录，memory/ragPlugin 不知道。"
+      "note": "actual 只是「先核官方来源再写文档」的应答，ragLex 给出同一口径并开始查目录，memory/ragPlugin 只说不知道。"
     },
     {
       "i": 74,
       "memory": 0,
       "ragPlugin": 1,
       "ragLex": 0,
-      "note": "ragPlugin 给出逐条对照与清空/作废解耦/已投递把关建议，但把作废按钮判为已满足且缺状态机与代码依据；memory/ragLex 不知道。"
+      "note": "actual 的关键是现状不满足+缺口证据+落地建议，ragPlugin 给出单票清空与作废按钮的操作但误称已实现并推送，ragLex 直接说不知道。"
     },
     {
       "i": 75,
       "memory": 0,
-      "ragPlugin": 0,
+      "ragPlugin": 1,
       "ragLex": 2,
-      "note": "ragLex 覆盖 A/B 两处不满足的结论与单票 clear-voucher 方案及审计口径（尾部截断，缺 C）；memory/ragPlugin 不知道。"
+      "note": "actual 给现状不满足与落地口径，ragLex 覆盖 A/B 的现状与单票接口、作废按钮方案；ragPlugin 只确认需求点与按钮名、称无实现信息。"
     },
     {
       "i": 76,
       "memory": 0,
       "ragPlugin": 2,
       "ragLex": 0,
-      "note": "ragPlugin 覆盖根因（数电票 invoice_code 空→metadata_missing）、全库 10448 张统计与 v0.4.1 处理；memory/ragLex 不知道。"
+      "note": "actual 的根因是数电票 invoice_code 为空触发 recommended metadata 的 metadata_missing，ragPlugin 给出同一根因与抽屉只画代码级标签的细节，memory/ragLex 说不知道。"
     },
     {
       "i": 77,
       "memory": 0,
       "ragPlugin": 0,
-      "ragLex": 1,
-      "note": "actual 是按完整修+数据治理+发版处理 metadata 问题；ragLex 只给通用治理方案且把对象判成上游待补票，部分覆盖。"
+      "ragLex": 2,
+      "note": "actual 定调「完整修+数据治理+发版」，ragLex 给出上游待补票完整方案与数据治理内置 deploy_overwrite.ps1 的做法，memory/ragPlugin 只说不知道。"
     },
     {
       "i": 78,
       "memory": 0,
       "ragPlugin": 0,
       "ragLex": 0,
-      "note": "actual 详解三按钮共用 transition 接口与权限/状态机/界面约束；三者均称不知道。"
+      "note": "actual 详解三按钮同一 transition 接口的界面/接口/状态机逻辑，三种检索均因「这一块」指代不明而说不知道。"
     },
     {
       "i": 79,
       "memory": 0,
       "ragPlugin": 0,
       "ragLex": 0,
-      "note": "actual 解释三按钮是人工终审出口、自动链路已推终态及六种介入场景；三者均称不知道。"
+      "note": "actual 解释自动流水线已覆盖大部分、三按钮是人工终审出口及六种介入场景，三种检索均未覆盖。"
     },
     {
       "i": 80,
       "memory": 0,
-      "ragPlugin": 0,
+      "ragPlugin": 1,
       "ragLex": 2,
-      "note": "ragLex 覆盖推荐方案1（表格独立滚动区）及方案2/3 与实测数字，缺根因与逐视口表格；memory/ragPlugin 不知道。"
+      "note": "actual 给根因+方案1 实测，ragLex 覆盖三个方案及方案1 的 669px→0、403px/715px 等实测数字；ragPlugin 只给根因、明说无优化方案。"
     },
     {
       "i": 81,
       "memory": 0,
       "ragPlugin": 0,
       "ragLex": 0,
-      "note": "actual 是方案1 全局落地的完成报告（分支/commit/三组类机制/接入与未接入页面/实测）；三者均称不知道。"
+      "note": "actual 是方案1 全局落地的完成报告（三组类、已接入/未接入页面、实测），三种检索均只说不知道。"
     }
   ]
 }
