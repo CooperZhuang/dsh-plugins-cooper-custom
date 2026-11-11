@@ -432,6 +432,35 @@ async function tryGit(dir: string, args: readonly string[], timeout: number): Pr
   }
 }
 
+/** Run git and keep the failure text, for callers that must read git's wording. */
+async function tryGitResult(
+  dir: string,
+  args: readonly string[],
+  timeout: number,
+): Promise<{ ok: boolean; stdout: string; stderr: string }> {
+  try {
+    return { ok: true, stdout: await git(dir, args, timeout), stderr: '' }
+  } catch (error) {
+    const failure = error as { stdout?: string; stderr?: string; message?: string }
+    return {
+      ok: false,
+      stdout: String(failure.stdout ?? ''),
+      stderr: String(failure.stderr ?? failure.message ?? ''),
+    }
+  }
+}
+
+/**
+ * Whether `git rebase --continue` stopped because the replayed commit is now
+ * empty (its change is already upstream). Git tells the operator to use
+ * `--skip`; the plugin must do the same, otherwise the loop spins to its cap.
+ */
+export function isEmptyCommitFailure(text: string): boolean {
+  return /previous cherry-pick is now empty|nothing to commit|no changes added to commit|no changes did you forget|no changes - did you forget/iu.test(
+    text,
+  )
+}
+
 /** The memory store's git transport. */
 export class MemorySync {
   private readonly options: MemorySyncOptions
@@ -661,10 +690,22 @@ export class MemorySync {
       const unmerged = await tryGit(this.dir, ['diff', '--name-only', '--diff-filter=U'], this.options.gitTimeoutMs)
       const paths = (unmerged ?? '').split('\n').filter((line) => line.length > 0)
       if (paths.length === 0) {
-        const cont = await tryGit(this.dir, ['rebase', '--continue'], this.options.networkTimeoutMs)
-        if (cont !== undefined) return { conflicts, resolvedByResolver, resolvedByTime, mergedByStructure }
+        const cont = await tryGitResult(this.dir, ['rebase', '--continue'], this.options.networkTimeoutMs)
+        if (cont.ok) return { conflicts, resolvedByResolver, resolvedByTime, mergedByStructure }
         // An empty commit (its change is already upstream) makes --continue
-        // refuse forever; with a clean index/tree the only way forward is --skip.
+        // refuse forever; --skip is the documented way forward. Do not gate this
+        // on a clean worktree: the memory plugin writes the store concurrently,
+        // so `git status` is routinely dirty during a sync and the old gate made
+        // the loop spin until the round cap (observed 2026-11-11 on the host).
+        if (isEmptyCommitFailure(`${cont.stdout}\n${cont.stderr}`)) {
+          const skipped = await tryGit(this.dir, ['rebase', '--skip'], this.options.gitTimeoutMs)
+          if (skipped !== undefined) {
+            mergedByStructure += 1
+            continue
+          }
+        }
+        // Fallback for git builds with different wording: only when the tree is
+        // clean is skipping safe without an explicit empty-commit signal.
         const dirty = await tryGit(this.dir, ['status', '--porcelain'], this.options.gitTimeoutMs)
         if ((dirty ?? '').trim() === '') {
           const skipped = await tryGit(this.dir, ['rebase', '--skip'], this.options.gitTimeoutMs)
