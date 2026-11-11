@@ -13,7 +13,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { MemorySync, STORE_GITIGNORE, entryStamp, isEntryPath, isHostDescriptorPath, isPersonaPath, isSessionNotePath, mergeLoopLedgers, mergePersona, newerEntry, newerHostDescriptor, newerSessionNote, nextClockDelay } from '../sync.js'
+import { MemorySync, STORE_GITIGNORE, entryStamp, isEmptyCommitFailure, isEntryPath, isHostDescriptorPath, isPersonaPath, isSessionNotePath, mergeLoopLedgers, mergePersona, newerEntry, newerHostDescriptor, newerSessionNote, nextClockDelay } from '../sync.js'
 import { applyConflictPlan, isArchivedEntryPath, projectRootOf } from '../sync-runtime.js'
 import { slugify } from '../storage.js'
 import type { EntryConflict } from '../sync.js'
@@ -263,6 +263,35 @@ test('a conflicting host descriptor keeps the newer reading', () => {
   assert.equal(isHostDescriptorPath('projects/a/project.json'), false)
   assert.equal(isHostDescriptorPath('entries/hosts/note.md'), false)
 })
+
+test('git empty-commit wording is recognised, ordinary failures are not', () => {
+  // real messages from git 2.5x
+  assert.equal(isEmptyCommitFailure('The previous cherry-pick is now empty, possibly due to conflict resolution.'), true)
+  assert.equal(isEmptyCommitFailure('nothing to commit, working tree clean'), true)
+  assert.equal(isEmptyCommitFailure('CONFLICT (content): Merge conflict in entries/a.md'), false)
+  assert.equal(isEmptyCommitFailure('fatal: could not read from remote repository'), false)
+})
+
+test('an identical change on both machines becomes an empty commit and the sync still finishes', async () => {
+  const { remote, left, right } = await twoWayFixture()
+  // right records the row locally first (no sync), then left lands the very same
+  // content upstream: replaying right's commit onto it produces an empty commit.
+  await mkdir(join(right.dir, 'entries'), { recursive: true })
+  const text = entryText('same-row', 'the very same fact', '2026-04-01T00:00:00.000Z')
+  await writeFile(join(right.dir, 'entries', 'same-row.md'), text)
+  git(right.dir, 'add', '-A')
+  git(right.dir, 'commit', '-q', '-m', 'memory(right): same row')
+  await mkdir(join(left.dir, 'entries'), { recursive: true })
+  await writeFile(join(left.dir, 'entries', 'same-row.md'), text)
+  await left.sync.run('test')
+
+  const outcome = await right.sync.run('test')
+
+  assert.equal(outcome.stoppedBy, undefined, 'the empty commit no longer aborts the sync')
+  assert.equal(git(right.dir, 'status', '--porcelain').trim(), '', 'no half-finished rebase left behind')
+  assert.match(execFileSync('git', ['-C', remote, 'show', 'main:entries/same-row.md'], { encoding: 'utf8' }), /the very same fact/u)
+})
+
 
 test('a persona file merges as a bullet union, section by section', () => {
   const ours = ['## 他怎么工作', '- 中文交流', '- 改完自己验', '', '## 他的标准', '- 讨厌假动作', ''].join('\n')
