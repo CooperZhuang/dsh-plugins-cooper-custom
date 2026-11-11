@@ -528,11 +528,18 @@ export function parseExtraction(text: string, maxMemories: number, sessionId: st
     // claim from the user's); the absent default means "the extractor's own
     // conclusion", which is what every entry written before this field existed is.
     const voice = record['voice'] === 'user' ? 'user' as const : record['voice'] === 'assistant' ? 'assistant' as const : undefined
+    // The user's own life facts keep their exact words in the body, not only in
+    // the evidence field: a later turn asks "我当时怎么说的", and the phrasing is
+    // the memory. The model is asked to do this, but it does not always — so it
+    // is enforced here, where the quote is already verified against the transcript.
+    const bodyWithVoice = voice === 'user' && quote.length > 0 && !cleanBody.includes(quote)
+      ? `「${quote}」：${cleanBody}`
+      : cleanBody
     usable.push({
       scope: scope as MemoryScope,
       kind: toMemoryKind(record['kind']),
       title: cleanTitle,
-      body: cleanBody,
+      body: bodyWithVoice,
       tags,
       keys,
       entities,

@@ -351,7 +351,7 @@ export const DEFAULT_EXTRACT_MAX_MEMORIES = 8
  * project material, and a benchmark-driven push toward personal memory added
  * nothing the user's real sessions needed.
  */
-export const DEFAULT_RECORD_SCOPE = 'work' as const
+export const DEFAULT_RECORD_SCOPE = 'both' as const
 
 /** Default idle hours a session must accumulate before it is mined. */
 export const DEFAULT_MIN_IDLE_HOURS = 6
@@ -536,7 +536,7 @@ export const Config = z.object({
   extractTimeoutMs: z.number().default(DEFAULT_EXTRACT_TIMEOUT_MS).description('Timeout for one extraction call.').volatile(),
   /** Max drafts one extraction may produce. */
     extractMaxMemories: z.number().default(DEFAULT_EXTRACT_MAX_MEMORIES).description('Maximum memories one extraction pass may store.').volatile(),
-  recordScope: z.union([z.const('work'), z.const('both')]).default(DEFAULT_RECORD_SCOPE).description('What the extractor may keep. `work` (default) keeps project/tooling/pre-sales material and leaves personal life alone unless asked; `both` also keeps personal background, relationships, habits and creative work.').volatile(),
+  recordScope: z.union([z.const('work'), z.const('both')]).default(DEFAULT_RECORD_SCOPE).description('What the extractor may keep. `both` (default) keeps work material AND the user\'s personal life; `work` leaves personal life alone unless asked.').volatile(),
   /** Minutes between periodic extraction checks over every open session. */
   extractIntervalMinutes: z.number().default(DEFAULT_EXTRACT_INTERVAL_MINUTES).description('How often to check every open session for new material and mine it in slices. Fractions are allowed. 0 disables the periodic check, leaving mining to the settle timer and the exit flush. Peak hours and the quota gate still apply; a session with nothing new costs no model call.').volatile(),
   /** A session must have been idle this long before it is mined. */
