@@ -662,6 +662,17 @@ export class MemorySync {
     const count = Number.parseInt(behind.trim(), 10)
     const rebase = await tryGit(this.dir, ['rebase', '--quiet', 'origin/main'], this.options.networkTimeoutMs)
     if (rebase !== undefined) return { ...nothing, pulled: count }
+    // A concurrent store write can leave the tree dirty, so git refuses to even
+    // start the rebase. Entering the resolver in that state is a trap: with no
+    // rebase in progress every --continue/--skip fails and the loop burns its
+    // whole round budget (2026-11-13: seven such warnings in two days). Skip the
+    // cycle cheaply and let the next timer retry once the writes settle; the
+    // --autostash shortcut is not used because a concurrent edit to a file the
+    // upstream commit also rewrites would resurface as conflict markers.
+    if (!this.rebaseInProgress()) {
+      this.options.log.warn('dsh-cross-memory: 记忆库 rebase 没能启动（工作区仍有未提交改动），本轮跳过同步')
+      return { ...nothing, pulled: 0, stoppedBy: 'rebase-not-started' }
+    }
     const resolution = await this.resolveRebase()
     return { pulled: count, ...resolution }
   }
@@ -687,11 +698,22 @@ export class MemorySync {
     let resolvedByTime = 0
     let mergedByStructure = 0
     for (let round = 0; round < 200; round += 1) {
+      // Without a live rebase every --continue/--skip fails, so a resolver that
+      // was entered in that state can never make progress; bail out instead of
+      // spending the whole round budget.
+      if (!this.rebaseInProgress()) {
+        this.options.log.warn('dsh-cross-memory: 记忆库 rebase 已不在进行中，结束本轮冲突处理')
+        return { conflicts, resolvedByResolver, resolvedByTime, mergedByStructure, stoppedBy: 'rebase-gone' }
+      }
       const unmerged = await tryGit(this.dir, ['diff', '--name-only', '--diff-filter=U'], this.options.gitTimeoutMs)
       const paths = (unmerged ?? '').split('\n').filter((line) => line.length > 0)
       if (paths.length === 0) {
         const cont = await tryGitResult(this.dir, ['rebase', '--continue'], this.options.networkTimeoutMs)
         if (cont.ok) return { conflicts, resolvedByResolver, resolvedByTime, mergedByStructure }
+        if (!this.rebaseInProgress()) {
+          this.options.log.warn('dsh-cross-memory: 记忆库 rebase 已结束，停止冲突处理')
+          return { conflicts, resolvedByResolver, resolvedByTime, mergedByStructure, stoppedBy: 'rebase-gone' }
+        }
         // An empty commit (its change is already upstream) makes --continue
         // refuse forever; --skip is the documented way forward. Do not gate this
         // on a clean worktree: the memory plugin writes the store concurrently,

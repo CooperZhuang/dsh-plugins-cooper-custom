@@ -9,6 +9,7 @@
  */
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -270,6 +271,33 @@ test('git empty-commit wording is recognised, ordinary failures are not', () => 
   assert.equal(isEmptyCommitFailure('nothing to commit, working tree clean'), true)
   assert.equal(isEmptyCommitFailure('CONFLICT (content): Merge conflict in entries/a.md'), false)
   assert.equal(isEmptyCommitFailure('fatal: could not read from remote repository'), false)
+})
+
+test('a pull that cannot start the rebase bails out instead of spinning', { timeout: 20_000 }, async () => {
+  const { left, right } = await twoWayFixture()
+  await writeFile(join(left.dir, 'entries', 'shared.md'), entryText('shared', 'left fact v2', '2026-03-01T00:00:00.000Z'))
+  await left.sync.run('test')
+  // A concurrent store write leaves the right tree dirty; git refuses to start a
+  // rebase over it. Before the guard this spun the resolver to its 200-round cap.
+  await writeFile(join(right.dir, 'entries', 'shared.md'), entryText('shared', 'uncommitted local edit', '2026-04-01T00:00:00.000Z'))
+  const started = Date.now()
+  const outcome = await (right.sync as unknown as { pull: () => Promise<{ pulled: number; stoppedBy?: string }> }).pull()
+  const elapsed = Date.now() - started
+
+  assert.ok(elapsed < 10_000, `pull took ${elapsed}ms, the guard should bail out immediately`)
+  assert.equal(outcome.stoppedBy, 'rebase-not-started')
+  assert.equal(existsSync(join(right.dir, '.git', 'rebase-merge')), false, 'no rebase left behind')
+  assert.match(await readFile(join(right.dir, 'entries', 'shared.md'), 'utf8'), /uncommitted local edit/u, 'the local edit is untouched')
+})
+
+test('a resolver entered without a live rebase gives up immediately', async () => {
+  const { right } = await twoWayFixture()
+  const started = Date.now()
+  const outcome = await (right.sync as unknown as { resolveRebase: () => Promise<{ stoppedBy?: string }> }).resolveRebase()
+  const elapsed = Date.now() - started
+
+  assert.ok(elapsed < 5_000, `resolveRebase took ${elapsed}ms without a rebase in progress`)
+  assert.equal(outcome.stoppedBy, 'rebase-gone')
 })
 
 test('an identical change on both machines becomes an empty commit and the sync still finishes', async () => {

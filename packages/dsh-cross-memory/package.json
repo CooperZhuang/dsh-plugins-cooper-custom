@@ -1,7 +1,7 @@
 {
   "name": "dsh-cross-memory",
   "description": "Cross-session memory for the DeepSeek Harness: project-scoped and global memories with an explicit memory tool, idle-time background extraction, consolidation, and layered summary injection",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "private": false,
   "publishConfig": {
     "access": "public"
