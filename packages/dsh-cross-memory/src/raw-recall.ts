@@ -262,6 +262,160 @@ export async function readTranscript(
  * @param limits - count/character/byte caps (byte cap applies across sessions).
  * @returns excerpts with their session id filled in.
  */
+/**
+ * Full-history RAG selection.
+ *
+ * `collectExcerpts` only reads the sessions a recalled memory came from, so it
+ * is anchored to the extraction. This one reads EVERY persisted session on this
+ * machine and picks the excerpts that lexically match the query best, which is
+ * what makes the raw channel a real retrieval path rather than a footnote.
+ *
+ * Zero model calls: the same tokenizer and scorer as `selectExcerpts`, so the
+ * cost is reading the logs (cached) and the text it injects.
+ *
+ * @param sessionsDir - `<dshHome>/sessions`.
+ * @param query - the current user turn.
+ * @param limits - same knobs as `selectExcerpts`, plus `maxSessions` to bound the
+ * number of logs opened.
+ * @returns the best matching excerpts across all sessions, empty when none match.
+ */
+export async function collectRagExcerpts(
+  sessionsDir: string,
+  query: string,
+  limits: RawRecallLimits & { readonly maxSessions?: number; readonly excludeSessionId?: string } = {},
+): Promise<RawExcerpt[]> {
+  // 0 means every log: a cap that is too small silently drops the conversation
+  // that holds the answer (measured: the target sat at rank 26 with a cap of 24).
+  const maxSessions = limits.maxSessions === 0 ? Number.POSITIVE_INFINITY : (limits.maxSessions ?? 24)
+  const excludeSessionId = limits.excludeSessionId
+  const maxExcerpts = limits.maxExcerpts ?? 4
+  const maxChars = limits.maxChars ?? 600
+  const maxBytes = limits.maxBytes ?? 2400
+  const queryTokens = tokens(query)
+  if (queryTokens.size === 0) return []
+  const logs = await findSessionLogs(sessionsDir).catch(() => [])
+  // Newest first: the same score prefers the later conversation, which is the one
+  // a follow-up is more likely to continue.
+  const ordered = logs.sort((left, right) => right.modifiedAt - left.modifiedAt).slice(0, maxSessions)
+  // Chunk by TURN, not by message: the question that matches a passage is the
+  // one the answer sits under, and a per-message excerpt can only ever return
+  // the question back. The turn is the unit a recall is about.
+  const turns: { sessionId: string; chunk: TurnChunk }[] = []
+  for (const log of ordered) {
+    const sessionId = normalizeSession(basename(dirname(log.file)))
+    // The session asking must not answer itself from its own log: the log holds
+    // the very turns being recalled, which reads as a perfect match and crowds
+    // out the earlier conversation the recall is for.
+    if (excludeSessionId !== undefined && sessionId === normalizeSession(excludeSessionId)) continue
+    const messages = await readTranscript(sessionsDir, sessionId)
+    if (messages === undefined) continue
+    for (const chunk of turnChunks(messages)) turns.push({ sessionId, chunk })
+  }
+  // Document frequency across every turn in this history, so the scorer can tell
+  // a word that appears everywhere from a word that names the thing.
+  const df = new Map<string, number>()
+  for (const turn of turns) {
+    for (const token of new Set(tokens(turn.chunk.text))) df.set(token, (df.get(token) ?? 0) + 1)
+  }
+  const candidates: { excerpt: RawExcerpt; score: number }[] = []
+  for (const item of selectTurnExcerpts(turns.map((turn) => turn.chunk), query, df, { maxExcerpts, maxChars, maxBytes })) {
+    const turn = turns.find((candidate) => candidate.chunk.seq === item.excerpt.seq)
+    candidates.push({ excerpt: { ...item.excerpt, sessionId: turn?.sessionId ?? '' }, score: item.score })
+  }
+  // Merge across sessions by score: one conversation that happens to hold several
+  // matching turns must not crowd out the conversation that holds the answer.
+  candidates.sort((left, right) => right.score - left.score)
+  const out: RawExcerpt[] = []
+  const seen = new Set<string>()
+  let used = 0
+  for (const item of candidates) {
+    if (out.length >= maxExcerpts) break
+    const key = item.excerpt.text.slice(0, 80)
+    if (seen.has(key)) continue
+    const cost = Buffer.byteLength(item.excerpt.text, 'utf8') + 16
+    if (used + cost > maxBytes) continue
+    seen.add(key)
+    used += cost
+    out.push(item.excerpt)
+  }
+  return out
+}
+
+/** One user turn and the assistant turns that answered it. */
+export interface TurnChunk {
+  readonly seq: number
+  readonly text: string
+}
+
+/** Group a transcript into user→assistant turns, dropping turns with no prose. */
+export function turnChunks(messages: readonly BackfillMessage[]): TurnChunk[] {
+  const chunks: TurnChunk[] = []
+  let current: { seq: number; lines: string[] } | undefined
+  for (const message of messages) {
+    if (message.role === 'user') {
+      if (current !== undefined && current.lines.length > 0) chunks.push({ seq: current.seq, text: current.lines.join('\n') })
+      current = { seq: message.seq, lines: [message.text] }
+    } else if (current !== undefined) {
+      current.lines.push(message.text)
+    }
+  }
+  if (current !== undefined && current.lines.length > 0) chunks.push({ seq: current.seq, text: current.lines.join('\n') })
+  return chunks
+}
+
+/**
+ * Score one turn against the query, idf-weighted.
+ *
+ * The plain shared-token count cannot tell 「同步」 from 「uk_file_invoice_sha_role」:
+ * both add one, and the common word wins because it appears everywhere. Weighting
+ * by how rare a token is across the turns in this history is what makes the
+ * passage that names the thing outrank the passage that mentions the topic.
+ *
+ * @param text - one turn.
+ * @param queryTokens - tokens of the current turn.
+ * @param df - how many turns contain each token.
+ * @param total - number of turns scored.
+ * @param maxChars - window size.
+ * @returns the best window's score.
+ */
+function scoreTurn(text: string, queryTokens: Set<string>, df: Map<string, number>, total: number, maxChars: number): number {
+  const window = bestWindow(text, queryTokens, maxChars)
+  const counts = new Map<string, number>()
+  for (const token of tokens(window.text)) counts.set(token, (counts.get(token) ?? 0) + 1)
+  let score = 0
+  for (const token of queryTokens) {
+    const tf = counts.get(token) ?? 0
+    if (tf === 0) continue
+    const idf = Math.log(1 + total / (df.get(token) ?? 1))
+    score += (tf * (idf + 1)) / (tf + 1.5)
+  }
+  return score
+}
+
+/** Select the best-matching turns across a whole history, idf-weighted. */
+function selectTurnExcerpts(
+  turns: readonly TurnChunk[],
+  query: string,
+  df: Map<string, number>,
+  limits: RawRecallLimits = {},
+): { excerpt: RawExcerpt; score: number }[] {
+  const maxExcerpts = limits.maxExcerpts ?? 3
+  const maxChars = limits.maxChars ?? 400
+  const queryTokens = tokens(query)
+  if (queryTokens.size === 0) return []
+  const scored = turns
+    .filter((turn) => turn.text.trim().length >= 24)
+    .map((turn) => ({ turn, score: scoreTurn(turn.text.trim(), queryTokens, df, turns.length, maxChars) }))
+    .filter((item) => item.score >= 2)
+    .sort((left, right) => right.score - left.score)
+    .slice(0, maxExcerpts)
+  return scored.map((item) => {
+    const window = bestWindow(item.turn.text.trim(), queryTokens, maxChars)
+    const text = redactSecrets(window.text.trim()).replace(/\s+/gu, ' ').slice(0, maxChars)
+    return { excerpt: { sessionId: '', seq: item.turn.seq, role: 'assistant' as const, text }, score: item.score }
+  }).filter((item) => item.excerpt.text.length >= 24)
+}
+
 export async function collectExcerpts(
   sessionsDir: string,
   sources: readonly { readonly sessionId: string; readonly quote?: string }[],

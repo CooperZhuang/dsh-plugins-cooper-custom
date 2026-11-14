@@ -1,444 +1,272 @@
 {
-  "project": "Mubea_Invoice-Insight",
-  "sessions": 50,
-  "goldFacts": 247,
-  "covered": 186,
-  "coverage": 0.753,
-  "avgScore": 3.82,
-  "scoreDist": {
-    "1": 2,
-    "2": 2,
-    "2.5": 1,
-    "3": 6,
-    "3.5": 2,
-    "4": 27,
-    "4.5": 1,
-    "5": 9
+  "before": {
+    "sessions": 50,
+    "gold": 247,
+    "covered": 186,
+    "coverage": 0.753,
+    "avgScore": 3.82,
+    "missed": 61,
+    "noise": 41
   },
-  "missedCount": 61,
-  "noiseCount": 41,
-  "missedByCategory": {
-    "其他": 53,
-    "易变快照数字": 2,
-    "一次性任务状态/评审结论": 2,
-    "代码/git 可查或已修": 4
+  "after": {
+    "sessions": 50,
+    "gold": 316,
+    "covered": 256,
+    "coverage": 0.8101,
+    "avgScore": 4.02,
+    "missed": 60,
+    "noise": 35
   },
-  "noiseByCategory": {
-    "代码/git 可查或已修": 11,
-    "其他": 6,
-    "一次性任务状态/评审结论": 23,
-    "易变快照数字": 1
-  },
-  "missed": [
+  "perSession": [
     {
       "n": 0,
-      "fact": "PC 上 Mubea_Invoice-Insight 位于 C:\\CodeRepository\\，与 Mac 端 ~/Documents/Code/Mubea_Invoice-Insight 的路径映射（后续再同步/取文件要用）"
-    },
-    {
-      "n": 2,
-      "fact": "tests/conftest.py:445 在 Windows 上的 150 项单进程硬闸门（全套件的第二道防线）"
-    },
-    {
-      "n": 7,
-      "fact": "PC 无 rsync，跨机同步目录用 tar 流经 ssh（中文文件名可完整保留）"
-    },
-    {
-      "n": 7,
-      "fact": "生产 2,079 份档案在所有列表/统计里不可见，其中 638 份可由 resolve_unattributed() 自动修复但生产从未执行"
-    },
-    {
-      "n": 7,
-      "fact": "生产登录自启计划任务（MubeaInvoiceInsight-App-User / -MySQL-User）从未运行，应用不会自动拉起"
-    },
-    {
-      "n": 8,
-      "fact": "PC 无法 push 时用 Mac git bundle → scp → git fetch <bundle> → merge --ff-only FETCH_HEAD 绕过 PC 凭据"
-    },
-    {
-      "n": 10,
-      "fact": "全局日限额与「今日 N」计数口径未定义：沿用 arch_verification 会把人工二次查验算进 API 限额"
-    },
-    {
-      "n": 10,
-      "fact": "放弃投递守卫放置层未写清，§6.2「含人工入口」是未声明的行为变更"
-    },
-    {
-      "n": 10,
-      "fact": "候选条件要求 buyer 非空与同段「成本中心兜底」矛盾"
-    },
-    {
-      "n": 11,
-      "fact": "sweep 保留成本中心兜底违反设计 §4.3（only_with_buyer 不能阻止第三档触发）"
-    },
-    {
-      "n": 12,
-      "fact": "逻辑一致性复核 36 项已修（报告 docs/审计与验证报告/系统逻辑一致性复核_20261017.md），遗留 P2-3/P2-8"
-    },
-    {
-      "n": 12,
-      "fact": "SAP 投递重试口径：ADD 成功即持久化 pdfid，SUB 失败只补 SUB，避免重复 AIFP"
-    },
-    {
-      "n": 12,
-      "fact": "状态机收敛：sap_pending/sap_archived 废弃（跃迁目标 400），归档族只允许转 in_exception"
-    },
-    {
-      "n": 12,
-      "fact": "原件唯一索引 uk_file_invoice_sha_role 含 storage；升级先跑 dedupe_invoice_files.py --apply 再重启"
-    },
-    {
-      "n": 12,
-      "fact": "组织隔离一律走 resolve_org_scope（授权∩隐藏），补 /api/invoices 等端点过滤，rbac:manage 不能越权"
-    },
-    {
-      "n": 12,
-      "fact": "二次查验失败要进异常中心（red_flush/verify_failed），v0.1.12 修复并回填 14 条红冲"
-    },
-    {
-      "n": 12,
-      "fact": "macOS 无单进程全量测试限制，只有 Windows 有护栏"
-    },
-    {
-      "n": 12,
-      "fact": "手工上传必须选发票类别（网页强制，API 未传默认 supplier）"
-    },
-    {
-      "n": 12,
-      "fact": "二次识别与查验走后台队列：入队返回 job_id，每 5 秒消费 20 张"
-    },
-    {
-      "n": 12,
-      "fact": "invoice_category 按 source_channel 派生并在启动时幂等回填"
-    },
-    {
-      "n": 12,
-      "fact": "升级回传件外发前先脱敏：transcript.txt 含明文 VerifyPermitCode"
-    },
-    {
-      "n": 13,
-      "fact": "run_all 只吞 DataSourceError、bootstrap_all 无 per-source 隔离：一个坏源让其余源轮不到，单个源没挂载把首跑判失败"
-    },
-    {
-      "n": 13,
-      "fact": "一次定时接入在 arch_sync_run 留两条口径不同的记录，内层恒记 trigger_type=manual；run_id 用 COUNT(*) 会撞键"
-    },
-    {
-      "n": 13,
-      "fact": "接入无并发闸门：查原件→算 sha→INSERT 是 check-then-act，并发时同一票登记两条 original"
-    },
-    {
-      "n": 16,
-      "fact": "售前材料最后更新于 2026-10-16（对应 v0.1.7），此后代码发布 v0.1.8~v0.1.12，材料待更新（版本差/项目状态）"
-    },
-    {
-      "n": 23,
-      "fact": "拖拽上传只在 Windows + 桌面 Outlook + Edge/Chrome 成立；网页邮箱拖拽、拖整封邮件、邮箱自动接入都不可行（含 64MB 上限、需先选类别）"
-    },
-    {
-      "n": 23,
-      "fact": "拖不成功时页面没有任何提示（onDrop 文件为空直接 return），用户分不清不支持还是没拖准"
-    },
-    {
-      "n": 27,
-      "fact": "本地验证环境：18100 实例、admin/Mubea@2026 登录、Playwright 可执行文件与脚本模板路径（后续浏览器复核会用上）"
-    },
-    {
-      "n": 28,
-      "fact": "SAP_TIMEOUT_RENOTIFY_HOURS=24 与 arch_sap_delivery.notified_at 去重（同一张卡票 24h 内不重复督办）"
-    },
-    {
-      "n": 28,
-      "fact": "投递成功/失败写 arch_audit_log（sap_delivery_success / sap_delivery_failed），档案时间轴可见"
-    },
-    {
-      "n": 28,
-      "fact": "界面 SAP 去向标签「投递失败（历史台账口径）」改为「投递失败」"
-    },
-    {
-      "n": 28,
-      "fact": "sap_timeout_watch 2026-10-17 起重新注册（24h 预警 / 72h 升级、间隔默认 60 分钟），未接 SAP 不注册、未注册时手动触发 404"
-    },
-    {
-      "n": 29,
-      "fact": "共享盘归集可补 17 个字段（只补空、幂等，diag_verify_agg.py --apply --yes），待用户拍板"
-    },
-    {
-      "n": 30,
-      "fact": "列表缺省只认系统默认，个人偏好由前端读 me.ui_prefs 后显式传参"
-    },
-    {
-      "n": 31,
-      "fact": "SAP 凭证反查走 ZFI_AIDOC，传 20 位发票号原样、后 8 位由 ABAP 内部取，与 PDFID 无关"
-    },
-    {
-      "n": 31,
-      "fact": "AIDOC 的 not_found 被当成「没进过 SAP」，且 not_found 是终态、系统不自动重查"
-    },
-    {
-      "n": 31,
-      "fact": "投递用的 pdfid 是我方 ADD 的返回值，重试只补 sub 不重 ADD"
-    },
-    {
-      "n": 31,
-      "fact": "COM 桥空输出真因被三处吞掉（stderr 不进日志、rc 不进异常、桥层 logger 未接入）"
-    },
-    {
-      "n": 31,
-      "fact": "部署清单 192 条不含 sap_gui_com_bridge/VBS，现场 VBS 无法远程核对"
-    },
-    {
-      "n": 31,
-      "fact": "v0.2.2 已上生产：旧列 sap_state 已删，去向拆三列（voucher_state / delivery_state / delivered_by）"
-    },
-    {
-      "n": 31,
-      "fact": "vault_sync 的 ok=false 未写 reason 的日志缺陷，v0.2.2 修复"
-    },
-    {
-      "n": 32,
-      "fact": "部署清单 192 条不含 sap_gui_com_bridge/VBS，现场 VBS 无法远程核对"
-    },
-    {
-      "n": 32,
-      "fact": "测试缺口：空 stdout+rc0、stderr 透出、桥层日志、BILL_NO 复用、反查时效、异常路径是否更新 sap_state"
-    },
-    {
-      "n": 33,
-      "fact": "英文措辞词表：Link to FIDOC / Link / Linking… / Linking failed / Linking pending / No linking required / FIDOC linking"
-    },
-    {
-      "n": 34,
-      "fact": "文档新词表：待关联 / 关联失败 / 无需关联 / 已关联 / 已有凭证，FIDOC 关联数 / 关联成功率，作业名与设置组"
-    },
-    {
-      "n": 34,
-      "fact": "共享工作区规矩：只动名下文件，不 commit、不跑全局格式化、不改 CHANGELOG/VERSION"
-    },
-    {
-      "n": 35,
-      "fact": "批量返回 not_found 必须逐条单条复核后才落 not_found，批量与单条不一致记 batch_disagree 指标日志（质量口径，未记）"
-    },
-    {
-      "n": 38,
-      "fact": "复核发现的残留漏改清单（历史数据未回填 delivered_by、collect_diagnostics 对报销类误判、软删档案类别判定不一致、sap_failed 督办无类别过滤、enqueue 静默丢报销类等 11 条）——只记了口径，没记已知缺口"
-    },
-    {
-      "n": 39,
-      "fact": "报销类 SAP 去向显示口径：没查过/查不到→「无需关联 FIDOC」，已查到凭证→「已有凭证（无需关联 FIDOC）」"
-    },
-    {
-      "n": 41,
-      "fact": "结论「pyc-only 能跑」：85 个 .py 编译为 legacy .pyc 删源码后 import/服务/接口全正常、运行期失败 0"
-    },
-    {
-      "n": 41,
-      "fact": "版本锁定实锤：3.12 编的 pyc 用 3.14 导入报 bad magic number，仓库无 .python-version，uv sync --frozen 默认落 3.14.5"
-    },
-    {
-      "n": 41,
-      "fact": "防篡改为零：pyc 旁放同名 .py 会被直接执行，不加启动哈希自检不算防护"
-    },
-    {
-      "n": 41,
-      "fact": "保护面只到 app/：scripts/ 与 start_server.py 仍是源码"
-    },
-    {
-      "n": 42,
-      "fact": "部署自检 diag 与启动首轮 staged_ignore 登记撞车，dry-run 会出现 ignored_staged=0 的时序假象（查验通道先跑读空表、识别通道后跑读得到表）"
-    },
-    {
-      "n": 42,
-      "fact": "SAP 侧边界口径：作废只改本系统判定，MIRO 与已投 AIFP 的 FIDOC 行本系统撤不回，需 SAP 侧处理"
-    },
-    {
-      "n": 43,
-      "fact": "报销类档案不需要 company_code（1438 张未绑定主体是产品口径允许，不是告警）；501+2 行真缺失无来源、需人工补或走查验"
-    },
-    {
-      "n": 46,
-      "fact": "字段待补录机制设计：异常第 9 类 field_missing、幂等开单 dedup_key、补齐/删除/作废自动闭环、只补空不覆盖白名单、写闸"
-    },
-    {
-      "n": 46,
-      "fact": "后台补录作业 field_missing_backfill 参数（块 20/每轮≤100/10 分钟预算/可续跑）与 4 个运行时配置（interval=10、batch=100、minutes=10、verify=true，0=关）"
-    },
-    {
-      "n": 46,
-      "fact": "API 前缀是单数 /api/archive；auth_service ROUTE_GUARDS 必须同步补，否则接口 403"
-    },
-    {
-      "n": 49,
-      "fact": "异常中心接入列表页滚动机制的取舍：KPI 行 223→166px、筛选条 170→120px、表格 1300px 下限；代价是「操作」列要横向滚动才点得到（曾提出可做 sticky 右列）"
-    },
-    {
-      "n": 49,
-      "fact": "待决业务事项：503 行真缺失字段（501 条未闭环）是否安排人工补；共享盘归集可补 17 个字段（scripts\\diag_verify_agg.py --apply --yes，只补空幂等）是否重跑"
-    }
-  ],
-  "noise": [
-    {
-      "n": 0,
-      "item": "extracted_logs.tar.zst 上游已删、快进时本地被删、可从 800a5cf 或 /tmp 副本取回（一次性同步产物，git 历史可查，/tmp 副本本身易失）"
+      "before": "3/4",
+      "after": "1/1"
     },
     {
       "n": 1,
-      "item": "测试与部署脚本的既有入口文件清单（可从仓库直接查，且对话未给出任何实质内容）"
-    },
-    {
-      "n": 1,
-      "item": "双端测试工作流设计文档路径与仓库背景（路径可查，对话仅两句助手意图，无事实支撑）"
+      "before": "0/0",
+      "after": "0/0"
     },
     {
       "n": 2,
-      "item": "复核双端测试工作流设计文档：前 5 项旧问题已全部解决、硬约束核对通过（一次性评审状态，rev3 已取代）"
-    },
-    {
-      "n": 2,
-      "item": "设计文档 §5 数据流图与文字对「先本机还是先 PC」自相矛盾（rev3 已改为「先本机、后 PC」，已修复）"
-    },
-    {
-      "n": 2,
-      "item": "设计文档 §1.1/§1.2/§8.1 的「12 项」与 §4.6.2/§8.2 的「19 项」冲突（rev3 已统一为 19，已修复）"
+      "before": "2/3",
+      "after": "4/4"
     },
     {
       "n": 3,
-      "item": "双端测试工作流设计文档 revision 3 已通过评审、五项历史问题全部解决（一次性评审状态，可从文档修订记录查）"
+      "before": "4/4",
+      "after": "4/4"
     },
     {
       "n": 4,
-      "item": "双端测试工作流实施计划评审结论：4 个阻塞问题、硬约束无便捷全量路径（一次性评审状态）"
-    },
-    {
-      "n": 4,
-      "item": "Task 10 未验证 PC 暂存 .venv 的解释器版本为 3.14（计划缺口，随计划更新失效）"
+      "before": "3/3",
+      "after": "6/6"
     },
     {
       "n": 5,
-      "item": "Task 1 已提交 f738778、main 上工作区干净（git 可查的一次性状态）"
+      "before": "2/2",
+      "after": "1/1"
     },
     {
-      "n": 5,
-      "item": "按计划改注释时重复的句子合并而不是照抄追加（一次性编辑细节）"
+      "n": 6,
+      "before": "4/4",
+      "after": "5/7"
+    },
+    {
+      "n": 7,
+      "before": "5/8",
+      "after": "8/10"
+    },
+    {
+      "n": 8,
+      "before": "2/3",
+      "after": "3/3"
+    },
+    {
+      "n": 9,
+      "before": "3/3",
+      "after": "3/3"
     },
     {
       "n": 10,
-      "item": "主体归集自动化设计评审结论：可作为 P1 计划基础，两条须先定稿（未指明哪两条，无法行动）"
+      "before": "5/8",
+      "after": "6/6"
     },
     {
       "n": 11,
-      "item": "system diagnostics 接口直接返回 checks 字典，没有 checks 外层键（代码可查，且属一次性计划修正）"
+      "before": "4/5",
+      "after": "6/6"
+    },
+    {
+      "n": 12,
+      "before": "5/16",
+      "after": "9/11"
+    },
+    {
+      "n": 13,
+      "before": "5/8",
+      "after": "7/9"
+    },
+    {
+      "n": 14,
+      "before": "5/5",
+      "after": "6/8"
+    },
+    {
+      "n": 15,
+      "before": "5/5",
+      "after": "5/8"
     },
     {
       "n": 16,
-      "item": "售前材料审计底稿的写作用域与任务来源（一次性任务细节）"
+      "before": "3/4",
+      "after": "1/6"
+    },
+    {
+      "n": 17,
+      "before": "5/5",
+      "after": "7/8"
+    },
+    {
+      "n": 18,
+      "before": "5/5",
+      "after": "8/10"
     },
     {
       "n": 19,
-      "item": "抽屉字段绑定：票种=invoice_type，发票代码=invoice_code，发票形态=invoice_kind（可直接从 app.js 查到）"
+      "before": "4/4",
+      "after": "7/8"
     },
     {
       "n": 20,
-      "item": "档案列表批量操作的前端实现位置与契约（task-2）（实现已在代码，且带一次性任务号）"
+      "before": "4/4",
+      "after": "4/4"
     },
     {
-      "n": 20,
-      "item": "前端任务只改 write_scopes 文件，不动后端、不 git commit（一次性任务约束）"
+      "n": 21,
+      "before": "5/5",
+      "after": "4/5"
+    },
+    {
+      "n": 22,
+      "before": "5/5",
+      "after": "7/7"
     },
     {
       "n": 23,
-      "item": "上传页拖拽提示已随 v0.1.22 上线：三条提示 + 悬停高亮 + 框外兜底（版本状态，代码可查）"
+      "before": "3/5",
+      "after": "5/6"
     },
     {
-      "n": 23,
-      "item": "v0.1.22 已上生产：回传 _回传_20261027-101413.zip 成功，manifest 187 项全对（一次性发布记录）"
+      "n": 24,
+      "before": "5/5",
+      "after": "5/8"
+    },
+    {
+      "n": 25,
+      "before": "5/5",
+      "after": "5/5"
     },
     {
       "n": 26,
-      "item": "SAP 投递文档复核：六个点名疑点全部成立，行号抽查未发现指错（一次性复核结果，非持久事实）"
+      "before": "4/4",
+      "after": "5/6"
+    },
+    {
+      "n": 27,
+      "before": "4/5",
+      "after": "5/6"
     },
     {
       "n": 28,
-      "item": "SAP 文档同步任务：只改指定文档，不动代码/tests/CHANGELOG/SAP投递*.md（一次性任务范围）"
+      "before": "6/10",
+      "after": "3/6"
     },
     {
       "n": 29,
-      "item": "升级后需用户手动刷新页面：旧标签页仍跑旧前端，普通刷新即可（一次性操作状态）"
+      "before": "5/6",
+      "after": "6/6"
     },
     {
       "n": 30,
-      "item": "task-2 的验证范围：只跑新测试 + page_size/auth/me 相关文件 + test_api，不跑全量（一次性任务范围）"
+      "before": "3/4",
+      "after": "4/4"
+    },
+    {
+      "n": 31,
+      "before": "2/9",
+      "after": "5/11"
+    },
+    {
+      "n": 32,
+      "before": "5/7",
+      "after": "8/8"
+    },
+    {
+      "n": 33,
+      "before": "5/6",
+      "after": "5/5"
+    },
+    {
+      "n": 34,
+      "before": "4/6",
+      "after": "5/5"
     },
     {
       "n": 35,
-      "item": "task-1 新增 5 个配置键的 attr/类型/默认值（含 recheck_window）——键名/类型/默认值已在代码与 .env，可查"
+      "before": "4/5",
+      "after": "4/5"
     },
     {
-      "n": 35,
-      "item": "task-1 交付口径：先写用例再改实现，只动名下文件，完成后 send_message 给 lead——「只动名下文件/给 lead 回执」是一次性任务范围与交付动作"
+      "n": 36,
+      "before": "5/5",
+      "after": "5/5"
     },
     {
       "n": 37,
-      "item": "task-5 可写范围：只改 tests/ 与 tests/conftest.py——一次性任务范围"
+      "before": "4/4",
+      "after": "5/5"
     },
     {
-      "n": 37,
-      "item": "task-5 提速结果：全量 591s→117s，-m 'not slow' 91.55s——耗时是会变的快照，只有「日常命令 pytest -m 'not slow'」算持久约定"
+      "n": 38,
+      "before": "4/5",
+      "after": "7/11"
     },
     {
       "n": 39,
-      "item": "task-5 写范围：只改名下 7 个文档，不动代码/测试/CHANGELOG，不 commit——一次性任务范围"
+      "before": "4/5",
+      "after": "8/8"
+    },
+    {
+      "n": 40,
+      "before": "5/5",
+      "after": "6/7"
     },
     {
       "n": 41,
-      "item": "pyc-only 可行性实测报告位置与实验环境——只给指针不给结论，报告本身在工作树 docs 里可查，价值低"
+      "before": "3/7",
+      "after": "7/8"
     },
     {
       "n": 42,
-      "item": "v0.4.0 一键替换 bat 误判安装目录（已修 170ad5f）——已修复的 bug，git 可查"
+      "before": "4/6",
+      "after": "6/12"
     },
     {
       "n": 43,
-      "item": "进度脚本两个误报（.env 口令解析、普通权限读命令行）——已修复的脚本 bug，代码可查"
+      "before": "4/5",
+      "after": "6/8"
     },
     {
       "n": 44,
-      "item": "复用 /tmp/parse_sql.py 的 split_rows/parse_vals——/tmp 临时工具，一次性任务细节"
-    },
-    {
-      "n": 44,
-      "item": "投递分布细分（linked 7,321 全 upstream、system 为 0）——一次性统计快照"
+      "before": "1/1",
+      "after": "5/5"
     },
     {
       "n": 45,
-      "item": "新增 6 个 integrity.field.<列名> key——语言包可查"
+      "before": "1/1",
+      "after": "3/3"
     },
     {
-      "n": 45,
-      "item": "task-2 交付口径（只改 5 个文件、不 git add/commit）——一次性任务细节"
-    },
-    {
-      "n": 45,
-      "item": "task-2 验证命令——一次性任务细节"
-    },
-    {
-      "n": 47,
-      "item": "task-5 验证命令——一次性任务细节"
+      "n": 46,
+      "before": "0/3",
+      "after": "5/6"
     },
     {
       "n": 47,
-      "item": "task-5 可写范围——一次性任务细节"
-    },
-    {
-      "n": 47,
-      "item": "新增 15 个 i18n key——代码/语言包可查"
+      "before": "2/2",
+      "after": "7/7"
     },
     {
       "n": 48,
-      "item": "本地 data/db 是 10-27 旧 schema（无 voided 列）——易变的环境状态"
+      "before": "2/2",
+      "after": "3/4"
     },
     {
       "n": 49,
-      "item": "v0.5.1 已发布并上生产成功：229 项清单 0 不符、12 项额外步骤全幂等（一次性发布/回传记录，非持久事实）"
+      "before": "4/6",
+      "after": "6/11"
     }
   ]
 }

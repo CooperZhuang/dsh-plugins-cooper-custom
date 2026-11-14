@@ -61,7 +61,9 @@ async function fixture(
   settings: Partial<MemoriesConfig> = {},
 ) {
   const dir = await mkdtemp(join(tmpdir(), 'dsh-cross-memory-recall-'))
-  const runtime = new MemoriesRuntime(stubContext, { memoriesDir: dir, autoExtract: false, ...settings })
+  // The raw channel is on by default now; these tests are about the MEMORY half,
+// so they switch it off unless a test asks for it.
+  const runtime = new MemoriesRuntime(stubContext, { memoriesDir: dir, autoExtract: false, ragRecall: false, ...settings })
   t.after(() => {
     runtime.dispose()
     return rm(dir, { recursive: true, force: true })
@@ -102,7 +104,7 @@ async function loggedFixture(
     return Logger.format({} as never, { ts: Date.now(), type, name: 'dsh-cross-memory', args } as never)
   }
   const dir = await mkdtemp(join(tmpdir(), 'dsh-cross-memory-recall-'))
-  const runtime = new MemoriesRuntime(context, { memoriesDir: dir, autoExtract: false, ...settings })
+  const runtime = new MemoriesRuntime(context, { memoriesDir: dir, autoExtract: false, ragRecall: false, ...settings })
   t.after(() => {
     runtime.dispose()
     return rm(dir, { recursive: true, force: true })

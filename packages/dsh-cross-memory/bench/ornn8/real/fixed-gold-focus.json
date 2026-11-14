@@ -1,0 +1,12 @@
+{
+  "method": "focus extraction (top-10 turns)",
+  "goldSet": "fixed-gold.json",
+  "sessions": 50,
+  "gold": 218,
+  "covered": 123,
+  "coverage": 0.5642,
+  "windowExtraction": {
+    "covered": 151,
+    "coverage": 0.6927
+  }
+}

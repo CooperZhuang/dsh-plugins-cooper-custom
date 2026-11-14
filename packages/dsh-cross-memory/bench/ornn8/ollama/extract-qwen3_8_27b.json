@@ -1,0 +1,229 @@
+[
+  {
+    "sid": "session-95d94fe8-ba9c-4556-9a78-9c9c565eec26",
+    "ms": 170942,
+    "stored": 0,
+    "titles": [],
+    "raw": "{\"memories\":[{\"scope\":\"global\",\"kind\":\"preference\",\"title\":\"同步项目时跳过可本地生成或联网下载的内容\",\"body\":\"用户明确要求：跨机器同步项目时，凡是能在本地重新生成（如 .venv、wheels、dist、__pycache__）或联网下载（如 offline-bundle、.tools）的内容一律不搬运，只传 git 追不到的不可再生文件。\",\"tags\":[\"sync\",\"scp\",\"regenerable\",\"preference\"],\"keys\":[\"同步\",\"sync\",\"跳过\",\"regenerable\",\"下载\",\"生成\",\"scp\",\"搬运\"],\"entities\":[\"cooper\"],\"appliesTo\":\"跨机器同步项目或传输文件时\",\"quote\":\"一些能在本地生成或者联网下载的内容就不用同步过来了\",\"voice\":\"user\"},{\"scope\":\"project\",\"kind\":\"fact\",\"title\":\"Mubea_Invoice-Insight 双端路径与 GitHub 远程\",\"body\":\"PC 端路径 C:\\\\CodeRepository\\\\Mubea_Invoice-Insight，Mac 本地路径 /Users/cooper/Documents/Code/Mubea_Invoice-Insight。远程为 GitHub origin/main，代码以 git 推送为准，跨机同步走 fast-forward 即可，无需整目录 scp。\",\"tags\":[\"path\",\"github\",\"sync\",\"repository\"],\"keys\":[\"Mubea_Invoice-Insight\",\"路径\",\"PC\",\"Mac\",\"GitHub\",\"origin/main\",\"C:\\\\CodeRepository\",\"/Users/cooper\"],\"entities\":[\"Mubea_Invoice-Insight\",\"cooper\"],\"appliesTo\":\"需要定位项目文件或确认远程仓库状态时\"},{\"scope\":\"project\",\"kind\":\"knowledge\",\"title\":\"三个 gitignore 密钥文件需手动 scp 传输\",\"body\":\".env、sap_http_bridge/config.ini、scripts/sap_selftest.local.env 是 gitignore 的本地密钥/配置，联网下不到，跨机同步时必须单独 scp 并用 SHA256 逐字节校验。其余非 git 文件（.venv、.mysql、.backup、.run、wheels、dist、tmp 等）均可本地重建，无需搬运。\",\"tags\":[\"secrets\",\"gitignore\",\"scp\",\"config\",\"transfer\"],\"keys\":[\".env\",\"config.ini\",\"sap_selftest.local.env\",\"密钥\",\"gitignore\",\"scp\",\"SHA256\",\"手动传输\"],\"entities\":[\".env\",\"config.ini\",\"sap_selftest.local.env\",\"sap_http_bridge\"],\"appliesTo\":\"跨机器同步项目后需要补齐本地配置时\"},{\"scope\":\"project\",\"kind\":\"failure\",\"title\":\".env 是 Windows 环境配置，macOS 上需调整路径和 DSN\",\"body\":\"从 PC scp 过来的 .env 包含 Windows 路径和 DSN 等配置，在 macOS 上直接运行会出错，需要按需修改路径分隔符、数据库连接串等。同步完成后不能假设 .env 开箱即用。\",\"tags\":[\"env\",\"cross-platform\",\"windows\",\"macos\",\"dsn\"],\"keys\":[\".env\",\"Windows\",\"macOS\",\"路径\",\"DSN\",\"跨平台\",\"环境配置\"],\"entities\":[\".env\",\"Mubea_Invoice-Insight\"],\"appliesTo\":\"在 Mac 上首次运行项目或排查连接错误时\"},{\"scope\":\"project\",\"kind\":\"procedure\",\"title\":\"依赖管理用 uv + Python 3.14，变更后需 uv sync 重建\",\"body\":\"项目使用 uv 管理虚拟环境（Python 3.14）。依赖变更后本地 .venv 会过期，跑之前必须执行 uv sync 重建。不要直接复用旧 .venv，尤其是从 Windows 同步过来的（架构不兼容）。\",\"tags\":[\"uv\",\"python\",\"venv\",\"dependency\",\"rebuild\"],\"keys\":[\"uv\",\"uv sync\",\"Python 3.14\",\"虚拟环境\",\"venv\",\"依赖\",\"重建\"],\"entities\":[\"Mubea_Invoice-Insight\",\"uv\"],\"appliesTo\":\"本地首次运行项目或依赖变更后启动服务前\"}],\"loops\":[],\"summary\":\"本次会话将 PC（Windows）上的 Mubea_Invoice-Insight 项目同步到 Mac 本地。确认代码已全部推至 GitHub，本地只需 fast-forward 到 v0.1.6（4d1e4d0）；按用户要求跳过所有可再生/可下载内容（.venv、.mysql、wheels 等），仅 scp 了三个 gitignore 密钥文件并做 SHA256 校验。提醒了 .env 的 Windows 路径问题和 uv sync 重建需求。\"}"
+  },
+  {
+    "sid": "session-c3b3c4cb-0ce6-4726-8a7c-b453c7e37781",
+    "ms": 301499,
+    "stored": 0,
+    "titles": [],
+    "raw": "{\"memories\":[{\"scope\":\"global\",\"kind\":\"preference\",\"title\":\"同步项目时跳过可本地生成或联网下载的内容\",\"body\":\"用户明确要求：跨机器同步项目时，凡是能在本地重新生成（如 .venv、wheels、dist、__pycache__）或联网下载（如 offline-bundle、.tools）的内容一律不搬运，只传 git 追不到的不可再生文件。\",\"tags\":[\"sync\",\"scp\",\"regenerable\",\"preference\"],\"keys\":[\"同步\",\"sync\",\"跳过\",\"regenerable\",\"下载\",\"生成\",\"scp\",\"搬运\"],\"entities\":[\"cooper\"],\"appliesTo\":\"跨机器同步项目或传输文件时\",\"quote\":\"一些能在本地生成或者联网下载的内容就不用同步过来了\",\"voice\":\"user\"},{\"scope\":\"project\",\"kind\":\"fact\",\"title\":\"Mubea_Invoice-Insight 双端路径与 GitHub 远程\",\"body\":\"PC 端路径 C:\\\\CodeRepository\\\\Mubea_Invoice-Insight，Mac 本地路径 /Users/cooper/Documents/Code/Mubea_Invoice-Insight。远程为 GitHub origin/main，代码以 git 推送为准，跨机同步走 fast-forward 即可，无需整目录 scp。\",\"tags\":[\"path\",\"github\",\"sync\",\"repository\"],\"keys\":[\"Mubea_Invoice-Insight\",\"路径\",\"PC\",\"Mac\",\"GitHub\",\"origin/main\",\"C:\\\\CodeRepository\",\"/Users/cooper\"],\"entities\":[\"Mubea_Invoice-Insight\",\"cooper\"],\"appliesTo\":\"需要定位项目文件或确认远程仓库状态时\"},{\"scope\":\"project\",\"kind\":\"knowledge\",\"title\":\"三个 gitignore 密钥文件需手动 scp 传输\",\"body\":\".env、sap_http_bridge/config.ini、scripts/sap_selftest.local.env 是 gitignore 的本地密钥/配置，联网下不到，跨机同步时必须单独 scp 并用 SHA256 逐字节校验。其余非 git 文件（.venv、.mysql、.backup、.run、wheels、dist、tmp 等）均可本地重建，无需搬运。\",\"tags\":[\"secrets\",\"gitignore\",\"scp\",\"config\",\"transfer\"],\"keys\":[\".env\",\"config.ini\",\"sap_selftest.local.env\",\"密钥\",\"gitignore\",\"scp\",\"SHA256\",\"手动传输\"],\"entities\":[\".env\",\"config.ini\",\"sap_selftest.local.env\",\"sap_http_bridge\"],\"appliesTo\":\"跨机器同步项目后需要补齐本地配置时\"},{\"scope\":\"project\",\"kind\":\"failure\",\"title\":\".env 是 Windows 环境配置，macOS 上需调整路径和 DSN\",\"body\":\"从 PC scp 过来的 .env 包含 Windows 路径和 DSN 等配置，在 macOS 上直接运行会出错，需要按需修改路径分隔符、数据库连接串等。同步完成后不能假设 .env 开箱即用。\",\"tags\":[\"env\",\"cross-platform\",\"windows\",\"macos\",\"dsn\"],\"keys\":[\".env\",\"Windows\",\"macOS\",\"路径\",\"DSN\",\"跨平台\",\"环境配置\"],\"entities\":[\".env\",\"Mubea_Invoice-Insight\"],\"appliesTo\":\"在 Mac 上首次运行项目或排查连接错误时\"},{\"scope\":\"project\",\"kind\":\"procedure\",\"title\":\"依赖管理用 uv + Python 3.14，变更后需 uv sync 重建\",\"body\":\"项目使用 uv 管理虚拟环境（Python 3.14）。依赖变更后本地 .venv 会过期，跑之前必须执行 uv sync 重建。不要直接复用旧 .venv，尤其是从 Windows 同步过来的（架构不兼容）。\",\"tags\":[\"uv\",\"python\",\"venv\",\"dependency\",\"rebuild\"],\"keys\":[\"uv\",\"uv sync\",\"Python 3.14\",\"虚拟环境\",\"venv\",\"依赖\",\"重建\"],\"entities\":[\"Mubea_Invoice-Insight\",\"uv\"],\"appliesTo\":\"本地首次运行项目或依赖变更后启动服务前\"}],\"loops\":[],\"summary\":\"本次会话将 PC（Windows）上的 Mubea_Invoice-Insight 项目同步到 Mac 本地。确认代码已全部推至 GitHub，本地只需 fast-forward 到 v0.1.6（4d1e4d0）；按用户要求跳过所有可再生/可下载内容（.venv、.mysql、wheels 等），仅 scp 了三个 gitignore 密钥文件并做 SHA256 校验。提醒了 .env 的 Windows 路径问题和 uv sync 重建需求。\"}"
+  },
+  {
+    "sid": "c795c74c-e8b3-4b8e-ab0d-33420e6ef88d",
+    "ms": 17147,
+    "stored": 0,
+    "titles": [],
+    "raw": "{\"memories\":[{\"scope\":\"global\",\"kind\":\"preference\",\"title\":\"同步项目时跳过可本地生成或联网下载的内容\",\"body\":\"用户明确要求：跨机器同步项目时，凡是能在本地重新生成（如 .venv、wheels、dist、__pycache__）或联网下载（如 offline-bundle、.tools）的内容一律不搬运，只传 git 追不到的不可再生文件。\",\"tags\":[\"sync\",\"scp\",\"regenerable\",\"preference\"],\"keys\":[\"同步\",\"sync\",\"跳过\",\"regenerable\",\"下载\",\"生成\",\"scp\",\"搬运\"],\"entities\":[\"cooper\"],\"appliesTo\":\"跨机器同步项目或传输文件时\",\"quote\":\"一些能在本地生成或者联网下载的内容就不用同步过来了\",\"voice\":\"user\"},{\"scope\":\"project\",\"kind\":\"fact\",\"title\":\"Mubea_Invoice-Insight 双端路径与 GitHub 远程\",\"body\":\"PC 端路径 C:\\\\CodeRepository\\\\Mubea_Invoice-Insight，Mac 本地路径 /Users/cooper/Documents/Code/Mubea_Invoice-Insight。远程为 GitHub origin/main，代码以 git 推送为准，跨机同步走 fast-forward 即可，无需整目录 scp。\",\"tags\":[\"path\",\"github\",\"sync\",\"repository\"],\"keys\":[\"Mubea_Invoice-Insight\",\"路径\",\"PC\",\"Mac\",\"GitHub\",\"origin/main\",\"C:\\\\CodeRepository\",\"/Users/cooper\"],\"entities\":[\"Mubea_Invoice-Insight\",\"cooper\"],\"appliesTo\":\"需要定位项目文件或确认远程仓库状态时\"},{\"scope\":\"project\",\"kind\":\"knowledge\",\"title\":\"三个 gitignore 密钥文件需手动 scp 传输\",\"body\":\".env、sap_http_bridge/config.ini、scripts/sap_selftest.local.env 是 gitignore 的本地密钥/配置，联网下不到，跨机同步时必须单独 scp 并用 SHA256 逐字节校验。其余非 git 文件（.venv、.mysql、.backup、.run、wheels、dist、tmp 等）均可本地重建，无需搬运。\",\"tags\":[\"secrets\",\"gitignore\",\"scp\",\"config\",\"transfer\"],\"keys\":[\".env\",\"config.ini\",\"sap_selftest.local.env\",\"密钥\",\"gitignore\",\"scp\",\"SHA256\",\"手动传输\"],\"entities\":[\".env\",\"config.ini\",\"sap_selftest.local.env\",\"sap_http_bridge\"],\"appliesTo\":\"跨机器同步项目后需要补齐本地配置时\"},{\"scope\":\"project\",\"kind\":\"failure\",\"title\":\".env 是 Windows 环境配置，macOS 上需调整路径和 DSN\",\"body\":\"从 PC scp 过来的 .env 包含 Windows 路径和 DSN 等配置，在 macOS 上直接运行会出错，需要按需修改路径分隔符、数据库连接串等。同步完成后不能假设 .env 开箱即用。\",\"tags\":[\"env\",\"cross-platform\",\"windows\",\"macos\",\"dsn\"],\"keys\":[\".env\",\"Windows\",\"macOS\",\"路径\",\"DSN\",\"跨平台\",\"环境配置\"],\"entities\":[\".env\",\"Mubea_Invoice-Insight\"],\"appliesTo\":\"在 Mac 上首次运行项目或排查连接错误时\"},{\"scope\":\"project\",\"kind\":\"procedure\",\"title\":\"依赖管理用 uv + Python 3.14，变更后需 uv sync 重建\",\"body\":\"项目使用 uv 管理虚拟环境（Python 3.14）。依赖变更后本地 .venv 会过期，跑之前必须执行 uv sync 重建。不要直接复用旧 .venv，尤其是从 Windows 同步过来的（架构不兼容）。\",\"tags\":[\"uv\",\"python\",\"venv\",\"dependency\",\"rebuild\"],\"keys\":[\"uv\",\"uv sync\",\"Python 3.14\",\"虚拟环境\",\"venv\",\"依赖\",\"重建\"],\"entities\":[\"Mubea_Invoice-Insight\",\"uv\"],\"appliesTo\":\"本地首次运行项目或依赖变更后启动服务前\"}],\"loops\":[],\"summary\":\"本次会话将 PC（Windows）上的 Mubea_Invoice-Insight 项目同步到 Mac 本地。确认代码已全部推至 GitHub，本地只需 fast-forward 到 v0.1.6（4d1e4d0）；按用户要求跳过所有可再生/可下载内容（.venv、.mysql、wheels 等），仅 scp 了三个 gitignore 密钥文件并做 SHA256 校验。提醒了 .env 的 Windows 路径问题和 uv sync 重建需求。\"}"
+  },
+  {
+    "sid": "fe6532db-fff8-4784-8b8a-28bf005e2a37",
+    "ms": 232026,
+    "stored": 5,
+    "titles": [
+      "test_i18n_browser_smoke.py 的 skipif 不校验 Chromium 版本导致误跑",
+      "test_verify_watch.py 调度器集成测试在全量模式下必挂",
+      "uv run 默认做隐式同步，需加 --no-sync 才真正冻结",
+      "Windows 专属测试实为 12 项而非 13 项",
+      "本机与 PC 侧关键工具版本及限制"
+    ],
+    "raw": "{\"memories\":[{\"scope\":\"project\",\"kind\":\"fact\",\"title\":\"Windows 工作站禁止单进程跑全量测试（硬约束）\",\"body\":\"Windows 工作站（PC 侧）在单进程中运行完整测试套件时会崩溃重启，历史 4 天内 5 次 crash dump，bugcheck 码 0x50/0x3b/0x4e。所有调度设计必须只派发严格必要的子集，绝不在该机器上跑全量。此约束是双端测试工作流设计的最高优先级验收标准。\",\"tags\":[\"windows\",\"crash\",\"test-suite\",\"hard-constraint\",\"bugcheck\"],\"keys\":[\"Windows 工作站\",\"全量测试\",\"crash\",\"bugcheck\",\"0x50\",\"0x3b\",\"0x4e\",\"run_tests_pc\",\"PC 侧\",\"单进程\"],\"entities\":[\"Windows 工作站\",\"Mubea_Invoice-Insight\"],\"appliesTo\":\"设计或修改任何涉及 PC 侧测试调度的方案时\",\"quote\":\"The Windows workstation crashes and reboots when a full test suite is run on it in a single process (documented history of 5 crash dumps over 4 days, bugchecks 0x50/0x3b/0x4e)\",\"voice\":\"user\"},{\"scope\":\"project\",\"kind\":\"failure\",\"title\":\"test_i18n_browser_smoke.py 的 skipif 不校验 Chromium 版本导致误跑\",\"body\":\"`tests/test_i18n_browser_smoke.py` 的 skipif 只检查 node 存在和 `~/Library/Caches/ms-playwright` 目录存在，不校验 Playwright 包版本与已安装 Chromium 是否匹配。当 `.tools/node_modules/playwright` 升级到 1.64.1 而缓存中只有 chromium-1208/1223（缺 chromium_headless_shell-1248）时，9 项浏览器用例照跑并整体失败，而非跳过。修复方向：收紧 skipif 校验版本、或在 `test.sh local` 中排除 browser marker、或安装匹配 Chromium。\",\"tags\":[\"playwright\",\"chromium\",\"skipif\",\"browser-smoke\",\"test-failure\"],\"keys\":[\"test_i18n_browser_smoke\",\"playwright\",\"chromium_headless_shell\",\"skipif\",\"browser marker\",\"ms-playwright\",\"1.64.1\"],\"entities\":[\"test_i18n_browser_smoke.py\",\"Playwright\",\"Chromium\"],\"appliesTo\":\"运行全量测试或排查浏览器相关测试失败时\",\"quote\":\"多出的 9 项全在 `tests/test_i18n_browser_smoke.py`——`.tools/node_modules/playwright` 1.64.1 于今日 11:57 出现，而 `~/Library/Caches/ms-playwright` 只有 chromium-1208/1223，缺 `chromium_headless_shell-1248`；该文件的 `skipif` 只查 node + 目录存在，于是照跑并整体失败\",\"voice\":\"assistant\"},{\"scope\":\"project\",\"kind\":\"failure\",\"title\":\"test_verify_watch.py 调度器集成测试在全量模式下必挂\",\"body\":\"`tests/test_verify_watch.py::TestSchedulerIntegration::test_set_scheduler_makes_the_running_instance_visible` 在全量单进程运行时必失败（串扰），但单独运行该文件 21 passed。这意味着「`test.sh local` 全绿、无 failed」的验收线在全量模式下设计上不可达，除非排除该用例或修复串扰。\",\"tags\":[\"scheduler\",\"test-interference\",\"flaky\",\"test_verify_watch\",\"acceptance\"],\"keys\":[\"test_verify_watch\",\"TestSchedulerIntegration\",\"test_set_scheduler_makes_the_running_instance_visible\",\"串扰\",\"全量\",\"test.sh local\"],\"entities\":[\"test_verify_watch.py\",\"TestSchedulerIntegration\"],\"appliesTo\":\"设定测试验收标准或排查全量测试失败时\",\"quote\":\"全量单进程必挂 `tests/test_verify_watch.py::TestSchedulerIntegration::test_set_scheduler_makes_the_running_instance_visible`，而单跑该文件 21 passed\",\"voice\":\"assistant\"},{\"scope\":\"project\",\"kind\":\"fact\",\"title\":\"Windows 专属测试实为 12 项而非 13 项\",\"body\":\"`test_deploy_scripts.py::TestDeployPackageNote` 是 macOS 本机可修的打包缺陷（`build_deploy_zip.ps1:405` 缺 `-Force`），不属于 Windows 专属。真正的 Windows 专属测试为 12 项：9 项 port_cleanup + 3 项 sap_com_client。非浏览器失败 14 项 = 9 + 1(备份目录，已消除) + 3 + 1(串扰)。\",\"tags\":[\"test-categorization\",\"windows-specific\",\"port-cleanup\",\"sap\",\"deploy-scripts\"],\"keys\":[\"Windows 专属\",\"port_cleanup\",\"sap_com_client\",\"test_deploy_scripts\",\"TestDeployPackageNote\",\"12 项\",\"13 项\"],\"entities\":[\"test_dep"
+  },
+  {
+    "sid": "35269282-6cfe-4802-a557-5c8b8fb22df1",
+    "ms": 239851,
+    "stored": 8,
+    "titles": [
+      "conftest.py:445 Windows 150 项单进程硬闸门",
+      "test_deploy_port_cleanup.py 结构与守卫方式",
+      "Windows 专属测试实为 12 项而非 13 项",
+      "双端测试工作流设计.md revision 2 review 结论",
+      "本机与 PC 侧关键工具版本及限制",
+      "test_i18n_browser_smoke.py 的 skipif 不校验 Chromium 版本导致误跑",
+      "test_verify_watch.py 调度器集成测试在全量模式下必挂",
+      "uv run 默认做隐式同步，需加 --no-sync 才真正冻结"
+    ],
+    "raw": "{\"memories\":[{\"scope\":\"project\",\"kind\":\"fact\",\"title\":\"Windows 专属测试实为 12 项而非 13 项\",\"body\":\"Windows 专属测试总数为 19 项（test_deploy_port_cleanup.py 16 项 + test_sap_selftest_wrapper.py 3 项），其中 review 当日失败 12 项（9+3）。spec §1.1/§1.2/§8.1 写「12 项」，§4.6.2/§8.2 写「19 项」，存在内部矛盾。旧：12 项；新：总数 19 项，12 为当日失败子集（2026-10-16 review 澄清）。\",\"tags\":[\"windows\",\"test-count\",\"port-cleanup\",\"sap-com\",\"spec-contradiction\"],\"keys\":[\"Windows 专属\",\"12 项\",\"19 项\",\"test_deploy_port_cleanup\",\"test_sap_selftest_wrapper\",\"skipif\",\"marker\"],\"entities\":[\"test_deploy_port_cleanup.py\",\"test_sap_selftest_wrapper.py\",\"双端测试工作流设计.md\"],\"appliesTo\":\"规划 Windows 侧测试子集或核对 spec 中 Windows 测试数量时\",\"quote\":\"实测该文件 16 项、模块级 `pytestmark`）并整文件加 marker，因此本机全量应显示 **19 项 skipped**\",\"voice\":\"assistant\"},{\"scope\":\"project\",\"kind\":\"fact\",\"title\":\"本机与 PC 侧关键工具版本及限制\",\"body\":\"PC（Windows 工作站）venv 实际解释器为 uv 托管 CPython 3.13.14（pyvenv.cfg: home = …uv\\\\python\\\\cpython-3.13-windows-x86_64-none），系统另装 3.14.6 但 venv 未使用。spec §2 误写「Python 3.14」。本机为 3.14.0。uv.lock 的 resolution-markers 按 Python 版本/平台分支解析，PC 侧首次 uv sync --frozen 建 venv 时解释器版本影响依赖解析。\",\"tags\":[\"python-version\",\"uv\",\"venv\",\"windows-pc\",\"pyvenv\"],\"keys\":[\"PC Python\",\"3.13.14\",\"3.14\",\"uv python list\",\"pyvenv.cfg\",\"cpython-3.13\",\"Windows 工作站\"],\"entities\":[\"PC\",\"uv\",\"CPython 3.13.14\",\"CPython 3.14.0\"],\"appliesTo\":\"在 PC 侧建 venv 或排查依赖解析差异时\",\"quote\":\"PC 上实际可用 venv 的解释器是 **uv 托管的 CPython 3.13.14**（`pyvenv.cfg: home = …uv\\\\python\\\\cpython-3.13-windows-x86_64-none`；`uv python list --only-installed` 中 uv 托管最高为 3.13.14，3.14.6 只是系统安装）\",\"voice\":\"assistant\"},{\"scope\":\"project\",\"kind\":\"knowledge\",\"title\":\"conftest.py:445 Windows 150 项单进程硬闸门\",\"body\":\"`tests/conftest.py:445` 在 Windows 上设有 150 项单进程硬闸门，是数量闸门之外的第二道防线，`-AllowLarge` 也推不过全量。该机制与 spec 的 50 项远端闸门方向一致但 spec 未提及。\",\"tags\":[\"conftest\",\"windows\",\"hard-gate\",\"150\",\"allow-large\"],\"keys\":[\"conftest.py:445\",\"150 项\",\"硬闸门\",\"-AllowLarge\",\"单进程\",\"Windows 崩溃\"],\"entities\":[\"tests/conftest.py\",\"Windows 工作站\"],\"appliesTo\":\"评估 Windows 侧能否跑全量测试或调整 -AllowLarge 行为时\",\"quote\":\"另有 `tests/conftest.py:445` 在 Windows 上的 150 项单进程硬闸门作为第二道防线（spec 未提但方向一致）\",\"voice\":\"assistant\"},{\"scope\":\"project\",\"kind\":\"fact\",\"title\":\"双端测试工作流设计.md revision 2 review 结论\",\"body\":\"spec 处于 revision 2（2026-10-16 review）。前 5 项旧问题全部确认已解决。新发现 4 个问题：(1) §1.1/§1.2/§8.1 的「12 项」与 §4.6.2/§8.2 的「19 项」矛盾；(2) PC Python 版本误写 3.14 实为 3.13.14；(3) 浏览器缓存细节与现状不符（缓存仅 ffmpeg-1011，chromium-1248 为 366 MB 非 572 MB）；(4) §5 数据流图与文字顺序矛盾（图写先 PC 后本机，文字写先本机后 PC）。\",\"tags\":[\"spec-review\",\"revision-2\",\"dual-platform\",\"testing-workflow\"],\"keys\":[\"双端测试工作流设计\",\"revision 2\",\"spec review\",\"12 vs 19\",\"数据流\",\"浏览器缓存\"],\"entities\":[\"双端测试工作流设计.md\",\"revision 2\"],\"appliesTo\":\"继续修订 spec 或基于 spec 做实施计划时\",\"quote\":\"前 5 项复核：全部已真正解决（逐条实测）\",\"voice\":\"assistant\"},{\"scope\":\"project\",\"kind\":\"fact\",\"title\":\"test_deploy_port_cleanup.py 结构与守卫方式\",\"body\":\"该文件共 16 项测试，使用模块级 `pytestmark`（skipif）而非逐项 skipif。spec §4.6.2 要求保持模块级 skipif 并整文件加 Windows marker，使本机全量时 16 项统一显示 skipped。\",\"tags\":[\"test-structure\",\"pytestmark\",\"module-level\",\"skipif\",\"port-"
+  },
+  {
+    "sid": "f6a6a157-3ff3-42ba-96dc-cbf462341401",
+    "ms": 231124,
+    "stored": 11,
+    "titles": [
+      "§4.4 修法二硬编码 chromium-1248 版本号的静默失效风险",
+      "§4.6.5 对账断言的自引用守卫陷阱",
+      "conftest.py:445 Windows 150 项单进程硬闸门",
+      "PLAYWRIGHT_BROWSERS_PATH 指向 .tools/ms-playwright 可让浏览器用例全过",
+      "双端测试工作流设计.md revision 2 review 结论",
+      "test_deploy_port_cleanup.py 结构与守卫方式",
+      "Windows 专属测试实为 12 项而非 13 项",
+      "本机与 PC 侧关键工具版本及限制",
+      "test_i18n_browser_smoke.py 的 skipif 不校验 Chromium 版本导致误跑",
+      "test_verify_watch.py 调度器集成测试在全量模式下必挂",
+      "uv run 默认做隐式同步，需加 --no-sync 才真正冻结"
+    ],
+    "raw": "{\"memories\":[{\"scope\":\"project\",\"kind\":\"fact\",\"title\":\"双端测试工作流设计.md revision 2 review 结论\",\"body\":\"revision 3（2026-10-16）终审通过，五项历史问题（12/19 口径、PC 解释器 3.13.14、过期实测细节、§5 顺序、rev1 五项）全部确认解决，无新矛盾。硬约束（Windows 单进程禁跑全套件）检查通过：入口无 --full、不透传 -AllowLarge、远端 50 项闸门 + conftest SINGLE_RUN_LIMIT=150。spec 现为最终批准态，可进入实施计划。\",\"tags\":[\"spec\",\"review\",\"approved\",\"双端测试\",\"revision-3\"],\"keys\":[\"双端测试工作流设计\",\"revision 3\",\"spec review\",\"approved\",\"实施计划\"],\"entities\":[\"双端测试工作流设计.md\",\"Mubea_Invoice-Insight\"],\"appliesTo\":\"查看或引用双端测试工作流设计 spec 的状态时\",\"quote\":\"revision 3 的五项历史问题全部真正解决，且未引入新的矛盾。\",\"voice\":\"assistant\"},{\"scope\":\"project\",\"kind\":\"failure\",\"title\":\"§4.6.5 对账断言的自引用守卫陷阱\",\"body\":\"test_deploy_port_cleanup.py 中 test_this_guard_test_file_is_not_caught_by_its_own_rules 断言本文件不含 subprocess./Popen(/shutil.which(\\\"pwsh\\\")，因此「起子进程跑 --collect-only -m windows 数数」的写法会自我命中导致测试失败。另外 _load_conftest() 会重新 exec 一份 conftest，读不到活体模块状态。实施计划应明确机制：收集期把 windows 用例 nodeid 落盘或挂 sys.modules 再读，避免子进程方案。\",\"tags\":[\"self-referential\",\"guard\",\"conftest\",\"collect-only\",\"test_deploy_port_cleanup\"],\"keys\":[\"对账断言\",\"self-referential\",\"subprocess\",\"Popen\",\"shutil.which\",\"_load_conftest\",\"collect-only -m windows\",\"test_this_guard_test_file\"],\"entities\":[\"test_deploy_port_cleanup.py\",\"conftest.py\",\"Mubea_Invoice-Insight\"],\"appliesTo\":\"实现 §4.6.5 对账断言或修改 test_deploy_port_cleanup.py 守卫逻辑时\",\"quote\":\"既有 `test_this_guard_test_file_is_not_caught_by_its_own_rules` 断言本文件不含 `subprocess.`/`Popen(`/`shutil.which(\\\"pwsh\\\")`，所以「起子进程跑 `--collect-only -m windows` 数数」的写法会自我命中\",\"voice\":\"assistant\"},{\"scope\":\"project\",\"kind\":\"knowledge\",\"title\":\"PLAYWRIGHT_BROWSERS_PATH 指向 .tools/ms-playwright 可让浏览器用例全过\",\"body\":\"将 PLAYWRIGHT_BROWSERS_PATH 设为 .tools/ms-playwright 后，test_i18n_browser_smoke.py 9 项全过、0 skipped（2026-10-16 实测）。这验证了 spec §4.4 修法一（离线包路径）与验收 1 的可行性，§10 中「浏览器用例从未在 macOS 上跑过」的风险可显著降级。\",\"tags\":[\"playwright\",\"browsers-path\",\"browser-test\",\"offline\",\"ms-playwright\"],\"keys\":[\"PLAYWRIGHT_BROWSERS_PATH\",\".tools/ms-playwright\",\"test_i18n_browser_smoke\",\"浏览器用例\",\"chromium_headless_shell\"],\"entities\":[\"test_i18n_browser_smoke.py\",\".tools/ms-playwright\",\"Mubea_Invoice-Insight\"],\"appliesTo\":\"配置浏览器测试环境或排查 playwright 浏览器找不到时\",\"quote\":\"把 `PLAYWRIGHT_BROWSERS_PATH` 指向 `.tools/ms-playwright` 后，`test_i18n_browser_smoke.py` **9 项全过、0 skipped**\",\"voice\":\"assistant\"},{\"scope\":\"project\",\"kind\":\"fact\",\"title\":\"conftest.py:445 Windows 150 项单进程硬闸门\",\"body\":\"conftest.py:445 的 SINGLE_RUN_LIMIT=150 在 Windows 上以 pytest.exit(returncode=4) 强制拦截，但并非绝对不可绕过：conftest:453 提供显式逃逸开关 MUBEA_ALLOW_FULL_SUITE / MUBEA_TEST_BATCH。默认生效、无 CLI 参数可关，但环境变量可解除。计划文档中不应写成「不可能绕过」。\",\"tags\":[\"conftest\",\"SINGLE_RUN_LIMIT\",\"MUBEA_ALLOW_FULL_SUITE\",\"MUBEA_TEST_BATCH\",\"escape-hatch\"],\"keys\":[\"SINGLE_RUN_LIMIT\",\"MUBEA_ALLOW_FULL_SUITE\",\"MUBEA_TEST_BATCH\",\"150 项\",\"硬闸门\",\"逃逸开关\",\"conftest:453\"],\"entities\":[\"conftest.py\",\"Mubea_Invoice-Insight\"],\"appliesTo\":\"讨论 Windows 测试闸门是否可绕过或设计批量执行方案时\",\"quote\":\"conftest 150 项称为「硬闸门」略强，它带显式逃逸开关 `MUBEA_ALLOW_FULL_SUITE`/`MUBEA_TEST_BATCH`（conftest:453）\",\""
+  },
+  {
+    "sid": "943d2075-fd09-435d-ac3e-5c76cb4789e1",
+    "ms": 265301,
+    "stored": 11,
+    "titles": [
+      "§4.4 修法二硬编码 chromium-1248 版本号的静默失效风险",
+      "§4.6.5 对账断言的自引用守卫陷阱",
+      "conftest.py:445 Windows 150 项单进程硬闸门",
+      "PLAYWRIGHT_BROWSERS_PATH 指向 .tools/ms-playwright 可让浏览器用例全过",
+      "双端测试工作流设计.md revision 2 review 结论",
+      "test_deploy_port_cleanup.py 结构与守卫方式",
+      "Windows 专属测试实为 12 项而非 13 项",
+      "本机与 PC 侧关键工具版本及限制",
+      "test_i18n_browser_smoke.py 的 skipif 不校验 Chromium 版本导致误跑",
+      "test_verify_watch.py 调度器集成测试在全量模式下必挂",
+      "uv run 默认做隐式同步，需加 --no-sync 才真正冻结"
+    ],
+    "raw": "{\"memories\":[{\"scope\":\"project\",\"kind\":\"knowledge\",\"title\":\"conftest.py:445 Windows 150 项单进程硬闸门\",\"body\":\"该护栏通过 pytest_collection_finish 触发，而 pytest_collection_finish 经 Session.perform_collect()（_pytest/main.py:879）在 --collect-only 模式下同样会被调用，于是 pytest.exit(returncode=4) 先于任何 runner 层的数量闸门发生。这意味着：任何在 collect 之后才检查选中数量的 runner 逻辑（如 run_tests_pc.ps1 的 50 项闸门），在 PC 上跑 -m \\\"\\\" --collect-only 时永远不会被求值——conftest 的 150 项护栏会先 exit 4。验证 runner 自身闸门时应选一个能绕过 conftest 护栏的 marker 组合（如 -Marker windows -MaxTests 5，19 > 5 才触发 runner 闸门）。\",\"tags\":[\"conftest\",\"pytest_collection_finish\",\"collect-only\",\"guard\",\"exit-code\"],\"keys\":[\"conftest.py:445\",\"150 项\",\"pytest_collection_finish\",\"perform_collect\",\"--collect-only\",\"数量闸门\",\"exit 4\",\"run_tests_pc.ps1\"],\"entities\":[\"conftest.py\",\"run_tests_pc.ps1\",\"_pytest/main.py\"],\"appliesTo\":\"在 PC 侧 runner 中设计或调试数量闸门、收集期拦截逻辑时\",\"quote\":\"pytest_collection_finish 经 Session.perform_collect()（_pytest/main.py:879）在 --collect-only 下同样会被调用，于是 pytest.exit(..., returncode=4)（conftest:460-480）先发生\",\"voice\":\"assistant\"},{\"scope\":\"project\",\"kind\":\"failure\",\"title\":\"文本级 marker 判定被注释命中导致护栏验证步骤假通过\",\"body\":\"用 has_marker = \\\"pytest.mark.windows\\\" in text 做文件级判定，会被注释中的字面量命中（如 Task 5 插入的注释「pytest.mark.windows 是路由标记」），导致「故意删装饰器、确认护栏会响」的验证步骤实际 PASS 而非 FAIL。同理，按文件配对（而非按用例配对）无法捕获部分标记文件（如 test_sap_com_client.py）中新增带守卫但漏加 marker 的单个用例。正确做法：marker 判定锚定真实装饰器形态（re.compile(r'^\\\\s*@pytest\\\\.mark\\\\.windows\\\\s*$', re.M)）或 pytestmark 列表；配对粒度改为按用例（比较每文件守卫装饰器行数 vs @pytest.mark.windows 行数）。\",\"tags\":[\"guardrail\",\"marker\",\"text-matching\",\"pytest.mark.windows\",\"per-file-vs-per-test\"],\"keys\":[\"has_marker\",\"pytest.mark.windows in text\",\"注释命中\",\"按文件配对\",\"按用例配对\",\"test_sap_com_client\",\"护栏验证\",\"Step 5\"],\"entities\":[\"test_sap_com_client.py\",\"test_pytest_guardrails.py\",\"双端测试工作流设计.md\"],\"appliesTo\":\"设计或修改 pytest marker 路由护栏、验证护栏是否真正生效时\",\"quote\":\"新护栏用 has_marker = \\\"pytest.mark.windows\\\" in text 判文件是否带 marker，而 Task 5 插入的注释（当前计划第 483 行）本身就含字面量 pytest.mark.windows\",\"voice\":\"assistant\"},{\"scope\":\"global\",\"kind\":\"knowledge\",\"title\":\"macOS scp 走 SFTP 协议，Windows 路径需前导斜杠 /C:/...\",\"body\":\"本机 macOS 的 scp（OpenSSH 10.5p1）实际走 SFTP 协议传输，对 Windows 远端路径要求绝对路径带前导斜杠（/C:/CodeRepository/...），而 C:/CodeRepository/... 形态可能失败。若脚本中用 || true 吞掉 scp 失败，则报告缺失会被静默掩盖，导致本应判为基础设施失败（exit 4）的场景被映射为 exit 0 或 exit 2。pc-ssh skill 已记录此要求。\",\"tags\":[\"scp\",\"sftp\",\"openssh\",\"windows-path\",\"macos\"],\"keys\":[\"scp\",\"SFTP\",\"OpenSSH 10.5p1\",\"/C:/\",\"C:/\",\"前导斜杠\",\"|| true\",\"报告缺失\"],\"entities\":[\"macOS\",\"OpenSSH\",\"pc-ssh\"],\"appliesTo\":\"在 macOS 上用 scp 向 Windows 远端传输文件、编写跨平台文件同步脚本时\",\"quote\":\"macOS 的 scp 现在就是走 SFTP（OpenSSH 10.5p1），计划用的 C:/CodeRepository/... 形态有失败风险，且失败会被 || true 藏起来\",\"voice\":\"assistant\"},{\"scope\":\"project\",\"kind\":\"knowledge\",\"title\":\"PS 5.1 Set-Content -Encoding UTF8 写 BOM，应改用 _common.ps1 的 Set-DependencyStamp\",\"body\":\"PowerShell 5.1 的 Set-Content -Encoding UTF8 会写入 BOM（U+FEFF），而 scripts/_common.ps1 中已有 Set-DependencyStamp 函数使用 [System.IO.File]::WriteAllText 写无 BOM 的 UTF-8，且注释专门警告了此问题。本脚本声明 #Requires -Version 5.1，因此手写 Set-C"
+  },
+  {
+    "sid": "2eda0fac-4899-43c3-8a26-b1aea1b39753",
+    "ms": 230121,
+    "stored": 16,
+    "titles": [
+      "PowerShell Write-Error 在 ErrorActionPreference=Stop 下使 exit 4 不可达",
+      "scripts/test.sh pc 模式 --no-upload 被静默忽略",
+      "双端测试工作流实施计划 review 结论（2026-10-16）",
+      "护栏配对检查被注释中的 pytest.mark.windows 字面量击穿",
+      "验证 50 项 runner 闸门须先设 MUBEA_TEST_BATCH=1 绕过 150 项护栏",
+      "§4.4 修法二硬编码 chromium-1248 版本号的静默失效风险",
+      "§4.6.5 对账断言的自引用守卫陷阱",
+      "conftest.py:445 Windows 150 项单进程硬闸门",
+      "PLAYWRIGHT_BROWSERS_PATH 指向 .tools/ms-playwright 可让浏览器用例全过",
+      "双端测试工作流设计.md revision 2 review 结论",
+      "test_deploy_port_cleanup.py 结构与守卫方式",
+      "Windows 专属测试实为 12 项而非 13 项",
+      "本机与 PC 侧关键工具版本及限制",
+      "test_i18n_browser_smoke.py 的 skipif 不校验 Chromium 版本导致误跑",
+      "test_verify_watch.py 调度器集成测试在全量模式下必挂",
+      "uv run 默认做隐式同步，需加 --no-sync 才真正冻结"
+    ],
+    "raw": "{\"memories\":[{\"scope\":\"project\",\"kind\":\"fact\",\"title\":\"双端测试工作流实施计划 review 结论（2026-10-16）\",\"body\":\"实施计划（docs/双端测试工作流实施计划.md）review 状态：Issues Found，4 个阻塞问题——(1) `--no-upload` 在 pc 模式被静默忽略；(2) Task 7 负向对照因注释含 `pytest.mark.windows` 字面量而不会 FAIL；(3) Task 10 Step 7 的 50 项闸门验证被 conftest 150 项护栏抢先拦截，预期消息永不打印；(4) §8.5 解释器 3.14 版本无人验证。另有 5 条 advisory（Write-Error+Stop 使 exit 4 不可达、恒真断言、sed 行号、grep -c 误报、传输排除清单收集阶段风险）。已核对无误：所有引用行号逐字一致、硬约束成立（无 AllowLarge/MUBEA_* 逃逸）、文件清单与 §9.1 一致。\",\"tags\":[\"plan-review\",\"双端测试\",\"实施计划\",\"blocking-issues\"],\"keys\":[\"实施计划\",\"plan review\",\"双端测试工作流实施计划\",\"Issues Found\",\"Task 9\",\"Task 7\",\"Task 10\"],\"entities\":[\"双端测试工作流实施计划.md\",\"双端测试工作流设计.md\",\"scripts/test.sh\",\"scripts/run_tests_pc.ps1\",\"tests/test_pytest_guardrails.py\"],\"appliesTo\":\"实施双端测试工作流计划前，或排查计划中已知缺陷时\",\"quote\":\"**Status:** Issues Found\",\"voice\":\"assistant\",\"durability\":\"snapshot\",\"asOf\":\"2026-10-16\"},{\"scope\":\"project\",\"kind\":\"failure\",\"title\":\"scripts/test.sh pc 模式 --no-upload 被静默忽略\",\"body\":\"计划 Task 9 Step 1 中 `pc) upload_worktree && run_pc ;;` 分支未判断 `NO_UPLOAD`，仅 `all` 分支（1177-1181 行）检查。脚本头部与设计 §4.1 均声明 `--no-upload` 为通用选项，其核心用途是迭代远端脚本时跳过上传（`scripts/test.sh pc --no-upload`）。实施后该命令会照常清空暂存目录并重传且无提示。修法：`pc)` 分支同样判断 `NO_UPLOAD`，或将判断提到 `case` 之前统一处理。\",\"tags\":[\"test.sh\",\"no-upload\",\"pc-mode\",\"bash\"],\"keys\":[\"--no-upload\",\"NO_UPLOAD\",\"pc 模式\",\"upload_worktree\",\"scripts/test.sh\",\"跳过上传\"],\"entities\":[\"scripts/test.sh\",\"双端测试工作流实施计划.md\"],\"appliesTo\":\"实现或修改 scripts/test.sh 的 pc/all 分支逻辑时\",\"quote\":\"第 1174 行是 `pc) upload_worktree && run_pc ;;`，`NO_UPLOAD` 只在 `all` 分支判断（1177-1181）。而脚本头部与设计 §4.1 都把它声明为通用选项\",\"voice\":\"assistant\"},{\"scope\":\"project\",\"kind\":\"failure\",\"title\":\"护栏配对检查被注释中的 pytest.mark.windows 字面量击穿\",\"body\":\"Task 7 的配对判据是纯文本子串 `\\\"pytest.mark.windows\\\" in text`（计划 671 行），但 Task 5 Step 3 要求写入的注释本身就含该字面量（483 行：`（pytest.mark.windows 是路由标记，见 docs/双端测试工作流设计.md）`）。`sed 's/^@pytest.mark.windows$//'` 只删装饰器行、删不掉注释，导致 `has_guard=True, has_marker=True`，负向对照全 PASS 而非预期 FAIL。同一原因使配对检查对 `test_sap_com_client.py` 无保护力，只剩计数断言在守。修法：注释改写为不含该字面量（如\\\"windows 路由标记\\\"）；Step 5 同时收集 `test_sap_com_client.py` 让计数断言真正响应。\",\"tags\":[\"guardrail\",\"pytest.mark.windows\",\"substring\",\"negative-test\",\"test_pytest_guardrails\"],\"keys\":[\"pytest.mark.windows\",\"配对检查\",\"负向对照\",\"has_marker\",\"has_guard\",\"test_pytest_guardrails\",\"sed 删装饰器\"],\"entities\":[\"tests/test_pytest_guardrails.py\",\"tests/test_sap_com_client.py\",\"双端测试工作流实施计划.md\"],\"appliesTo\":\"修改或验证 test_pytest_guardrails.py 的配对/计数断言时\",\"quote\":\"配对判据是纯文本 `\\\"pytest.mark.windows\\\" in text`（671 行），而 Task 5 Step 3 要求写入的注释本身含此字面量（483 行）\",\"voice\":\"assistant\"},{\"scope\":\"project\",\"kind\":\"knowledge\",\"title\":\"验证 50 项 runner 闸门须先设 MUBEA_TEST_BATCH=1 绕过 150 项护栏\",\"body\":\"`-Marker \\\"\\\"` 等价于不筛选（pytest `deselect_by_mark` 在 `not matchexpr` 时直接 return），全套件 1175 项。Windows 侧 `conftest.py::pytest_collection_finish` 的 150 项护栏会在 runner 自己的 `--collect-only` 阶段先拦（`pytest.exit` → 退出码 2），runner 走\\\"收集失败\\\"分支 exit 4，预期的\\\"已拦截：选中 1000+ 项，超过数量闸门 50\\\"永不打印。正确验证：先在 pwsh 会话设 `$env:MUBEA_TEST_BATCH='1'`（conftest 既有显式逃逸开关，令 "
+  },
+  {
+    "sid": "7c8fb323-1ac2-432c-a274-ab7b8b263ed4",
+    "ms": 263073,
+    "stored": 19,
+    "titles": [
+      ".env 随工作树传输至 PC 侧（用户明确许可）",
+      "grep AllowLarge 命中 test.sh 自身注释导致验证步骤误报",
+      "run_tests_safe.ps1 分批用 -m 'not browser' 而非 -k，windows 项不被过滤",
+      "双端测试工作流实施计划 review 结论（2026-10-16）",
+      "护栏配对检查被注释中的 pytest.mark.windows 字面量击穿",
+      "PowerShell Write-Error 在 ErrorActionPreference=Stop 下使 exit 4 不可达",
+      "scripts/test.sh pc 模式 --no-upload 被静默忽略",
+      "验证 50 项 runner 闸门须先设 MUBEA_TEST_BATCH=1 绕过 150 项护栏",
+      "§4.4 修法二硬编码 chromium-1248 版本号的静默失效风险",
+      "§4.6.5 对账断言的自引用守卫陷阱",
+      "conftest.py:445 Windows 150 项单进程硬闸门",
+      "PLAYWRIGHT_BROWSERS_PATH 指向 .tools/ms-playwright 可让浏览器用例全过",
+      "双端测试工作流设计.md revision 2 review 结论",
+      "test_deploy_port_cleanup.py 结构与守卫方式",
+      "Windows 专属测试实为 12 项而非 13 项",
+      "本机与 PC 侧关键工具版本及限制",
+      "test_i18n_browser_smoke.py 的 skipif 不校验 Chromium 版本导致误跑",
+      "test_verify_watch.py 调度器集成测试在全量模式下必挂",
+      "uv run 默认做隐式同步，需加 --no-sync 才真正冻结"
+    ],
+    "raw": "{\"memories\":[{\"scope\":\"project\",\"kind\":\"fact\",\"title\":\"双端测试工作流实施计划 review 结论（2026-10-16）\",\"body\":\"revision 2 审核通过（Approved），五个既有问题（护栏配对、50 项闸门、--no-upload、陈旧报告、dry-run 占位）均确认已修复；.env 策略在设计与计划间一致；无阻塞缺陷。遗留 5 条 advisory 建议（grep AllowLarge 命中注释、summarize 缺失败清单、Step 6 负向对照混真实断言、item.fspath 废弃、内联脚本缺 ErrorActionPreference）。\",\"tags\":[\"review\",\"plan\",\"dual-end-test\",\"approval\"],\"keys\":[\"双端测试工作流实施计划\",\"revision 2\",\"review 结论\",\"approved\",\"plan review\"],\"entities\":[\"双端测试工作流实施计划.md\",\"双端测试工作流设计.md\",\"2026-10-16\"],\"appliesTo\":\"判断实施计划是否可进入编码阶段时\",\"quote\":\"五个既有问题我逐条复核，均已真正修复；`.env` 策略在设计与计划之间已一致；未发现会阻塞实施的新缺陷。\",\"voice\":\"assistant\"},{\"scope\":\"global\",\"kind\":\"knowledge\",\"title\":\"PowerShell 空字符串参数传递：Windows/Standard 模式保留，Legacy 丢弃\",\"body\":\"PowerShell 通过 ssh 执行时，`Windows` 和 `Standard` 参数传递模式会保留空字符串参数（如 `-Marker \\\"\\\"`），只有 `Legacy` 模式会丢弃。这意味着 pytest 的 `-m ''`（等价于不过滤）可以正确传到远端，不会变成无参。\",\"tags\":[\"powershell\",\"ssh\",\"empty-string\",\"parameter-passing\",\"legacy\"],\"keys\":[\"PowerShell 空字符串\",\"-Marker \\\"\\\"\",\"Legacy 模式\",\"ssh 参数传递\",\"empty string\"],\"entities\":[\"PowerShell\",\"ssh\"],\"appliesTo\":\"通过 ssh 向远端 PowerShell 传空字符串参数时\",\"quote\":\"我实测 PowerShell 在 `Windows`/`Standard` 参数传递模式下**保留**空字符串（只有 `Legacy` 会丢）\",\"voice\":\"assistant\"},{\"scope\":\"global\",\"kind\":\"knowledge\",\"title\":\"pytest_collection_finish 在 perform_collect 的 finally 中调用，--collect-only 也触发\",\"body\":\"`pytest_collection_finish` hook 在 `_pytest/main.py:879` 的 `perform_collect` 方法的 `finally` 块中被调用，因此 `--collect-only` 模式下该 hook 同样会执行。conftest.py 中基于此 hook 的 150 项硬闸门在 `--collect-only` 下也能拦截，返回码 4。\",\"tags\":[\"pytest\",\"collection-finish\",\"collect-only\",\"conftest\",\"hook\"],\"keys\":[\"pytest_collection_finish\",\"--collect-only\",\"finally\",\"perform_collect\",\"150 项闸门\"],\"entities\":[\"conftest.py\",\"_pytest/main.py\"],\"appliesTo\":\"设计 pytest 收集阶段守卫或验证 --collect-only 行为时\",\"quote\":\"`pytest_collection_finish` 在 `perform_collect` 的 `finally` 里被调用（`_pytest/main.py:879`），`--collect-only` 下同样会拦\",\"voice\":\"assistant\"},{\"scope\":\"global\",\"kind\":\"knowledge\",\"title\":\"pytest item.fspath 已标记废弃，应改用 item.path\",\"body\":\"pytest 源码 `_pytest/nodes.py` 中 `fspath` 属性注释明确写了 \\\"Will be deprecated in a future release\\\"。当前（pytest 9.1.1）两者都可用，但新代码应使用 `item.path`（pathlib.Path 类型），避免未来升级后 AttributeError。\",\"tags\":[\"pytest\",\"fspath\",\"deprecation\",\"item.path\",\"pathlib\"],\"keys\":[\"item.fspath\",\"item.path\",\"pytest 废弃\",\"fspath deprecated\",\"pathlib\"],\"entities\":[\"pytest\",\"_pytest/nodes.py\"],\"appliesTo\":\"编写 pytest 插件或 conftest 中访问测试文件路径时\",\"quote\":\"建议用 `item.path` 取代 `item.fspath`（pytest 源码注明后者将废弃）\",\"voice\":\"assistant\"},{\"scope\":\"project\",\"kind\":\"failure\",\"title\":\"grep AllowLarge 命中 test.sh 自身注释导致验证步骤误报\",\"body\":\"Task 8 Step 3 和 Task 9 Step 3 用 `grep \\\"AllowLarge\\\" scripts/test.sh` 验证不透传，但 test.sh 第 13、175 行（正文 1041、1203 行）的注释含该词，grep 命中后走 `&& echo \\\"!! 不该出现\\\"` 分支，输出与计划 Expected 相反。实际调用行确无 `-AllowLarge`，不影响交付物，但实施者会看到\\\"检查失败\\\"。修法：`grep -n 'AllowLarge' scripts/test.sh | grep -v ':[[:space:]]*#'`。\",\"tags\":[\"grep\",\"test.sh\",\"AllowLarge\",\"false-positive\",\"verification\"],\"keys\":[\"grep AllowLarge\",\"test.sh "
+  },
+  {
+    "sid": "66e5f1bc-6f94-4e3f-94aa-92b494e44f58",
+    "ms": 138581,
+    "stored": 20,
+    "titles": [
+      "edit 工具编辑 .ps1 会剥离 UTF-8 BOM，PowerShell 5.1 下中文乱码",
+      ".env 随工作树传输至 PC 侧（用户明确许可）",
+      "grep AllowLarge 命中 test.sh 自身注释导致验证步骤误报",
+      "run_tests_safe.ps1 分批用 -m 'not browser' 而非 -k，windows 项不被过滤",
+      "双端测试工作流实施计划 review 结论（2026-10-16）",
+      "护栏配对检查被注释中的 pytest.mark.windows 字面量击穿",
+      "PowerShell Write-Error 在 ErrorActionPreference=Stop 下使 exit 4 不可达",
+      "scripts/test.sh pc 模式 --no-upload 被静默忽略",
+      "验证 50 项 runner 闸门须先设 MUBEA_TEST_BATCH=1 绕过 150 项护栏",
+      "§4.4 修法二硬编码 chromium-1248 版本号的静默失效风险",
+      "§4.6.5 对账断言的自引用守卫陷阱",
+      "conftest.py:445 Windows 150 项单进程硬闸门",
+      "PLAYWRIGHT_BROWSERS_PATH 指向 .tools/ms-playwright 可让浏览器用例全过",
+      "双端测试工作流设计.md revision 2 review 结论",
+      "test_deploy_port_cleanup.py 结构与守卫方式",
+      "Windows 专属测试实为 12 项而非 13 项",
+      "本机与 PC 侧关键工具版本及限制",
+      "test_i18n_browser_smoke.py 的 skipif 不校验 Chromium 版本导致误跑",
+      "test_verify_watch.py 调度器集成测试在全量模式下必挂",
+      "uv run 默认做隐式同步，需加 --no-sync 才真正冻结"
+    ],
+    "raw": "{\"memories\":[{\"scope\":\"project\",\"kind\":\"failure\",\"title\":\"edit 工具编辑 .ps1 会剥离 UTF-8 BOM，PowerShell 5.1 下中文乱码\",\"body\":\"用 edit 工具修改 .ps1 文件后，git diff 首行出现 `-\\\\ufeff#Requires -Version 5.1`，即 BOM 被静默删除。本仓库 .ps1 刻意存为 UTF-8-with-BOM + CRLF（PowerShell 5.1 对无 BOM 的 UTF-8 按系统编码 GBK 解析，中文注释/字符串会乱码）。修复：用 python 写回 `\\\\xef\\\\xbb\\\\xbf` 再重跑测试。后续任何 .ps1 编辑后须检查 `git diff` 首行 BOM 是否丢失。已修 in f738778（2026-10-16）。\",\"tags\":[\"bom\",\"powershell\",\"ps1\",\"encoding\",\"edit-tool\"],\"keys\":[\"BOM\",\"UTF-8 BOM\",\"PowerShell 5.1\",\"edit tool\",\"ps1 编码\",\"中文乱码\",\"CRLF\",\"GBK\",\"\\\\ufeff\"],\"entities\":[\"scripts/build_deploy_zip.ps1\",\"PowerShell 5.1\"],\"appliesTo\":\"编辑任何 .ps1 文件之后，或新建 .ps1 脚本时\",\"quote\":\"The `edit` tool stripped the file's UTF-8 BOM (line 1) — an unintended change that matters for PowerShell 5.1 on Windows.\",\"voice\":\"assistant\"}],\"loops\":[],\"summary\":\"Task 1 of the dual-platform test plan：修复 scripts/build_deploy_zip.ps1 第 405 行 Get-ChildItem 缺少 -Force 导致 Unix 上点开头条目（.env.example、.run\\\\）被漏列的问题。修复后 30/30 测试通过，commit f738778。过程中发现 edit 工具会静默剥离 .ps1 文件的 UTF-8 BOM，对 PowerShell 5.1 中文解析有实际影响，已手动恢复并记录为项目级 gotcha。\"}"
+  },
+  {
+    "sid": "6a6705bf-205b-4086-a28e-8bcd04ecc49e",
+    "ms": 214241,
+    "stored": 22,
+    "titles": [
+      "build_deploy_zip.ps1 Get-ChildItem 缺 -Force 致 dotfile 漏列（已修 f738778）",
+      "pyproject.toml addopts 已含 -q，命令行再传 -q 导致双重静默",
+      "edit 工具编辑 .ps1 会剥离 UTF-8 BOM，PowerShell 5.1 下中文乱码",
+      ".env 随工作树传输至 PC 侧（用户明确许可）",
+      "grep AllowLarge 命中 test.sh 自身注释导致验证步骤误报",
+      "run_tests_safe.ps1 分批用 -m 'not browser' 而非 -k，windows 项不被过滤",
+      "双端测试工作流实施计划 review 结论（2026-10-16）",
+      "护栏配对检查被注释中的 pytest.mark.windows 字面量击穿",
+      "PowerShell Write-Error 在 ErrorActionPreference=Stop 下使 exit 4 不可达",
+      "scripts/test.sh pc 模式 --no-upload 被静默忽略",
+      "验证 50 项 runner 闸门须先设 MUBEA_TEST_BATCH=1 绕过 150 项护栏",
+      "§4.4 修法二硬编码 chromium-1248 版本号的静默失效风险",
+      "§4.6.5 对账断言的自引用守卫陷阱",
+      "conftest.py:445 Windows 150 项单进程硬闸门",
+      "PLAYWRIGHT_BROWSERS_PATH 指向 .tools/ms-playwright 可让浏览器用例全过",
+      "双端测试工作流设计.md revision 2 review 结论",
+      "test_deploy_port_cleanup.py 结构与守卫方式",
+      "Windows 专属测试实为 12 项而非 13 项",
+      "本机与 PC 侧关键工具版本及限制",
+      "test_i18n_browser_smoke.py 的 skipif 不校验 Chromium 版本导致误跑",
+      "test_verify_watch.py 调度器集成测试在全量模式下必挂",
+      "uv run 默认做隐式同步，需加 --no-sync 才真正冻结"
+    ],
+    "raw": "{\"memories\":[{\"scope\":\"project\",\"kind\":\"failure\",\"title\":\"pyproject.toml addopts 已含 -q，命令行再传 -q 导致双重静默\",\"body\":\"`pyproject.toml:51` 设 `addopts = \\\"-q --tb=short\\\"`，因此 `pytest -q` 实际等价于 `pytest -q -q --tb=short`，输出只剩点号、看不到 pass/fail 计数。需要看计数时改用 `-v` 或去掉命令行 `-q`。\",\"tags\":[\"pytest\",\"addopts\",\"quiet\",\"pyproject\"],\"keys\":[\"pytest -q\",\"addopts\",\"双重静默\",\"pyproject.toml\",\"-v\",\"quiet mode\"],\"entities\":[\"pyproject.toml\"],\"appliesTo\":\"运行 pytest 想看输出计数或调试测试输出格式时\",\"quote\":\"`pyproject.toml:51` sets `addopts = \\\"-q --tb=short\\\"`, doubling quiet mode; I used `-v` to obtain counts\",\"voice\":\"assistant\"},{\"scope\":\"project\",\"kind\":\"knowledge\",\"title\":\"TestDeployPackageNote fixture 通过 pwsh 调用真实 builder 而非 mock\",\"body\":\"`tests/test_deploy_scripts.py::TestDeployPackageNote` 的 fixture 用 pwsh 7.6.3 执行 `scripts/build_deploy_zip.ps1` 真实打包流程，断言 zip namelist 与说明文本的精确集合相等。该测试依赖本机 pwsh 可用，且会实际创建临时目录，不是纯逻辑单测。\",\"tags\":[\"pytest\",\"fixture\",\"pwsh\",\"build_deploy_zip\",\"integration\"],\"keys\":[\"TestDeployPackageNote\",\"build_deploy_zip\",\"pwsh\",\"真实打包\",\"fixture\",\"集成测试\"],\"entities\":[\"TestDeployPackageNote\",\"build_deploy_zip.ps1\",\"pwsh\"],\"appliesTo\":\"调试打包说明测试失败或评估测试隔离性与环境依赖时\",\"quote\":\"TestDeployPackageNote's fixture runs the **real** builder via pwsh 7.6.3, so the test genuinely exercises the fix\",\"voice\":\"assistant\"},{\"scope\":\"project\",\"kind\":\"failure\",\"title\":\"build_deploy_zip.ps1 Get-ChildItem 缺 -Force 致 dotfile 漏列（已修 f738778）\",\"body\":\"builder 在 `$StageDir` 中放置 `.env.example`（allowlist 复制，line 452）和 `.run/` 目录（line 218-219），但原 line 405 的 `Get-ChildItem -LiteralPath $StageDir` 未加 `-Force`，PowerShell 默认跳过隐藏项，导致打包说明漏列 `['.env.example', '.run\\\\\\\\']`。已修 in f738778：加 `-Force` 并附 3 行中文注释说明原因。\",\"tags\":[\"powershell\",\"Get-ChildItem\",\"Force\",\"dotfile\",\"build_deploy_zip\"],\"keys\":[\"-Force\",\"Get-ChildItem\",\"隐藏文件\",\"dotfile\",\".env.example\",\".run\",\"打包说明\",\"漏列\"],\"entities\":[\"build_deploy_zip.ps1\",\"f738778\"],\"appliesTo\":\"排查打包说明与实际 zip 内容不一致或 PowerShell 列目录遗漏时\",\"quote\":\"In a scratch dir: `without -Force: normal.txt` vs `with -Force: .run,.env.example,normal.txt`.\",\"voice\":\"assistant\"}],\"loops\":[],\"summary\":\"本次会话是对 commit f738778 的独立验证：确认 `build_deploy_zip.ps1` 的 `-Force` 修复正确落地（仅改 1 文件、BOM/CRLF 完好、两条 pytest 全过），并独立复现了无 `-Force` 时 dotfile 被跳过的根因。额外发现 `pyproject.toml` 的 `addopts` 已含 `-q` 导致命令行再传 `-q` 会双重静默，以及 `TestDeployPackageNote` 实际调用 pwsh 跑真实 builder 而非 mock。\"}"
+  },
+  {
+    "sid": "session-7b8d01ff-c567-4eaf-ae53-58b7f4a83b80",
+    "ms": 301425,
+    "stored": 22,
+    "titles": [
+      "build_deploy_zip.ps1 Get-ChildItem 缺 -Force 致 dotfile 漏列（已修 f738778）",
+      "pyproject.toml addopts 已含 -q，命令行再传 -q 导致双重静默",
+      "edit 工具编辑 .ps1 会剥离 UTF-8 BOM，PowerShell 5.1 下中文乱码",
+      ".env 随工作树传输至 PC 侧（用户明确许可）",
+      "grep AllowLarge 命中 test.sh 自身注释导致验证步骤误报",
+      "run_tests_safe.ps1 分批用 -m 'not browser' 而非 -k，windows 项不被过滤",
+      "双端测试工作流实施计划 review 结论（2026-10-16）",
+      "护栏配对检查被注释中的 pytest.mark.windows 字面量击穿",
+      "PowerShell Write-Error 在 ErrorActionPreference=Stop 下使 exit 4 不可达",
+      "scripts/test.sh pc 模式 --no-upload 被静默忽略",
+      "验证 50 项 runner 闸门须先设 MUBEA_TEST_BATCH=1 绕过 150 项护栏",
+      "§4.4 修法二硬编码 chromium-1248 版本号的静默失效风险",
+      "§4.6.5 对账断言的自引用守卫陷阱",
+      "conftest.py:445 Windows 150 项单进程硬闸门",
+      "PLAYWRIGHT_BROWSERS_PATH 指向 .tools/ms-playwright 可让浏览器用例全过",
+      "双端测试工作流设计.md revision 2 review 结论",
+      "test_deploy_port_cleanup.py 结构与守卫方式",
+      "Windows 专属测试实为 12 项而非 13 项",
+      "本机与 PC 侧关键工具版本及限制",
+      "test_i18n_browser_smoke.py 的 skipif 不校验 Chromium 版本导致误跑",
+      "test_verify_watch.py 调度器集成测试在全量模式下必挂",
+      "uv run 默认做隐式同步，需加 --no-sync 才真正冻结"
+    ],
+    "raw": "{\"memories\":[{\"scope\":\"project\",\"kind\":\"failure\",\"title\":\"pyproject.toml addopts 已含 -q，命令行再传 -q 导致双重静默\",\"body\":\"`pyproject.toml:51` 设 `addopts = \\\"-q --tb=short\\\"`，因此 `pytest -q` 实际等价于 `pytest -q -q --tb=short`，输出只剩点号、看不到 pass/fail 计数。需要看计数时改用 `-v` 或去掉命令行 `-q`。\",\"tags\":[\"pytest\",\"addopts\",\"quiet\",\"pyproject\"],\"keys\":[\"pytest -q\",\"addopts\",\"双重静默\",\"pyproject.toml\",\"-v\",\"quiet mode\"],\"entities\":[\"pyproject.toml\"],\"appliesTo\":\"运行 pytest 想看输出计数或调试测试输出格式时\",\"quote\":\"`pyproject.toml:51` sets `addopts = \\\"-q --tb=short\\\"`, doubling quiet mode; I used `-v` to obtain counts\",\"voice\":\"assistant\"},{\"scope\":\"project\",\"kind\":\"knowledge\",\"title\":\"TestDeployPackageNote fixture 通过 pwsh 调用真实 builder 而非 mock\",\"body\":\"`tests/test_deploy_scripts.py::TestDeployPackageNote` 的 fixture 用 pwsh 7.6.3 执行 `scripts/build_deploy_zip.ps1` 真实打包流程，断言 zip namelist 与说明文本的精确集合相等。该测试依赖本机 pwsh 可用，且会实际创建临时目录，不是纯逻辑单测。\",\"tags\":[\"pytest\",\"fixture\",\"pwsh\",\"build_deploy_zip\",\"integration\"],\"keys\":[\"TestDeployPackageNote\",\"build_deploy_zip\",\"pwsh\",\"真实打包\",\"fixture\",\"集成测试\"],\"entities\":[\"TestDeployPackageNote\",\"build_deploy_zip.ps1\",\"pwsh\"],\"appliesTo\":\"调试打包说明测试失败或评估测试隔离性与环境依赖时\",\"quote\":\"TestDeployPackageNote's fixture runs the **real** builder via pwsh 7.6.3, so the test genuinely exercises the fix\",\"voice\":\"assistant\"},{\"scope\":\"project\",\"kind\":\"failure\",\"title\":\"build_deploy_zip.ps1 Get-ChildItem 缺 -Force 致 dotfile 漏列（已修 f738778）\",\"body\":\"builder 在 `$StageDir` 中放置 `.env.example`（allowlist 复制，line 452）和 `.run/` 目录（line 218-219），但原 line 405 的 `Get-ChildItem -LiteralPath $StageDir` 未加 `-Force`，PowerShell 默认跳过隐藏项，导致打包说明漏列 `['.env.example', '.run\\\\\\\\']`。已修 in f738778：加 `-Force` 并附 3 行中文注释说明原因。\",\"tags\":[\"powershell\",\"Get-ChildItem\",\"Force\",\"dotfile\",\"build_deploy_zip\"],\"keys\":[\"-Force\",\"Get-ChildItem\",\"隐藏文件\",\"dotfile\",\".env.example\",\".run\",\"打包说明\",\"漏列\"],\"entities\":[\"build_deploy_zip.ps1\",\"f738778\"],\"appliesTo\":\"排查打包说明与实际 zip 内容不一致或 PowerShell 列目录遗漏时\",\"quote\":\"In a scratch dir: `without -Force: normal.txt` vs `with -Force: .run,.env.example,normal.txt`.\",\"voice\":\"assistant\"}],\"loops\":[],\"summary\":\"本次会话是对 commit f738778 的独立验证：确认 `build_deploy_zip.ps1` 的 `-Force` 修复正确落地（仅改 1 文件、BOM/CRLF 完好、两条 pytest 全过），并独立复现了无 `-Force` 时 dotfile 被跳过的根因。额外发现 `pyproject.toml` 的 `addopts` 已含 `-q` 导致命令行再传 `-q` 会双重静默，以及 `TestDeployPackageNote` 实际调用 pwsh 跑真实 builder 而非 mock。\"}"
+  }
+]

@@ -133,9 +133,9 @@ function makeSession(id, cwd, route) {
       const event = events.find((item) => item.seq === seq)
       if (event === undefined) return undefined
       if (event.role === 'user') {
-        return { type: 'user/message', data: { role: 'user', content: [{ type: 'text', text: event.text }], source: { kind: event.sourceKind } } }
+        return { type: 'user/message', time: event.time, data: { role: 'user', content: [{ type: 'text', text: event.text }], source: { kind: event.sourceKind } } }
       }
-      return { type: 'assistant/message', data: { message: { role: 'assistant', content: [{ type: 'text', text: event.text }], source: { kind: 'model' } } } }
+      return { type: 'assistant/message', time: event.time, data: { message: { role: 'assistant', content: [{ type: 'text', text: event.text }], source: { kind: 'model' } } } }
     },
     requestHeader: () => ({ config: { provider: route.provider, model: route.model } }),
     deriveMessages() {
@@ -146,15 +146,15 @@ function makeSession(id, cwd, route) {
         source: event.role === 'user' ? { kind: event.sourceKind, form: 'recall' } : { kind: 'model' },
       }))
     },
-    appendUser(text, sourceKind = 'user') {
+    appendUser(text, sourceKind = 'user', time = undefined) {
       const seq = nextSeq++
-      events.push({ seq, role: 'user', text, sourceKind })
+      events.push({ seq, role: 'user', text, sourceKind, time })
       session.surface.nodes.push(seq)
       return seq
     },
-    appendAssistant(text) {
+    appendAssistant(text, time = undefined) {
       const seq = nextSeq++
-      events.push({ seq, role: 'assistant', text })
+      events.push({ seq, role: 'assistant', text, time })
       session.surface.nodes.push(seq)
       return seq
     },
@@ -179,7 +179,7 @@ function runtimeConfig(storeDir, logFile) {
     autoExtract: true,
     extractWindowMessages: 200,
     extractMaxInputChars: 96000,
-    extractMaxMemories: 5,
+    extractMaxMemories: 8,
     extractMaxOutputTokens: 8192,
     extractTimeoutMs: 120000,
     extractIntervalMinutes: 30,
@@ -242,8 +242,8 @@ async function runPersona(persona, history, exams, route, log) {
       if (turnIndex > 0 && turnTime - lastTurnTime >= MIN_IDLE_HOURS * 3_600_000) {
         await extract(`idle-gap-before-turn-${turn['轮次']}`, lastTurnTime + MIN_IDLE_HOURS * 3_600_000)
       }
-      session.appendUser(turn['用户消息'])
-      session.appendAssistant(turn['助手回复'])
+      session.appendUser(turn['用户消息'], 'user', turnTime)
+      session.appendAssistant(turn['助手回复'], turnTime)
       runtime.recordActivity(session, turnTime)
       lastTurnTime = turnTime
       turnIndex += 1
@@ -260,8 +260,9 @@ async function runPersona(persona, history, exams, route, log) {
     const examAgent = makeAgent(examSession)
     const start = Math.max(0, exam.cutoff_turn - RECENT_TURNS)
     for (let index = start; index < exam.cutoff_turn; index += 1) {
-      examSession.appendUser(history[index]['用户消息'])
-      examSession.appendAssistant(history[index]['助手回复'])
+      const at = new Date(history[index]['逻辑时间']).getTime()
+      examSession.appendUser(history[index]['用户消息'], 'user', at)
+      examSession.appendAssistant(history[index]['助手回复'], at)
     }
     let summary
     let recall
@@ -285,7 +286,7 @@ async function runPersona(persona, history, exams, route, log) {
       .map((turn) => `用户：${turn['用户消息']}\n助手：${turn['助手回复']}`)
       .join('\n\n')
     const memoryBlocks = [messageText(summary), messageText(recall)].filter((text) => text.trim().length > 0).join('\n\n')
-    const system = '你是助手。只依据下面提供的资料回答问题。资料里没有的信息就回答「不知道」。问题问到的每件事都要答到；资料里与该问题相关的条件、期限或替代做法也要一并说明。资料里没有说明原因、后续或结果时，要明确说「没有说明」，不要自己推测。只回答问题问到的内容，不要补充与问题无关的细节。简短直接，不要复述资料。'
+    const system = '你是助手。只依据下面提供的资料回答问题。资料里没有的信息就回答「不知道」。问题问到的每件事都要答到；资料里与该问题相关的条件、期限或替代做法也要一并说明。资料里没有说明原因、后续或结果时，要明确说「没有说明」，不要自己推测。只回答问题问到的内容，不要补充与问题无关的细节。如果问题要求你接着讲、续写、发挥或给建议，就基于资料里的设定继续，不要只复述资料、也不要推说不知道。简短直接，不要复述资料。'
     const prompt = [
       memoryBlocks.trim().length === 0 ? '' : `记忆资料：\n${memoryBlocks}\n\n`,
       `最近对话：\n${recent}\n\n`,

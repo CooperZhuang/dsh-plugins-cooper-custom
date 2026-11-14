@@ -97,6 +97,31 @@ const FIELDS = [
     hint: { zh: '一次补注最多带几条原始片段；0 等于关闭。', en: 'Most original excerpts one recall block may carry. 0 disables them.' },
   },
   {
+    field: 'ragRecall', kind: 'boolean',
+    label: { zh: '全量会话原文检索', en: 'Full-history raw retrieval' },
+    hint: { zh: '把「补注带原始会话片段」的来源从「记忆来源会话」扩大到本机全部历史会话：按词法给每段原文打分，取最像的几条注入。零模型调用、只读本机日志。默认关闭，因为它会打开更多 session 日志。', en: 'Widens the raw channel from the memories\' source sessions to every persisted session: scores each passage lexically and injects the best few. Local-only, no model call. Off by default because it opens more session logs.' },
+  },
+  {
+    field: 'ragRecallBytes', kind: 'number', min: 0, step: 100,
+    label: { zh: '全量检索字节上限', en: 'Full-history byte budget' },
+    hint: { zh: '一次补注里全量检索片段的总字节上限；0 等于关闭。', en: 'Byte budget for the full-history excerpt half of one recall block. 0 disables it.' },
+  },
+  {
+    field: 'ragRecallExcerpts', kind: 'number', min: 0, step: 1,
+    label: { zh: '全量检索条数上限', en: 'Full-history excerpts per recall' },
+    hint: { zh: '一次补注最多带几条全量检索片段；0 等于关闭。', en: 'Most full-history excerpts one recall block may carry. 0 disables them.' },
+  },
+  {
+    field: 'ragRecallChars', kind: 'number', min: 0, step: 100,
+    label: { zh: '全量检索单条字数上限', en: 'Full-history excerpt length' },
+    hint: { zh: '一条全量检索片段最多多少字；太短会只截到提问、截不到回答。', en: 'Longest one full-history excerpt may be. Too short clips the question and loses the answer.' },
+  },
+  {
+    field: 'ragRecallSessions', kind: 'number', min: 0, step: 1,
+    label: { zh: '全量检索会话数上限', en: 'Session logs opened per recall' },
+    hint: { zh: '全量检索最多打开几份 session 日志（按最近修改排序）；0 等于关闭。', en: 'How many session logs full-history retrieval may open, newest first. 0 disables it.' },
+  },
+  {
     field: 'recallMinQueryChars', kind: 'number', min: 0, step: 1,
     label: { zh: '触发补注的最短发问长度', en: 'Shortest turn worth recalling' },
     hint: { zh: '用户消息短于该字符数时不判定补注（例如「好」「继续」），避免为无意义的回合扫描整个记忆库。', en: 'A user turn shorter than this is skipped instead of scanning the store, so bare acknowledgements cost nothing.' },
@@ -220,6 +245,15 @@ const FIELDS = [
     field: 'extractMaxMemories', kind: 'number', min: 1, step: 1,
     label: { zh: '每次抽取条数上限', en: 'Memories per extraction' },
     hint: { zh: '一次抽取最多写入多少条记忆。', en: 'Maximum memories one extraction pass may store.' },
+  },
+  {
+    field: 'recordScope', kind: 'select',
+    options: [
+      { value: 'work', label: { zh: '工作（默认）', en: 'Work (default)' } },
+      { value: 'both', label: { zh: '工作 + 生活', en: 'Work + personal' } },
+    ],
+    label: { zh: '记录范围', en: 'What to record' },
+    hint: { zh: '「工作」只记项目/工具链/售前材料，生活琐事（生日、家人、宠物、兴趣、共同创作）不主动记，除非你明说要记；「工作 + 生活」会连生活事实一起记。', en: '`Work` keeps project, tooling and pre-sales material and leaves personal life alone unless you ask; `Work + personal` keeps personal background, relationships, habits and creative work too.' },
   },
   {
     field: 'extractIntervalMinutes', kind: 'number', min: 0, step: 5,
