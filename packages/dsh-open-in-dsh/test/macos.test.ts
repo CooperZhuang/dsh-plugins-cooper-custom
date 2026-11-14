@@ -72,10 +72,17 @@ function parseReport(stdout) {
   return fields
 }
 
-test('the launcher and the host half agree on the route they both use', () => {
-  const declared = read('lib/index.js').match(/export const ROUTE_OPEN = '([^']+)'/)
-  assert.ok(declared, 'lib/index.js no longer declares ROUTE_OPEN')
-  assert.match(read('scripts/macos/open-in-dsh'), new RegExp(`ROUTE_OPEN='${declared[1]}'`))
+test('the launcher and the host half agree on the routes they both use', () => {
+  const launcher = read('scripts/macos/open-in-dsh')
+  // `set -u` turns a route that is used but never assigned into an abort, so
+  // every route the launcher references must be mirrored here — not just the
+  // one it posts to.
+  for (const name of ['ROUTE_OPEN', 'ROUTE_STATUS']) {
+    const declared = read('lib/index.js').match(new RegExp(`export const ${name} = '([^']+)'`))
+    assert.ok(declared, `lib/index.js no longer declares ${name}`)
+    assert.match(launcher, new RegExp(`^${name}='${declared[1]}'`, 'm'), `launcher no longer mirrors ${name}`)
+    assert.ok(launcher.includes(`$${name}`), `launcher does not use $${name}`)
+  }
 })
 
 test('the launcher and the host half agree on the handoff socket path', () => {
