@@ -63,8 +63,9 @@
     "@deepseek-ai/schemastery": "^3.18.5"
   },
   "devDependencies": {
-    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-tools": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-error": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.3",
     "@types/node": "^26.6.5",
     "typescript": "^7.0.2"
   },
