@@ -42,6 +42,7 @@ set -u
 
 # Mirrored from lib/index.js by hand; test/macos.test.ts keeps the copies honest.
 ROUTE_OPEN='/dsh-open-in-dsh/api/v1/open'
+ROUTE_STATUS='/dsh-open-in-dsh/api/v1/status'
 DEFAULT_WEB_PORT=3080
 SOCKET_PATH_DEFAULT="$HOME/.dsh/run/dsh-open-in-dsh.sock"
 
