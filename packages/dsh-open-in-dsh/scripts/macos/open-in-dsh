@@ -122,11 +122,21 @@ bundle_executable() {
 # Desktop Beta 2.0.18-beta.1, pgrep -f sees every helper and crash-reporting
 # process of the app but *not* the packaged main process, so a running app read
 # as "closed" and every click would take the cold-start path. `ps -ww` prints
-# the untruncated command line, and an exact match keeps helpers (which carry
-# extra arguments) out.
+# the untruncated command line.
+#
+# The match is a prefix match, not an exact one. The packaged main process now
+# carries arguments: an auto-update relaunches it as `<exe> --updated` (DSH
+# Desktop Beta 2.0.23-beta.1, measured 2026-11-14), and the host it spawns is
+# `<exe> --expose-internals … host.js …`. An exact match read a just-updated
+# app as closed, so *every* click took the cold-start path — which is why the
+# cold-start-only `socket_ready` bug surfaced right after each update. Helper
+# processes live under `Contents/Frameworks/… Helper.app/`, a different prefix,
+# so they still never match.
 is_running() {
   [ -n "$1" ] || return 1
-  ps -ww -Ao command= 2>/dev/null | grep -Fx -- "$1" >/dev/null 2>&1
+  ps -ww -Ao command= 2>/dev/null | awk -v exe="$1" '
+    index($0, exe) == 1 && (length($0) == length(exe) || substr($0, length(exe) + 1, 1) == " ") { found = 1 }
+    END { exit found ? 0 : 1 }'
 }
 
 # A running instance always wins: the click is meant for the DSH the user is

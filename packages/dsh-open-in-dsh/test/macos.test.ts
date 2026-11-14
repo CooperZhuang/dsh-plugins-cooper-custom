@@ -85,6 +85,32 @@ test('the launcher and the host half agree on the routes they both use', () => {
   }
 })
 
+test('is_running matches an executable that carries arguments, and nothing shorter', () => {
+  // An auto-update relaunches the packaged main process as `<exe> --updated`
+  // (measured on DSH Desktop Beta 2.0.23-beta.1), and the host it spawns is
+  // `<exe> --expose-internals … host.js …`. An exact match read a running app
+  // as closed, so every click took the cold-start path — which is why the
+  // cold-start-only `socket_ready` bug surfaced right after each update. Run
+  // the launcher's own function against a real process.
+  const source = read('scripts/macos/open-in-dsh').match(/^is_running\(\) \{[\s\S]*?\n\}/m)?.[0]
+  assert.ok(source, 'launcher no longer defines is_running')
+  const isRunning = (arg: string) =>
+    spawnSync('sh', ['-c', `${source}\nis_running "$1"`, 'is_running', arg]).status === 0
+
+  const started = spawnSync('sh', ['-c', 'sleep 30 & echo $!'], { encoding: 'utf8' })
+  const pid = started.stdout.trim()
+  if (!/^\d+$/.test(pid)) return // no background process on this platform
+  try {
+    const command = spawnSync('ps', ['-p', pid, '-o', 'command='], { encoding: 'utf8' }).stdout.trim()
+    if (command !== 'sleep 30') return // `ps` rendered this process differently here
+    assert.equal(isRunning('sleep'), true, 'executable followed by arguments must match')
+    assert.equal(isRunning('sleep 30'), true, 'the whole command line must still match')
+    assert.equal(isRunning('slee'), false, 'a bare prefix without a separator must not match')
+  } finally {
+    spawnSync('kill', [pid])
+  }
+})
+
 test('the launcher and the host half agree on the handoff socket path', () => {
   assert.match(read('lib/index.js'), /DEFAULT_SOCKET_PATH = join\(homedir\(\), '\.dsh', 'run', 'dsh-open-in-dsh\.sock'\)/)
   assert.match(read('scripts/macos/open-in-dsh'), /SOCKET_PATH_DEFAULT="\$HOME\/\.dsh\/run\/dsh-open-in-dsh\.sock"/)
