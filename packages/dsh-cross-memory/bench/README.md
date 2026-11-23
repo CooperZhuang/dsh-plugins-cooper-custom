@@ -8,6 +8,7 @@ node bench/run-bench.mts                # 六条排名臂：current / relevance 
 node bench/ablate.mts                   # 复刻打分函数后逐项拆解：idf、长度、饱和、注入排序
 node bench/analyze.mts                  # 字段贡献、闸门拒绝原因、按 kind 的召回
 node bench/sensitivity.mts              # BM25 的 k1×b×字段重复 64 格敏感性
+node bench/inject-relevance.mts      # 注入块实际渲染的条目与主题相关率（前缀切分）
 node bench/e2e/run.mts                  # 端到端三臂（记忆 / 整段原文 / 闭卷），见 e2e/README.md
 node bench/real/sample.mts               # 真实会话取样 → 出题 → 三臂评测，见 real/README.md
 ```
@@ -44,3 +45,19 @@ node bench/verify-doc.mts
 可复算：语料 732 条、`queries-a` / `queries-b` 各 75 条、`queries-a` 上 current 臂 R@1 = 73/75（2026-11-23 排序层改 BM25 后；改前词法排序是 75/75）、dense 缓存的模型 `qwen3-embedding:0.6b` 与 1024 维。
 
 不能复算：「项目作用域的 150 个目标只命中 2 条」对应的命中比对没有留存产物，`bench/data/sample.json` 只有 150 条抽样，不要把 2 条这个数当成可验证的结论引用。
+
+### 注入相关性的基线（2026-11-23）
+
+`inject-relevance.mts` 在 20 场真实会话上回放注入选择，改前（词法排序、global 先、
+每作用域独立排名、非 tier 填满）与改后（BM25 排序、project 先、合并排序、tier 不填满）：
+
+| 指标 | 改前 | 改后 |
+| --- | ---: | ---: |
+| listed/会话 | 25.1 | 20.4 |
+| 其中与开场白相关 | 51.5% | 63.4% |
+| 其中与会话全文相关 | 73.8% | 68.8% |
+| 渲染块前 6 条与开场白相关 | 49/120 | 113/120（94.2%） |
+
+绝对相关数几乎不变（约 12.9 条/会话），减少的是噪声条目。前 6 条的差距最大，因为
+字节预算稳定渲染的就是头部。收窄 `maxSummaryBytes` 不是替代手段：渲染器按
+perScope 分级降级，预算一紧每节只渲染 1 条，相关绝对数反而掉到 4.4。
