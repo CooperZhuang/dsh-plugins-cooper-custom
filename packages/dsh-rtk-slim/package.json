@@ -37,7 +37,7 @@
   },
   "engines": {
     "node": ">=24",
-    "dsh": "^0.2.1-rc.2 || ^0.2.2-alpha.2"
+    "dsh": "^0.2.1-rc.2 || ^0.2.2-alpha.2 || ^0.2.3-alpha.1"
   },
   "keywords": [
     "dsh",
