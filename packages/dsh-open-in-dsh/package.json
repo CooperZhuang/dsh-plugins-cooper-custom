@@ -84,6 +84,7 @@
     }
   },
   "devDependencies": {
+    "@deepseek-ai/dsh-client-config": "0.2.3-alpha.2",
     "@types/node": "^26.6.5",
     "typescript": "^7.0.2"
   }
