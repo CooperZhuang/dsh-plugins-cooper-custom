@@ -329,13 +329,16 @@ export const DEFAULT_EXTRACT_TIMEOUT_MS = 120_000
 /**
  * Default max drafts one extraction may produce.
  *
- * 8 rather than 5: on a real production session, an audit of 50 Mubea
+ * 12 rather than 5, then 8: on a real production session, an audit of 50 Mubea
  * Invoice-Insight conversations found 247 durable facts, and the cap of 5 was
  * the single biggest cause of missed material on long sessions (one audit
- * session held 16 facts and kept 5). Eight keeps a long session's findings
- * without letting a short one pad itself.
+ * session held 16 facts and kept 5). The real-session bench then measured a
+ * clean dose-response on one fixed corpus: 5 → 19/33, 10 → 22/33, 20 → 24/33,
+ * so the curve is still rising at 20 but flattening. Twelve is where the next
+ * step buys about one more answered question per extra pass, before the entry
+ * count (and the consolidation load it creates) starts to dominate.
  */
-export const DEFAULT_EXTRACT_MAX_MEMORIES = 8
+export const DEFAULT_EXTRACT_MAX_MEMORIES = 12
 
 /**
  * What the extractor is allowed to keep, by default.
