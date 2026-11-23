@@ -279,31 +279,37 @@ export function apply(ctx, rawConfig = {}) {
         host.effect(() => host.webServer.register({
             kind: 'exact',
             path: ROUTE_OPEN,
+            auth: 'anonymous',
             handler: createOpenHandler(ctx, hub, allowNonLoopback),
         }), 'dsh-open-in-dsh: open route');
         host.effect(() => host.webServer.register({
             kind: 'exact',
             path: ROUTE_EVENTS,
+            auth: 'anonymous',
             handler: createEventsHandler(ctx, hub, allowNonLoopback),
         }), 'dsh-open-in-dsh: events route');
         host.effect(() => host.webServer.register({
             kind: 'exact',
             path: ROUTE_STATUS,
+            auth: 'anonymous',
             handler: createStatusHandler(hub, allowNonLoopback),
         }), 'dsh-open-in-dsh: status route');
         host.effect(() => host.webServer.register({
             kind: 'exact',
             path: ROUTE_APPS,
+            auth: 'anonymous',
             handler: createAppsHandler(allowNonLoopback),
         }), 'dsh-open-in-dsh: apps route');
         host.effect(() => host.webServer.register({
             kind: 'exact',
             path: ROUTE_OPEN_WITH,
+            auth: 'anonymous',
             handler: createOpenWithHandler(ctx, allowNonLoopback),
         }), 'dsh-open-in-dsh: open-with route');
         host.effect(() => host.webServer.register({
             kind: 'exact',
             path: ROUTE_OPEN_SESSION,
+            auth: 'anonymous',
             handler: createOpenSessionHandler(ctx, allowNonLoopback, {
                 resolveCwd: (sessionId) => resolveSessionCwd(sessionId, { live: createLiveCwdReader(ctx) }),
             }),
