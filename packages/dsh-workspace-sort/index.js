@@ -4,11 +4,9 @@
  * The ordering itself is a Client job: only the browser holds both the
  * Workspace order (`ctx.workspaces.list`) and the Session summaries whose
  * `updatedAt` is the last human prompt, and only the browser can call the
- * durable `workspaces.insertBefore`. The Host owes the browser three things and
+ * durable `workspaces.insertBefore`. The Host owes the browser two things and
  * nothing else:
  *
- *   * the resolved knobs (`GET /dsh-workspace-sort/api/state`), so defaults live
- *     in the profile instead of the bundle;
  *   * the user's pins and rule switches, persisted as plain JSON under
  *     `$DSH_HOME/workspace-sort/prefs.json` (`GET` on the state route,
  *     `POST /dsh-workspace-sort/api/prefs` to write). They are stored here
@@ -18,14 +16,23 @@
  *   * an audit trail: the last reorder decision is kept in memory for `GET`, and
  *     every applied reorder logs one line.
  *
+ * The sorting knobs are not a route: they are this package's {@link Config},
+ * whose fields are all `.volatile()`. The Loader hands `apply` live `{ get() }`
+ * references and gives the browser face the same values as `SyncedConfig` refs,
+ * so a change made in the plugin page applies without a restart or a reload.
+ * The state route still echoes the resolved knobs for `curl` diagnostics, but
+ * the browser never depends on it for configuration.
+ *
  * Deliberately absent: file moves, directory renames, Workspace removal,
  * session migration, process spawning. This plugin changes ordering state only.
  *
- * `enabled: false` mounts this half inert: no route is registered, so the
- * browser half stays silent rather than inventing its own defaults.
+ * `enabled: false` leaves the order untouched: the browser half stops sorting.
+ * Both routes stay mounted, so the pins remain readable and writable while the
+ * switch is off and toggling it back on is itself a live config change.
  *
  * @module dsh-workspace-sort
  */
+import z from '@deepseek-ai/schemastery'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -33,6 +40,30 @@ import { dirname, join } from 'node:path'
 /** Route paths, hand-mirrored in `src/client.js`: the two halves cannot import each other. */
 export const STATE_ROUTE = '/dsh-workspace-sort/api/state'
 export const PREFS_ROUTE = '/dsh-workspace-sort/api/prefs'
+
+/**
+ * Plugin config, edited live in the plugin page.
+ *
+ * Every field is `.volatile()` on purpose: the Loader then keeps the running
+ * references stable and commits new values in place, so changing a knob neither
+ * remounts this half nor reloads the page. Descriptions are the form labels.
+ */
+export const Config = z.object({
+  /** Sort at all; false stops the browser half and leaves the Host order exactly as it is. */
+  enabled: z.boolean().default(true).description('启用排序。关掉后浏览器半边停手，工作区顺序保持原样。').volatile(),
+  /** Rank a container Workspace by its whole subtree instead of its own Sessions. */
+  aggregate: z
+    .boolean()
+    .default(true)
+    .description('容器目录按整个子树汇总（默认开）；关掉后只按目录自己的会话算。')
+    .volatile(),
+  /** Apply the order as soon as a page loads instead of waiting for the next prompt. */
+  initialSort: z
+    .boolean()
+    .default(true)
+    .description('页面加载时立即排序（默认开）；关掉后等下一次提问或手动整理。')
+    .volatile(),
+})
 
 /** A reorder report or a pin set is small; anything larger is not this request. */
 const MAX_BODY_BYTES = 64 * 1024
@@ -46,10 +77,16 @@ const DEFAULT_PREFS = { auto: true, runningFirst: false, pins: [] }
 /**
  * The part of the profile row's `config` block this plugin reads.
  *
+ * A `.volatile()` field arrives as a live `{ get() }` reference; a plain
+ * boolean is also accepted, see {@link readFlag}.
+ *
+ * @typedef {object} VolatileFlag
+ * @property {() => boolean | undefined} get - the current value.
+ *
  * @typedef {object} WorkspaceSortConfig
- * @property {boolean} [enabled] Mount the plugin at all (false leaves the order untouched).
- * @property {boolean} [aggregate] Rank a container by its whole subtree (default true).
- * @property {boolean} [initialSort] Apply the order as soon as a page loads (default true).
+ * @property {VolatileFlag | boolean} [enabled] Sort at all; false leaves the order untouched.
+ * @property {VolatileFlag | boolean} [aggregate] Rank a container by its whole subtree (default true).
+ * @property {VolatileFlag | boolean} [initialSort] Apply the order as soon as a page loads (default true).
  */
 
 /**
@@ -72,16 +109,21 @@ const DEFAULT_PREFS = { auto: true, runningFirst: false, pins: [] }
 
 /**
  * @param {HostContext} ctx - the plugin's Cordis context.
- * @param {WorkspaceSortConfig} [config] - the profile row's `config` block.
+ * @param {WorkspaceSortConfig} [config] - the row's `config` block; volatile
+ *   fields arrive as live `{ get() }` references.
  */
 export function apply(ctx, config = {}) {
   if (config === null || typeof config !== 'object') config = {}
-  if (config.enabled === false) return
-  const resolved = {
-    enabled: true,
-    aggregate: config.aggregate !== false,
-    initialSort: config.initialSort !== false,
-  }
+  /**
+   * The knobs as they are right now. Read on every use instead of once at
+   * mount: with `.volatile()` fields the Loader commits new values into the
+   * same references, so a cached copy would go stale.
+   */
+  const resolvedConfig = () => ({
+    enabled: readFlag(config.enabled, true),
+    aggregate: readFlag(config.aggregate, true),
+    initialSort: readFlag(config.initialSort, true),
+  })
 
   let prefs = { ...DEFAULT_PREFS }
   let lastReport
@@ -92,6 +134,8 @@ export function apply(ctx, config = {}) {
 
   /**
    * Answer one request on the state route: knobs, prefs, and the last decision.
+   * The knobs are echoed for diagnostics only; the browser half gets them from
+   * its `SyncedConfig`.
    *
    * @param {import('node:http').IncomingMessage} request - the route request.
    * @param {import('node:http').ServerResponse} response - the route response.
@@ -103,7 +147,7 @@ export function apply(ctx, config = {}) {
     }
     if (request.method === 'GET' || request.method === 'HEAD') {
       await ready
-      sendJson(response, 200, { ok: true, config: resolved, prefs, lastReport })
+      sendJson(response, 200, { ok: true, config: resolvedConfig(), prefs, lastReport })
       return
     }
     if (request.method !== 'POST') {
@@ -125,7 +169,8 @@ export function apply(ctx, config = {}) {
     if (body.hello === true) {
       const options = body.options !== null && typeof body.options === 'object' ? body.options : {}
       ctx.logger?.info?.(
-        'dsh-workspace-sort: client attached (aggregate=%s, initialSort=%s)',
+        'dsh-workspace-sort: client attached (enabled=%s, aggregate=%s, initialSort=%s)',
+        options.enabled !== false,
         options.aggregate !== false,
         options.initialSort !== false,
       )
@@ -134,10 +179,11 @@ export function apply(ctx, config = {}) {
     }
     const moves = Array.isArray(body.moves) ? body.moves : []
     ctx.logger?.info?.(
-      'dsh-workspace-sort: reordered %d workspace(s), newest activity %s%s',
+      'dsh-workspace-sort: reordered %d workspace(s), newest activity %s%s, %d waiting on you',
       moves.length,
       typeof body.newest === 'number' && body.newest > 0 ? new Date(body.newest).toISOString() : 'none',
       body.manual === true ? ' (manual)' : '',
+      typeof body.waiting === 'number' && body.waiting > 0 ? body.waiting : 0,
     )
     sendJson(response, 200, { ok: true })
   }
@@ -187,6 +233,29 @@ export function apply(ctx, config = {}) {
       }
     }, 'dsh-workspace-sort: routes')
   })
+}
+
+/**
+ * Read one config field.
+ *
+ * A `.volatile()` field is handed to `apply` as a live `{ get() }` reference
+ * whose value may still be absent; a plain boolean is accepted too so a direct
+ * `apply(ctx, {...})` (a test, or a Host that does not mark it volatile) reads
+ * the same way. Anything unusable falls back to the field default.
+ *
+ * @param field - the config field as received.
+ * @param fallback - the documented default.
+ * @returns the effective boolean.
+ */
+function readFlag(field, fallback) {
+  if (field === undefined || field === null) return fallback
+  let value
+  try {
+    value = typeof field.get === 'function' ? field.get() : field
+  } catch {
+    return fallback
+  }
+  return typeof value === 'boolean' ? value : fallback
 }
 
 /**

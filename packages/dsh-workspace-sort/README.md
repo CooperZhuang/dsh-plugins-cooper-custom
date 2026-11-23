@@ -1,6 +1,6 @@
 # @cooper-zhuang/dsh-workspace-sort
 
-DSH（DeepSeek Harness）Web 插件：给左侧「工作区」那一层补排序能力——按最近一次人工提问自动排、置顶几个常驻、运行中的排前面，并提供一个只看排序的小面板。
+DSH（DeepSeek Harness）Web 插件：给左侧「工作区」那一层补排序能力——按最近一次人工提问自动排、正在等你输入的排最前、置顶几个常驻、运行中的排前面，并提供一个只看排序的小面板。
 
 官方侧栏的「视图选项 → 最近更新」排的是**每个工作区内部的会话**，从不排工作区本身；工作区顺序只由宿主保存的拖拽顺序决定。所以那个选项看起来「没生效」——它本来就不管工作区。
 
@@ -9,18 +9,20 @@ DSH（DeepSeek Harness）Web 插件：给左侧「工作区」那一层补排序
 ## 功能
 
 - **按最近提问自动排序**：每个工作区取最新一条「你发出的提问」的时间（会话摘要的 `updatedAt`）。打开会话、助手回复、后台任务跑完都不算活动，不会让顺序跳动。
+- **等你输入优先**：工作区里有会话正等你回答（审批、计划审阅、提问三种）就排到未置顶区最前，压过「运行中」。判据是内核的 `ctx.uiSession.pendingInteractions`，与侧栏自己显示等待标记的规则一致；其他 kind 不算。
 - **容器目录按子树汇总**：`~/Documents/Code/Mubea` 这类只用来分组的目录自己没有会话，按整个子树的最新活动参与排序，否则这个分组会沉到底部。
 - **置顶**：把几个常驻工作区钉在列表最前，按你钉的顺序排列，不参与活动排序。
 - **运行中的排前面**：可选。某个工作区里有会话正在跑，就排在未置顶区的前面，长任务不会沉出视野。
-- **面板**（插件页里本组合包页面的卡片上点「打开排序面板」；侧栏不放图标）：列出全部工作区，显示会话数、运行中会话数、最近活动相对时间；支持按名称筛选、点图钉置顶、开关上面两条规则、点「立即整理」立刻重排一次。
-- **手动拖拽优先**：你用鼠标拖过之后，插件停手，直到下一次提问或你点「立即整理」。
+- **面板**（插件页里本组合包页面的卡片上点「打开排序面板」；侧栏不放图标）：列出全部工作区，显示会话数、等待输入数、运行中会话数、最近活动相对时间；支持按名称筛选、点图钉置顶、开关上面两条规则、点「立即整理」立刻重排一次。
+- **手动拖拽优先**：你用鼠标拖过之后，插件停手，直到下一次提问、某个会话开始等你输入，或你点「立即整理」。
 - **无变化不写盘**：算出来的顺序和当前一致时，一个字节都不写。
 
 ## 实现要点
 
 - 顺序只通过官方 `workspaces.insertBefore` 写入（与拖拽同一个命令），落在 `$DSH_HOME/storages/workspace.json` 的持久顺序里，刷新、换窗口、重启都保留。
 - 置顶与两个开关存在宿主侧 `$DSH_HOME/workspace-sort/prefs.json`（原子写：tmp 后 rename）。**不用 localStorage**：桌面端 Web 服务绑定的是随机端口（`port: 0`），页面 origin 每次重启都变，localStorage 会跟着丢。
-- 宿主半边只有两条回环路由：`GET /dsh-workspace-sort/api/state`（配置 + 位置 + 最后一次重排决策）和 `POST /dsh-workspace-sort/api/prefs`（保存置顶与开关）。没有文件系统操作、没有子进程、没有会话操作。
+- 三个配置键是宿主 `Config` 上的 `.volatile()` 字段：宿主拿到活的 `{ get() }` 引用，浏览器半边拿到同一份值的 `SyncedConfig` 引用。改配置即时生效，不重启、不重载页面；启动时也不再 GET 配置，宿主路由不可达只影响置顶的持久化，不会把排序整个关掉。
+- 宿主半边只有两条回环路由：`GET /dsh-workspace-sort/api/state`（置顶 + 最后一次重排决策，`config` 段仅用于 curl 诊断）和 `POST /dsh-workspace-sort/api/prefs`（保存置顶与开关）。没有文件系统操作、没有子进程、没有会话操作。
 - 面板与入口都用官方 Slot：`plugins.bundle.config`（插件页本组合包的卡片）和 `shell.overlay`（面板），不查 DOM 类名；侧栏不占任何位置。
 
 ## 安装
@@ -31,17 +33,23 @@ dsh plugin --profile desktop add /path/to/packages/dsh-workspace-sort
 
 生效条件：
 
-- 第一次安装 / 改了 `index.js`（宿主半边）：重启一次宿主。
-- 只改了浏览器半边：菜单「DSH Desktop Beta → 重新加载界面」重载页面即可。
+- 第一次安装 / 改了 `index.js` 或 `lib/client.js`（插件代码）：重启一次宿主。
+- 改配置（插件页的配置卡片，或 `cordis.patch.yml` 的 `config` 块）：即时生效，不重启、不重载页面。
+- 只重载界面：菜单「DSH Desktop Beta → 重新加载界面」。
+
+## 内核要求
+
+- 配置即时生效需要 DSH **0.2.2-rc.3+**：该版本起 Host 的 `.volatile()` Config 字段会同步给浏览器半边，`apply(ctx, config)` 收到 `SyncedConfig` 引用；插件页的 `plugins.bundle.config` 槽位也要求同一条版本线。
+- 更老的内核（`engines.dsh` 仍允许的 0.2.1）：配置退回内置默认值，改配置要重启宿主；`ctx.uiSession` 不存在时插件退化为纯活动排序，不显示等待徽标。
 
 ## 配置
 
-配置在插件的 load 行（profile 的 `cordis.patch.yml`）里：
+配置在插件的 load 行（profile 的 `cordis.patch.yml`）里，也可以直接在插件页本行的配置卡片里改；两边都即时生效：
 
 ```yaml
 - id: workspace-sort
   config:
-    enabled: true        # false = 宿主半边不挂路由，浏览器半边静默，顺序不动
+    enabled: true        # false = 浏览器半边停手，顺序不动；宿主路由仍在，置顶照常读写
     aggregate: true      # false = 容器目录只按自己的会话算（不含子树）
     initialSort: true    # false = 页面加载时不排，等下一次提问或手动整理
 ```
@@ -51,8 +59,8 @@ dsh plugin --profile desktop add /path/to/packages/dsh-workspace-sort
 ## 数据与副作用
 
 - 顺序是**宿主持久状态**，写在 `$DSH_HOME/storages/workspace.json` 的 `global.workspaceIds`，和其他窗口一致。
-- 活动来自会话列表的 `updatedAt`（持久化的最后一条人类提问时间）；空白新会话（草稿）与子代理会话不计入。
-- 每次实际重排宿主写一行日志；`GET /dsh-workspace-sort/api/state` 返回最后一次重排的 `current` / `desired` / `moves` / `newest`。
+- 活动来自会话列表的 `updatedAt`（持久化的最后一条人类提问时间）；空白新会话（草稿）与子代理会话不计入。等待状态来自 `ctx.uiSession.pendingInteractions`，不落盘。
+- 每次实际重排宿主写一行日志；`GET /dsh-workspace-sort/api/state` 返回最后一次重排的 `current` / `desired` / `moves` / `newest` / `waiting`。
 - 不联网（除了本机回环路由），不读写你的项目文件。
 
 ## 与社区插件的差别
@@ -68,18 +76,19 @@ dsh plugin --profile desktop add /path/to/packages/dsh-workspace-sort
 ## 已知限制
 
 - 置顶存在本机 `prefs.json`，不随 DSH 跨机同步。
-- 「按工作区」（非树形）分组下，容器空行会浮在它最活跃的子项目上方；不想要就把 `aggregate` 设成 `false`。
-- 依赖客户端服务的内部形状（`ctx.workspaces.list`、`ctx.sessions.list.byId` 的 `updatedAt` / `running` / `blank`）。DSH 改这两处时插件要跟着改，`engines.dsh` 只声明到 0.2.x 就是这个意思。
+- 「按工作区」（非树形）分组下，容器空行会浮在它最活跃的子项目上方；不想要就把 `aggregate` 设成 `false`（这一项同时决定子会话「等你输入」会不会抬起容器）。
+- 「等你输入」只认 `approval` / `plan-review` / `question` 三种 kind，与内核侧栏的可见等待标记一致；其他 kind 不排前。
+- 依赖客户端服务的内部形状（`ctx.workspaces.list`、`ctx.sessions.list.byId` 的 `updatedAt` / `running` / `blank`、`ctx.uiSession.pendingInteractions`）。DSH 改这些时插件要跟着改，`engines.dsh` 只声明到 0.2.x 就是这个意思。
 - 顺序写进宿主，是全局行为，不是某个窗口的视图偏好。
 
 ## 开发
 
 ```sh
 npm run build   # src/sort.js 内联进 src/client.js → lib/client.js
-npm test        # node --test：父级推导、活动聚合、置顶、运行中优先、目标顺序、move 计划（11 例）
+npm test        # node --test：纯规则 13 例 + 浏览器半边等待排序 5 例
 ```
 
-`src/sort.js` 是纯函数（可测）；`src/client.js` 是浏览器半边（引擎 + 两个 Slot 组件）；`index.js` 是宿主半边（配置、prefs 文件、两条路由、日志）。没有打包器。
+`src/sort.js` 是纯函数（可测）；`src/client.js` 是浏览器半边（引擎 + 两个 Slot 组件）；`index.js` 是宿主半边（Config、prefs 文件、两条路由、日志）。没有打包器。`lib/client.js` 是跟踪的构建产物，改 `src/client.js` 或 `src/sort.js` 后要重建再提交。
 
 ## 许可
 

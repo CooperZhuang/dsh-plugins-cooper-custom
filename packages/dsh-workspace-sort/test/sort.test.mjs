@@ -19,6 +19,10 @@ const workspace = (id, path, sessionIds = []) => ({ workspaceId: id, path, sessi
 const summaries = (entries) =>
   Object.fromEntries(entries.map(([id, updatedAt, blank, running]) => [id, { updatedAt, blank, running: running === true }]))
 
+/** Build the pending-interaction snapshot `ctx.uiSession.pendingInteractions` reports. */
+const pending = (entries) =>
+  new Map(entries.map(([sessionId, kind]) => [sessionId, { key: kind, kind, sessionId }]))
+
 /** Apply `insertBefore(id, before)` moves to a local order, the way the Host does. */
 const applyMoves = (order, moves) => {
   const next = [...order]
@@ -201,4 +205,51 @@ test('isRunning only looks at the Workspace own members', () => {
   assert.equal(isRunning(rows[0], byId), true)
   assert.equal(isRunning(rows[1], byId), false)
   assert.equal(isRunning(workspace('empty', '/e'), byId), false)
+})
+
+test('a waiting Workspace leads even when its activity is older', () => {
+  const rows = [workspace('a', '/a', ['x']), workspace('b', '/b', ['y'])]
+  const byId = summaries([
+    ['x', 100],
+    ['y', 300],
+  ])
+  // Without a pending request the fresher prompt leads.
+  assert.deepEqual(desiredOrder(rows, byId), ['b', 'a'])
+  // Only the three visible kinds count; anything else is not the user's turn.
+  assert.deepEqual(desiredOrder(rows, byId, { pending: pending([['x', 'approval']]) }), ['a', 'b'])
+  assert.deepEqual(desiredOrder(rows, byId, { pending: pending([['x', 'other']]) }), ['b', 'a'])
+  // Waiting outranks running: a question blocks the Run until a human answers.
+  const busy = summaries([
+    ['x', 100],
+    ['y', 300, false, true],
+  ])
+  assert.deepEqual(desiredOrder(rows, busy, { runningFirst: true, pending: pending([['x', 'question']]) }), ['a', 'b'])
+  // The key is on by default and can be switched off.
+  assert.deepEqual(desiredOrder(rows, byId, { pending: pending([['x', 'approval']]), waitingFirst: false }), ['b', 'a'])
+  // Pins still lead, waiting or not.
+  assert.deepEqual(desiredOrder(rows, busy, { pending: pending([['x', 'approval']]), pins: ['b'] }), ['b', 'a'])
+})
+
+test('aggregate:false keeps a container down when only a descendant waits', () => {
+  const rows = [
+    workspace('root', '/code'),
+    workspace('mubea', '/code/mubea'),
+    workspace('insight', '/code/mubea/insight', ['s']),
+    workspace('personal', '/code/personal', ['p']),
+  ]
+  const byId = summaries([
+    ['s', 500],
+    ['p', 100],
+  ])
+  const waiting = pending([['s', 'plan-review']])
+  // Aggregated: the waiting Session lifts its whole ancestor chain, so the tree
+  // renders with /code first and the waiting subtree before the other sibling.
+  assert.deepEqual(desiredOrder(rows, byId, { pending: waiting }), ['root', 'mubea', 'insight', 'personal'])
+  // Flat: only the Workspace that actually owns the Session rises.
+  assert.deepEqual(desiredOrder(rows, byId, { aggregate: false, pending: waiting }), [
+    'insight',
+    'personal',
+    'root',
+    'mubea',
+  ])
 })

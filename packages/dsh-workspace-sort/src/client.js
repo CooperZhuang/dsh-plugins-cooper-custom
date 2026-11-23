@@ -8,11 +8,12 @@
  * every filesystem and destructive operation out of scope:
  *
  *   * automatic order by each Workspace's newest human prompt (`updatedAt` on a
- *     non-blank Session), optionally with running Workspaces first;
+ *     non-blank Session), with a Workspace waiting for your input ahead of the
+ *     rest and — optionally — running Workspaces next;
  *   * pins that keep chosen Workspaces at the front, in pin order;
  *   * a card on this bundle's page in the Plugins view that opens a panel with
- *     session/running counts, the last activity, a name filter, the two rule
- *     switches and a "tidy now" button (the sidebar itself gets no icon);
+ *     session/running/waiting counts, the last activity, a name filter, the two
+ *     rule switches and a "tidy now" button (the sidebar itself gets no icon);
  *   * every write goes through `ctx.workspaces.insertBefore`, the same durable
  *     command a Workspace drag uses.
  *
@@ -23,10 +24,11 @@
  * Guard rails:
  *
  *   * only a human prompt (or an explicit button) starts a pass;
- *   * a manual drag wins until the next prompt;
+ *   * a manual drag wins until the next prompt or a Session starts waiting;
  *   * one pass at a time, and a pass that finds the order in place writes nothing;
- *   * the Host half answers the knobs on its own route; a page that cannot read
- *     that route stays inert instead of guessing.
+ *   * the knobs arrive as Host-synced `SyncedConfig` refs and are re-read live,
+ *     so a config change stops or restarts the engine without a page reload;
+ *   * `ctx.uiSession.pendingInteractions` is the authority for "waiting on you".
  *
  * `src/sort.js` (inlined by `scripts/build-client.mjs`) holds the pure rules.
  */
@@ -62,6 +64,68 @@ window.__ModuleLoader__.load({
 
     const DEFAULT_PREFS = { auto: true, runningFirst: false, pins: [] }
 
+    /**
+     * One Host-synced config field, as `@deepseek-ai/dsh-client-config` defines
+     * it: the plugin may read it at any time, the value may still be absent, and
+     * the Host never remounts the plugin to change it. Declared locally so this
+     * bundle carries no extra dependency.
+     *
+     * @template T
+     * @typedef {object} SyncedConfigRef
+     * @property {() => T | undefined} get - the current frozen value.
+     * @property {((listener: () => void) => () => void)} [subscribe] - change observer.
+     *
+     * @typedef {object} SyncedConfig
+     * @property {SyncedConfigRef<boolean>} [enabled]
+     * @property {SyncedConfigRef<boolean>} [aggregate]
+     * @property {SyncedConfigRef<boolean>} [initialSort]
+     */
+
+    /** Stand-in when the shell did not mount `uiSession` (nothing can be waiting). */
+    const NO_PENDING = Object.freeze({
+      getSnapshot: () => new Map(),
+      subscribe: () => () => {},
+    })
+
+    /**
+     * Read one config field, falling back when the Host sent no value.
+     *
+     * @param {SyncedConfigRef<boolean> | boolean | undefined} ref - the field.
+     * @param {boolean} fallback - the bundle default.
+     * @returns {boolean} the effective knob.
+     */
+    function readConfigFlag(ref, fallback) {
+      if (ref === undefined || ref === null) return fallback
+      try {
+        const value = typeof ref.get === 'function' ? ref.get() : ref
+        return typeof value === 'boolean' ? value : fallback
+      } catch {
+        return fallback
+      }
+    }
+
+    /**
+     * The knobs as the Host has them right now.
+     *
+     * @param {SyncedConfig | undefined} config - the second `apply` argument.
+     * @returns {{enabled: boolean, aggregate: boolean, initialSort: boolean}} the knobs.
+     */
+    function readOptions(config) {
+      return {
+        enabled: readConfigFlag(config?.enabled, DEFAULTS.enabled),
+        aggregate: readConfigFlag(config?.aggregate, DEFAULTS.aggregate),
+        initialSort: readConfigFlag(config?.initialSort, DEFAULTS.initialSort),
+      }
+    }
+
+    /** Whether the pending-interaction snapshot holds a kind that needs the user. */
+    function hasWaiting(pending) {
+      if (pending === undefined || pending === null) return false
+      const values = typeof pending.values === 'function' ? pending.values() : Object.values(pending)
+      for (const interaction of values) if (isWaitingKind(interaction?.kind)) return true
+      return false
+    }
+
     const DICT = {
       zh: {
         button: '工作区排序',
@@ -77,6 +141,7 @@ window.__ModuleLoader__.load({
         pinnedTag: '置顶',
         sessions: '{n} 会话',
         running: '{n} 运行中',
+        waiting: '{n} 等你输入',
         idle: '无会话',
         never: '从没用过',
         minutes: '{n} 分钟前',
@@ -106,6 +171,7 @@ window.__ModuleLoader__.load({
         pinnedTag: 'Pinned',
         sessions: '{n} sessions',
         running: '{n} running',
+        waiting: '{n} waiting on you',
         idle: 'No sessions',
         never: 'Never used',
         minutes: '{n} min ago',
@@ -272,9 +338,12 @@ window.__ModuleLoader__.load({
     }
 
     return {
-      inject: ['workspaces', 'sessions', 'locale', 'slots'],
-      apply(ctx) {
-        let options = { ...DEFAULTS }
+      inject: ['workspaces', 'sessions', 'locale', 'slots', 'uiSession'],
+      /**
+       * @param ctx - the Client Cordis context.
+       * @param {SyncedConfig} [config] - the Host-synced knobs; one ref per field.
+       */
+      apply(ctx, config) {
         let timer
         let disposed = false
         /** Timestamp of our own last durable write, to recognise its echo. */
@@ -295,10 +364,30 @@ window.__ModuleLoader__.load({
         let knownIds = []
 
         const prefs = createStore({ ...DEFAULT_PREFS })
+        /**
+         * The live knobs. A Host-synced config field is a reference that mutates
+         * in place, so this store is what makes React re-render after a change
+         * and what `pass()` reads at operation time.
+         */
+        const settings = createStore(readOptions(config))
         /** Whether this Host half exposes the prefs route; an older build does not. */
         const capabilities = createStore({ persist: false })
         const panel = createStore({ open: false })
         const t = () => ctx.locale.bind(NS)
+
+        /**
+         * The pending-interaction snapshot, or an empty one when the shell did
+         * not mount `uiSession`.
+         *
+         * @returns {ReadonlyMap<string, {kind?: string}>} the snapshot.
+         */
+        const readPending = () => {
+          try {
+            return ctx.uiSession?.pendingInteractions?.getSnapshot?.() ?? NO_PENDING.getSnapshot()
+          } catch {
+            return NO_PENDING.getSnapshot()
+          }
+        }
 
         const readItems = () => {
           try {
@@ -418,6 +507,7 @@ window.__ModuleLoader__.load({
          * @returns true when this pass wrote a durable order.
          */
         const pass = async (manual) => {
+          const options = settings.get()
           if (disposed || options.enabled === false) return false
           const items = readItems()
           if (items.length < 2) return false
@@ -426,16 +516,23 @@ window.__ModuleLoader__.load({
           const state = prefs.get()
           if (!manual && !state.auto) return false
 
+          const pending = readPending()
           const shared = {
             aggregate: options.aggregate !== false,
             pins: state.pins,
             runningFirst: state.runningFirst,
+            pending,
           }
           const current = items.map((workspace) => workspace.workspaceId)
           prunePins(current)
           const desired = desiredOrder(items, byId, shared)
           const newest = newestActivity(activityByWorkspace(items, byId, shared))
-          if (newest === 0) {
+          // Waiting Workspaces have no activity of their own to report: a Session
+          // that asks for approval may never have prompted at all, or only did so
+          // long ago, so the waiting count has to keep the pass alive here.
+          let waiting = 0
+          for (const count of waitingByWorkspace(items, pending, shared).values()) waiting += count
+          if (newest === 0 && waiting === 0) {
             // Before the baseline pass the summary store may still be filling in;
             // an all-zero ranking would only reproduce the current index order.
             return false
@@ -453,12 +550,14 @@ window.__ModuleLoader__.load({
             return false
           }
           for (const move of moves) {
+            // A config change can stop the engine mid-pass; do not keep writing.
+            if (disposed || settings.get().enabled === false) return false
             selfWriteAt = Date.now()
             await ctx.workspaces.insertBefore(move.id, move.before)
           }
           sorted = true
           manualHold = false
-          report({ current, desired, moves, newest, manual: manual === true })
+          report({ current, desired, moves, newest, waiting, manual: manual === true })
           return true
         }
 
@@ -504,7 +603,13 @@ window.__ModuleLoader__.load({
         }
 
         /**
-         * Read this bundle's knobs from the Host half before sorting at all.
+         * Read the persisted prefs from the Host half.
+         *
+         * The knobs do NOT come from this route any more: they arrive as
+         * `SyncedConfig` refs in `apply`. A Host that cannot be reached costs the
+         * persisted pins, not the sorting itself — the bundle keeps its defaults
+         * and in-memory prefs instead of going inert, which is what the old
+         * startup handshake did.
          */
         const start = async () => {
           let body
@@ -512,25 +617,19 @@ window.__ModuleLoader__.load({
             const response = await fetch(STATE_ROUTE, { headers: { accept: 'application/json' } })
             body = response.ok ? await response.json() : undefined
           } catch (error) {
-            warn('host half unreachable; leaving the workspace order untouched', error)
-            options = { ...options, enabled: false }
+            warn('host half unreachable; keeping pins in memory', error)
             return
           }
-          if (body === undefined || body === null || body.ok !== true || typeof body.config !== 'object' || body.config === null) {
-            warn('host half did not answer; leaving the workspace order untouched')
-            options = { ...options, enabled: false }
+          if (body === undefined || body === null || body.ok !== true) {
+            warn('host half did not answer; keeping pins in memory')
             return
           }
-          options = { ...DEFAULTS, ...body.config }
-          if (disposed || options.enabled === false) return
-          // An older Host half answers without `prefs`; keep pins in memory then,
-          // instead of posting to a route that does not exist yet.
           if (body.prefs !== undefined && body.prefs !== null) {
             prefs.set(sanitizePrefs(body.prefs))
             capabilities.set({ persist: true })
           }
-          report({ hello: true, options })
-          if (options.initialSort !== false) schedule(0)
+          report({ hello: true, options: settings.get() })
+          if (settings.get().enabled && settings.get().initialSort) schedule(0)
         }
 
         // ------------------------------------------------------------ styles
@@ -585,6 +684,42 @@ window.__ModuleLoader__.load({
             )
             // A pin or a rule toggle changes the target order: re-sort at once.
             offs.push(prefs.subscribe(() => request(true)))
+            // The authoritative "waiting on you" source. Both entering and
+            // leaving the state re-sort; the debounce absorbs a request being
+            // replaced by the next one. A waiting Session outranks the user's
+            // last manual drag, so that hold is released on entry.
+            if (typeof ctx.uiSession?.pendingInteractions?.subscribe === 'function') {
+              offs.push(
+                ctx.uiSession.pendingInteractions.subscribe(() => {
+                  if (hasWaiting(readPending())) manualHold = false
+                  schedule()
+                }),
+              )
+            }
+            // Host-synced knobs change live: a disable stops the engine, any
+            // other change re-runs the pass. No remount or page reload.
+            for (const field of ['enabled', 'aggregate', 'initialSort']) {
+              const ref = config?.[field]
+              if (ref === undefined || ref === null || typeof ref.subscribe !== 'function') continue
+              offs.push(
+                ref.subscribe(() => {
+                  const before = settings.get()
+                  const next = readOptions(config)
+                  settings.set(next)
+                  if (next.enabled === false) {
+                    wanted = false
+                    forced = false
+                    if (timer !== undefined) clearTimeout(timer)
+                    timer = undefined
+                    return
+                  }
+                  if (!before.enabled || before.aggregate !== next.aggregate) {
+                    manualHold = false
+                    schedule()
+                  }
+                }),
+              )
+            }
           } catch (error) {
             warn('could not follow the sidebar stores', error)
           }
@@ -607,10 +742,10 @@ window.__ModuleLoader__.load({
         /**
          * One Workspace row: pin toggle, name, and its activity summary.
          *
-         * @param props - `{workspace, byId, pinned}` plus the resolved `t`.
+         * @param props - `{workspace, byId, pending, pinned}` plus the resolved `t`.
          * @returns the row element.
          */
-        function Row({ workspace, byId, pinned, tr }) {
+        function Row({ workspace, byId, pending, pinned, tr }) {
           const members = Array.isArray(workspace.sessionIds) ? workspace.sessionIds : []
           let running = 0
           let last = 0
@@ -620,6 +755,7 @@ window.__ModuleLoader__.load({
             if (summary.running === true) running += 1
             if (summary.blank !== true && typeof summary.updatedAt === 'number' && summary.updatedAt > last) last = summary.updatedAt
           }
+          const waiting = ownWaitingCount(workspace, pending)
           const meta = members.length === 0 ? tr('idle') : tr('sessions', { n: members.length })
           const when = last === 0 ? tr('never') : relativeTime(last, tr)
           return h(
@@ -644,6 +780,7 @@ window.__ModuleLoader__.load({
               h(PinIcon, { pinned }),
             ),
             h('span', { className: 'wss-name', title: workspace.path }, workspace.title || workspace.path),
+            waiting > 0 ? h('span', { className: 'wss-tag' }, tr('waiting', { n: waiting })) : null,
             running > 0 ? h('span', { className: 'wss-tag' }, tr('running', { n: running })) : null,
             h('span', { className: 'wss-meta', title: when }, `${meta} · ${when}`),
           )
@@ -657,8 +794,10 @@ window.__ModuleLoader__.load({
           const state = useStore(panel)
           const statePrefs = useStore(prefs)
           const capability = useStore(capabilities)
+          const options = useStore(settings)
           const workspaceSnapshot = useSnapshot(ctx.workspaces.list)
           const sessionSnapshot = useSnapshot(ctx.sessions.list)
+          const pendingSnapshot = useSnapshot(ctx.uiSession?.pendingInteractions ?? NO_PENDING)
           const [filter, setFilter] = React.useState('')
           React.useEffect(() => {
             if (!state.open) return undefined
@@ -737,6 +876,7 @@ window.__ModuleLoader__.load({
                       key: workspace.workspaceId,
                       workspace,
                       byId: sessionSnapshot.byId ?? {},
+                      pending: pendingSnapshot,
                       pinned: statePrefs.pins.includes(workspace.workspaceId),
                       tr,
                     }),
