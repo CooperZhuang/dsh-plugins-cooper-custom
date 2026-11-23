@@ -34,6 +34,18 @@ dsh plugin --profile <profile> add dsh-session-ops
 
 搬迁不是删除：日志目录从旧 project 目录整体移到新目录，`header.cwd` 改写，工作区成员表跟着变。内核 0.2.2+ 的会话目录里有 `session.lock`，搬迁时会一起搬走（inode 不变）；目标目录已有租约时直接拒绝，不会留下「锁在旧目录、日志在新目录」的半套状态。
 
+## 会话面板「会话日志」（内核 0.2.2-rc.3+）
+
+DSH 0.2.2-rc.3 起，会话标题栏的「会话面板」里会出现本插件的「会话日志」小节（槽 `conversation.session.panel.section`，order 350，排在环境/变更请求/子代理/共享任务/后台任务之后）。它只读，展示当前会话的落盘工件：
+
+- 字节数、压缩格式（`zstd` / 未压缩）、头部格式分类（正常 / 需要迁移）；
+- 日志文件的绝对路径；
+- 是否驻留在 Host 进程里、是否正在跑一轮，以及所属工作区。
+
+数据来自宿主 `sessionPersistence.stat(sessionId)` 的一次只读调用（`/session-admin/api/health`）。这条路由**不解压、不整读会话日志**，也不做全量枚举；面板里只有「刷新」按钮，逐帧校验这类深度检查不在本次范围内。加载中先渲染占位，避免空内容连小节标题都不显示；以浮层（overlay）展示时自动降密度。
+
+0.2.1 宿主不声明这个槽：注册会挂起且不报错，页签、标题栏图标、右键菜单、模型工具与两条 HTTP 前缀照旧工作。
+
 ## 配置
 
 插件行只有一个 `enabled` 总开关，两个半边共用；其余键各自独立：
@@ -60,9 +72,9 @@ dsh plugin --profile <profile> add dsh-session-ops
 ## 兼容区间
 
 - Node.js `>=24`
-- DSH `^0.2.1-rc.2 || ^0.2.2-alpha.2`
+- DSH `^0.2.1-rc.2 || ^0.2.2-alpha.2 || ^0.2.3-alpha.1`
 
-会话右键菜单需要内核提供 `@deepseek-ai/dsh-client-ui-context-menu`（0.2.2+）。没有这个服务时只少两个菜单项，页签、工具与 HTTP 入口照旧。搬迁时携带 `session.lock`、启动期 fork 子会话补记账，同样以 0.2.2+ 的持久化实现为准。
+会话右键菜单需要内核提供 `@deepseek-ai/dsh-client-ui-context-menu`（0.2.2+）。没有这个服务时只少两个菜单项，页签、工具与 HTTP 入口照旧。搬迁时携带 `session.lock`、启动期 fork 子会话补记账，同样以 0.2.2+ 的持久化实现为准。会话面板的「会话日志」小节需要 0.2.2-rc.3+（该槽由 `@deepseek-ai/dsh-client-ui-session-panel` 声明）；更早的内核上注册挂起、不报错。
 
 ## 排障产物
 

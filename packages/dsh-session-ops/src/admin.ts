@@ -17,6 +17,11 @@
  *   - `<home>/rewind-snapshots/<session-id>/`        ← 回退快照（可有可无）
  * 三处一起删，并顺手清掉因此变空的项目目录。
  *
+ * 另外对外提供一条**只读**探针 `/session-admin/api/health`：一次 `sessionPersistence.stat()`
+ * 返回某条会话的日志路径、字节数、压缩格式、格式分类、工作区归属与驻留/运行状态，供
+ * 会话面板的「会话日志」section 使用。它**不整读日志**（`readStoredLog` 会把整条 zstd
+ * 帧链解压），也不做全量扫描。
+ *
  * 刻意零 `@deepseek-ai/*` 运行时依赖：只用 Node 内置模块和一份 schemastery 配置
  * schema。工具注册用普通对象（与 `dsh-subagent-in-process-driver` 同款），不做
  * `defineTool` 导入——profile 的 node_modules 里未必解析得到 `@deepseek-ai/dsh-tools`。
@@ -40,6 +45,7 @@ import {
   releaseSessionEverywhere,
   residentSessionIds,
   runningSessionIds,
+  workspaceOwningSession,
 } from './store/registry.js'
 import type { WorkspaceRegistryLike } from './store/registry.js'
 import { messageOf } from './store/util.js'
@@ -707,8 +713,202 @@ interface Holds {
   running: () => Set<string>
 }
 
+/** `health` 的载荷（浏览器半边 POST `{sessionId}`）。 */
+interface HealthPayload {
+  sessionId?: unknown
+}
+
+/**
+ * `ctx.sessionPersistence.stat()` 返回快照里本模块用到的部分。
+ *
+ * 形状对应内核 0.2.3 的 `SessionPersistenceSnapshot`：`sizeBytes` / `formatStatus` /
+ * `location` 都只有**落盘的实体工件**才有（尚未落盘的新会话或后端不暴露文件时为 undefined）。
+ * 刻意声明成可选字段而不是照抄内核类型：本包对 `@deepseek-ai/*` 只做最小本地接口。
+ */
+export interface StoredSessionSnapshotLike {
+  header?: Record<string, unknown> | undefined
+  revision?: unknown
+  /** 物理文件字节数（JSONL 后端）。 */
+  sizeBytes?: unknown
+  /** 头部格式分类（`'current'` / `'migration-required'`）。 */
+  formatStatus?: unknown
+  /** 逻辑事件数（后端能便宜给出时才有）。 */
+  eventCount?: unknown
+  /** 物理文件位置（JSONL 后端；未落盘的新会话没有）。 */
+  location?: { kind?: unknown; path?: unknown } | undefined
+}
+
+/** `health` 用到的持久化后端子集（`ctx.sessionPersistence`）。 */
+export interface SessionPersistenceStatLike {
+  /**
+   * 只读观察一条会话：一次 stat + 一次头部读，**不解压事件日志**。
+   * 会话不存在时返回 undefined。
+   */
+  stat?: ((sessionId: string) => Promise<StoredSessionSnapshotLike | undefined>) | undefined
+  /** 压缩格式（jsonl 后端为 `'zstd'`；未压缩为空字符串）。 */
+  compression?: unknown
+}
+
+/** `health` 的数据源：持久化后端 + 工作区归属查询。 */
+export interface HealthSource {
+  persistence?: SessionPersistenceStatLike | undefined
+  /** 会话所属工作区 id；不属于任何工作区时 null。 */
+  workspaceIdOf: (sessionId: string) => string | null
+}
+
+/** {@link SessionHealth} 里 `found:false` 的机器可读原因。 */
+export type SessionHealthReason = 'not-found' | 'persistence-unavailable' | 'read-failed'
+
+/**
+ * 「本会话日志」的只读观察结果（`/session-admin/api/health` 的 `value`）。
+ *
+ * 一次 `sessionPersistence.stat()` 就够：**不 list、不 scan、不整读日志**。
+ */
+export interface SessionHealth {
+  id: string
+  /** 宿主上是否有这条会话的落盘工件。 */
+  found: boolean
+  /** 会话日志的物理路径；后端没有实体文件（未落盘）时为 null。 */
+  path: string | null
+  /** 物理文件字节数；后端给不出时为 null。 */
+  sizeBytes: number | null
+  /** 压缩格式（`'zstd'` / `''` 未压缩）；后端不暴露时为 null。 */
+  compression: string | null
+  /** 头部格式分类（`'current'` / `'migration-required'`）；后端给不出时为 null。 */
+  formatStatus: string | null
+  /** 所属工作区 id；不属于任何工作区时为 null。 */
+  workspaceId: string | null
+  /** Host 进程里挂着这条会话。 */
+  resident: boolean
+  /** 这条会话正在跑一轮。 */
+  running: boolean
+  /** `found:false` 时的原因。 */
+  reason?: SessionHealthReason
+  /** `reason: 'read-failed'` 时的错误正文。 */
+  message?: string
+}
+
+/**
+ * 校验 `health` 的会话 id。
+ *
+ * 会话 id 是不透明标识，不允许带路径分隔符：`stat` 之后各后端会自己拼路径，这里先挡
+ * 一道目录穿越（`../../x`）与明显非法的输入，让浏览器拿到 400 + 结构化错误，而不是
+ * 一句后端抛出的裸异常。**不做 trim**——id 原样交给后端，避免"看起来一样其实不是同一条"。
+ * @param value - 请求里的 `sessionId`。
+ * @returns 合法 id。
+ * @throws 类型/长度/路径分隔符不合法时抛 `Error`（路由层会包成 400）。
+ */
+function requireSessionId(value: unknown): string {
+  if (typeof value !== 'string') throw new Error('sessionId must be a string')
+  if (value.length === 0) throw new Error('sessionId must not be empty')
+  if (value.length > 512) throw new Error('sessionId is too long (max 512 characters)')
+  if (value === '.' || value === '..' || value.includes('/') || value.includes('\\') || value.includes('\0')) {
+    throw new Error('sessionId must not contain a path separator')
+  }
+  return value
+}
+
+/** 后端声明的压缩格式；拿不到就是 null（不猜一个默认值）。 */
+function compressionOf(source: HealthSource): string | null {
+  const value = source.persistence?.compression
+  return typeof value === 'string' ? value : null
+}
+
+/** 界面提示用的驻留查询：服务缺失/抛错一律当作「不驻留」，不让面板整块失败。 */
+function residentOf(holds: Holds, sessionId: string): boolean {
+  try {
+    return holds.resident().has(sessionId)
+  } catch {
+    return false
+  }
+}
+
+/** 界面提示用的「在跑」查询：与 {@link residentOf} 同样的降级策略。 */
+function runningOf(holds: Holds, sessionId: string): boolean {
+  try {
+    return holds.running().has(sessionId)
+  } catch {
+    return false
+  }
+}
+
+/** 归属查询的安全包装：注册表缺失/抛错时按「不属于任何工作区」处理。 */
+function workspaceIdOf(registry: WorkspaceRegistryLike | undefined, sessionId: string): string | null {
+  try {
+    if (registry === undefined || typeof registry.list !== 'function') return null
+    const workspaces = registry.list()
+    // 完整记账在 `workspace.record.sessionIds`；老实体没有 record 时退回过滤后的成员视图。
+    const owner = workspaceOwningSession(workspaces, sessionId)
+    if (owner !== undefined) return owner.id === undefined ? null : String(owner.id)
+    for (const workspace of workspaces) {
+      if (Array.isArray(workspace.sessionIds) && workspace.sessionIds.includes(sessionId)) {
+        return workspace.id === undefined ? null : String(workspace.id)
+      }
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 只读地观察一条会话的日志工件。
+ *
+ * 只调用一次 `sessionPersistence.stat()`：**绝不整读日志**（`readStoredLog` 会把整个
+ * zstd 帧链解压，一条几百 MB 的会话能卡住面板）。三种失败都收敛成结构化结果，
+ * 分别给面板「没这条会话」「宿主不支持」「读取失败」三种话术。
+ * @param sessionId - 请求里的会话 id（会先校验）。
+ * @param source - 持久化后端与归属查询（见 {@link HealthSource}）。
+ * @param holds - `{resident, running}`。
+ * @returns 观察结果。
+ * @throws 会话 id 不合法（交给路由层转 400）。
+ */
+export async function sessionHealth(
+  sessionId: unknown,
+  source: HealthSource,
+  holds: Holds,
+): Promise<SessionHealth> {
+  const id = requireSessionId(sessionId)
+  const base: SessionHealth = {
+    id,
+    found: false,
+    path: null,
+    sizeBytes: null,
+    compression: compressionOf(source),
+    formatStatus: null,
+    workspaceId: source.workspaceIdOf(id) ?? null,
+    resident: residentOf(holds, id),
+    running: runningOf(holds, id),
+  }
+  const stat = source.persistence?.stat
+  if (typeof stat !== 'function') return { ...base, reason: 'persistence-unavailable' }
+  let snapshot: StoredSessionSnapshotLike | undefined
+  try {
+    snapshot = await stat(id)
+  } catch (error) {
+    return { ...base, reason: 'read-failed', message: messageOf(error) }
+  }
+  if (snapshot === undefined || snapshot === null) return { ...base, reason: 'not-found' }
+  return {
+    ...base,
+    found: true,
+    path: typeof snapshot.location?.path === 'string' ? snapshot.location.path : null,
+    sizeBytes:
+      typeof snapshot.sizeBytes === 'number' && Number.isFinite(snapshot.sizeBytes)
+        ? snapshot.sizeBytes
+        : null,
+    formatStatus: typeof snapshot.formatStatus === 'string' ? snapshot.formatStatus : null,
+  }
+}
+
 /** `GET` 与 `POST` 共用的方法表。 */
-function buildApi(admin: SessionAdmin, config: SessionOpsConfig, log: LogFn, holds: Holds) {
+function buildApi(
+  admin: SessionAdmin,
+  config: SessionOpsConfig,
+  log: LogFn,
+  holds: Holds,
+  health: HealthSource,
+) {
   return {
     /**
      * 浏览器半边需要的界面开关。
@@ -724,6 +924,17 @@ function buildApi(admin: SessionAdmin, config: SessionOpsConfig, log: LogFn, hol
         allowLiveSessions: config.allowLiveSessions === true,
         maxBatch: config.maxBatch,
       }
+    },
+    /**
+     * 一条会话的只读日志工件摘要（会话面板「会话日志」section 用）。
+     *
+     * 刻意不走 `list()` / `scan()`：一次 `sessionPersistence.stat()` 只碰这一条会话的
+     * 文件元数据，面板打开是 O(1) 次 stat，与这台机器上有多少条会话无关。
+     * 会话不存在 / 宿主不支持 / 读取失败都返回 200 + `{found:false, reason}`；只有非法
+     * id 会抛给路由层变成 400（结构化信封）。
+     */
+    async health(payload: HealthPayload) {
+      return sessionHealth(payload?.sessionId, health, holds)
     },
     /**
      * 只要个数的轻量查询，供电标这类高频调用方使用。
@@ -961,10 +1172,17 @@ interface AdminToolResult {
  * @param config - 插件配置。
  * @param log - 日志函数。
  * @param holds - `{resident, running}`：进程仍挂着的会话集合，以及其中**正在跑**的那部分。
+ * @param health - 只读日志探针的数据源（与 HTTP `health` 方法共用）。
  * @returns `ctx.tools.register` 接受的普通对象定义。
  */
-function buildTool(admin: SessionAdmin, config: SessionOpsConfig, log: LogFn, holds: Holds) {
-  const api = buildApi(admin, config, log, holds)
+function buildTool(
+  admin: SessionAdmin,
+  config: SessionOpsConfig,
+  log: LogFn,
+  holds: Holds,
+  health: HealthSource,
+) {
+  const api = buildApi(admin, config, log, holds, health)
   return {
     name: 'session_admin',
     description:
@@ -1087,6 +1305,11 @@ export interface AdminContext {
   webServer: { register(options: unknown): unknown }
   tools: { register(definition: unknown): unknown }
   workspaceRegistry: WorkspaceRegistryLike
+  /**
+   * 会话持久化后端（可选）：只有只读的 `health` 探针用到它的 `stat` / `compression`。
+   * 缺失或没有 `stat` 时面板显示「宿主不支持」，删除/搬迁的其余入口不受影响。
+   */
+  sessionPersistence?: SessionPersistenceStatLike | undefined
 }
 
 /**
@@ -1098,7 +1321,8 @@ export interface AdminContext {
  *   - 响应带 `content-length`；
  *   - 请求体按**宽松模式**读（空白 body 走 `JSON.parse` 报错，非对象不拦）。
  *
- * @param ctx - Host cordis 上下文（`webServer` / `tools` / `sessions` / `workspaceRegistry`）。
+ * @param ctx - Host cordis 上下文（`webServer` / `tools` / `sessions` / `workspaceRegistry` /
+ *   `sessionPersistence`；后者只用于只读的 `health` 探针，缺失时降级为「宿主不支持」）。
  * @param config - 已解包的**活配置对象**：身份由入口保持，volatile 更新时原地覆盖，
  *   所以下面这些闭包自动看到最新值。
  * @param log - `(level, message) => void`（入口传的是 admin 那套行格式的文件日志）。
@@ -1139,7 +1363,15 @@ export function mountAdmin(ctx: AdminContext, config: SessionOpsConfig, log: Log
    */
   const runningIds = () => runningSessionIds(residentIds(), ctx.get('agents'))
   const holds: Holds = { resident: residentIds, running: runningIds }
-  const api = buildApi(admin, config, log, holds)
+  /**
+   * 只读日志探针的数据源：「本会话日志」section 每次打开只要这一条会话的文件元数据，
+   * 所以它走 `sessionPersistence.stat()`，而不是 `scan()`/`list()` 那种全量枚举。
+   */
+  const health: HealthSource = {
+    persistence: ctx.sessionPersistence,
+    workspaceIdOf: (sessionId) => workspaceIdOf(ctx.workspaceRegistry, sessionId),
+  }
+  const api = buildApi(admin, config, log, holds, health)
   log('info', `mounted: home=${admin.home} prefix=${ADMIN_API_PREFIX} allowHosts=[${config.adminAllowHosts.join(', ')}]`)
 
   ctx.effect(
@@ -1164,7 +1396,7 @@ export function mountAdmin(ctx: AdminContext, config: SessionOpsConfig, log: Log
   )
 
   ctx.effect(
-    () => ctx.tools.register(buildTool(admin, config, log, holds)),
+    () => ctx.tools.register(buildTool(admin, config, log, holds, health)),
     'dsh-session-admin: session_admin tool',
   )
 }

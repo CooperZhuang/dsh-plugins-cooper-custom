@@ -44,6 +44,27 @@ new one, `header.cwd` is rewritten, and workspace membership follows. On kernel 
 `session.lock` moves with it (same inode); if the target already holds a lease the move is refused
 outright rather than leaving a split lease.
 
+## Session panel "session log" (kernel 0.2.2-rc.3+)
+
+On kernel 0.2.2-rc.3+ the Session panel in the conversation header carries a "会话日志" section
+registered by this plugin (slot `conversation.session.panel.section`, order 350, after
+environment / change requests / subagents / shared tasks / background jobs). It is read-only and
+shows the current Session's durable artifact:
+
+- size, compression format (`zstd` / uncompressed), header format classification (current /
+  migration-required);
+- the log file's absolute path;
+- whether the Session is resident in the Host process and mid-turn, plus its workspace.
+
+The data comes from one read-only `sessionPersistence.stat(sessionId)` call
+(`/session-admin/api/health`). The route **never decompresses or reads the event log** and never
+enumerates all sessions; the section offers a manual refresh only, and deeper checks such as
+frame-level verification are out of scope. It renders a placeholder while loading so the panel
+never hides the section title for lack of content, and lowers its density when shown as an overlay.
+
+On 0.2.1 hosts the slot is not declared: the registration stays pending without an error, and the
+tabs, header icon, context menu, model tools and both HTTP prefixes keep working.
+
 ## Configuration
 
 The plugin row has one shared `enabled` master switch; every other key is independent:
@@ -76,12 +97,14 @@ writes back to the profile's `cordis.patch.yml`; no restart needed.
 ## Compatibility
 
 - Node.js `>=24`
-- DSH `^0.2.1-rc.2 || ^0.2.2-alpha.2`
+- DSH `^0.2.1-rc.2 || ^0.2.2-alpha.2 || ^0.2.3-alpha.1`
 
 The session context menu needs the kernel's `@deepseek-ai/dsh-client-ui-context-menu` service
 (0.2.2+); without it only those two menu entries are missing — tabs, tools and HTTP endpoints keep
 working. Moving `session.lock` and the boot-time fork-child repair both follow the 0.2.2+
-persistence implementation.
+persistence implementation. The Session panel's "会话日志" section needs 0.2.2-rc.3+ (the slot is
+declared by `@deepseek-ai/dsh-client-ui-session-panel`); on older kernels the registration stays
+pending without an error.
 
 ## Troubleshooting artifacts
 
