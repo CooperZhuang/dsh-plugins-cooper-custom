@@ -248,6 +248,13 @@ export const DEFAULT_RAG_RECALL_EXCERPTS = 6
 export const DEFAULT_RAG_RECALL_SESSIONS = 0
 export const DEFAULT_RAG_RECALL_CHARS = 2_000
 
+/** Dense ranking is opt-in: it needs a local embedding service on every machine that recalls. */
+export const DEFAULT_DENSE_ENABLED = false
+/** Ollama's default endpoint; the plugin never calls outside the machine unless this is changed. */
+export const DEFAULT_DENSE_URL = 'http://127.0.0.1:11434'
+/** The model the bench measured (1024 dimensions). */
+export const DEFAULT_DENSE_MODEL = 'qwen3-embedding:0.6b'
+
 /**
  * Default number of distinct strong-field terms a recall needs.
  *
@@ -484,6 +491,7 @@ export const Config = z.object({
   ragRecallExcerpts: z.number().default(DEFAULT_RAG_RECALL_EXCERPTS).description('Most full-history excerpts one recall block may carry.').volatile(),
   ragRecallSessions: z.number().default(DEFAULT_RAG_RECALL_SESSIONS).description('How many session logs the full-history retrieval may open per recall, newest first. 0 opens all of them.').volatile(),
   ragRecallChars: z.number().default(DEFAULT_RAG_RECALL_CHARS).description('Longest one full-history excerpt may be, in characters.').volatile(),
+  denseEnabled: z.boolean().default(DEFAULT_DENSE_ENABLED).description('Add an embedding channel to recall ranking (RRF fusion with BM25). Off by default: it needs a local embedding service on every machine that recalls, and the bench gain is mostly in entries the lexical path misses entirely. When the service is unreachable the recall silently stays lexical.').volatile(),
   /** Shortest user turn worth a recall decision. */
   recallMinQueryChars: z.number().default(DEFAULT_RECALL_MIN_QUERY_CHARS).description('Shortest user turn, in characters, that may trigger a recall delta. Short acknowledgements are skipped instead of scanning the store.').volatile(),
   /** Distinct strong-field terms a recall needs before it is credited. */
@@ -631,6 +639,7 @@ export interface MemoriesSettings {
   ragRecallExcerpts: number
   ragRecallSessions: number
   ragRecallChars: number
+  denseEnabled: boolean
   recallMinQueryChars: number
   recallMinTerms: number
   /** Whether memories written after the summary are announced as a delta. */
@@ -738,6 +747,7 @@ export const MEMORIES_SETTINGS_DEFAULTS: MemoriesSettings = {
   ragRecallExcerpts: DEFAULT_RAG_RECALL_EXCERPTS,
   ragRecallSessions: DEFAULT_RAG_RECALL_SESSIONS,
   ragRecallChars: DEFAULT_RAG_RECALL_CHARS,
+  denseEnabled: DEFAULT_DENSE_ENABLED,
   recallMinQueryChars: DEFAULT_RECALL_MIN_QUERY_CHARS,
   recallMinTerms: DEFAULT_RECALL_MIN_TERMS,
   injectDelta: DEFAULT_INJECT_DELTA,
@@ -910,6 +920,7 @@ export function normalizeSettings(input: Partial<MemoriesSettings> | undefined):
     ragRecallExcerpts: positive(value.ragRecallExcerpts, DEFAULT_RAG_RECALL_EXCERPTS, 0),
     ragRecallSessions: nonNegative(value.ragRecallSessions, DEFAULT_RAG_RECALL_SESSIONS),
     ragRecallChars: positive(value.ragRecallChars, DEFAULT_RAG_RECALL_CHARS, 0),
+    denseEnabled: value.denseEnabled ?? DEFAULT_DENSE_ENABLED,
     recallMinQueryChars: positive(value.recallMinQueryChars, DEFAULT_RECALL_MIN_QUERY_CHARS, 0),
     recallMinTerms: positive(value.recallMinTerms, DEFAULT_RECALL_MIN_TERMS, 0),
     injectDelta: value.injectDelta ?? DEFAULT_INJECT_DELTA,

@@ -23,7 +23,7 @@
  */
 import { ACCOUNT_QUOTA_EXCEEDED_CODE, createUserMessage, isQuotaExceededError, QUOTA_EXCEEDED_CODE } from '@deepseek-ai/dsh-llm'
 import { homedir } from 'node:os'
-import { join, resolve, sep } from 'node:path'
+import { dirname, join, resolve, sep } from 'node:path'
 import type { LlmRuntime, UserMessage } from '@deepseek-ai/dsh-llm'
 import type { Agent, SessionStartSource } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
@@ -53,6 +53,7 @@ import { parseTimeRange } from './time.js'
 import { isSubstantiveTurn } from './query.js'
 import { INDEX_OPEN, MEMORY_CLOSE, MEMORY_OPEN, RECALL_OPEN, rankForSummary, renderEntry, renderHit, renderMemoryIndex, renderMemorySummaryResult, renderOpenLoops, renderRecall, renderScopeListing, selectForSummary } from './render.js'
 import { createBm25Index } from './bm25.js'
+import { DEFAULT_DENSE_MODEL, DEFAULT_DENSE_URL, denseScores, rrf } from './dense.js'
 import type { SummaryScope } from './render.js'
 import { findProjectRoot, isWithin } from './workspace.js'
 import { citationRoots, citationWarning, ignoredUnder, missingCitations } from './citations.js'
@@ -1386,6 +1387,11 @@ export class MemoriesRuntime {
     return hub
   }
 
+  /** Where the dense vector cache lives: `<dshHome>/cache/dsh-cross-memory`. */
+  private denseCacheDir(): string {
+    return join(dirname(this.store.memoriesDir), 'cache', 'dsh-cross-memory')
+  }
+
   /**
    * The on-demand recall delta for this step, or `undefined` when nothing is
    * worth adding.
@@ -1595,7 +1601,27 @@ export class MemoriesRuntime {
       }
       return undefined
     }
-    eligible.sort(byStrength)
+    // Optional dense channel: re-rank what the gate admitted by fusing the
+    // lexical order with an embedding order. Only the ORDER changes — the gate
+    // still decides what may be recalled, so this cannot admit an entry the
+    // lexical gate refused. When the service is unreachable, `denseScores`
+    // returns an empty map and the lexical order stands.
+    if (this.settings.denseEnabled && eligible.length > 1) {
+      const dense = await denseScores(
+        states.flatMap((state) => state.entries),
+        query,
+        { url: DEFAULT_DENSE_URL, model: DEFAULT_DENSE_MODEL, cacheDir: this.denseCacheDir() },
+      )
+      if (dense.size > 0) {
+        const lexical = [...eligible].sort(byStrength).map((item) => item.entry.id)
+        const semantic = [...dense.entries()].sort((left, right) => right[1] - left[1]).map(([id]) => id)
+        const fused = rrf([lexical, semantic])
+        eligible.sort((left, right) => (fused.get(right.entry.id) ?? 0) - (fused.get(left.entry.id) ?? 0))
+        this.log.info('dsh-cross-memory: session %s recall re-ranked by the dense channel (%d candidates)', session.id, eligible.length)
+      }
+    } else {
+      eligible.sort(byStrength)
+    }
     // The one-hop neighbours go in after the seeds and carry no lexical
     // relevance, so they can only fill slots the lexical path left empty — the
     // case this exists for is a turn that names one fragment of something the

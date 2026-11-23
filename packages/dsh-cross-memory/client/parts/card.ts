@@ -122,6 +122,11 @@ const FIELDS = [
     hint: { zh: '全量检索最多打开几份 session 日志（按最近修改排序）；0 等于关闭。', en: 'How many session logs full-history retrieval may open, newest first. 0 disables it.' },
   },
   {
+    field: 'denseEnabled', kind: 'boolean',
+    label: { zh: '语义召回通道', en: 'Dense recall channel' },
+    hint: { zh: '在词法排序之上加一路本地嵌入（RRF 融合），补「和提问没有共同词但语义相关」的记忆。需要本机运行 ollama（qwen3-embedding:0.6b）；服务不可用时自动退回词法，不影响补注。默认关闭。', en: 'Adds a local embedding channel (RRF-fused with BM25) for memories that share no word with the turn but are about it. Needs ollama running locally (qwen3-embedding:0.6b); when the service is unreachable the recall silently stays lexical. Off by default.' },
+  },
+  {
     field: 'recallMinQueryChars', kind: 'number', min: 0, step: 1,
     label: { zh: '触发补注的最短发问长度', en: 'Shortest turn worth recalling' },
     hint: { zh: '用户消息短于该字符数时不判定补注（例如「好」「继续」），避免为无意义的回合扫描整个记忆库。', en: 'A user turn shorter than this is skipped instead of scanning the store, so bare acknowledgements cost nothing.' },
