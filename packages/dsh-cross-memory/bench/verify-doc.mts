@@ -177,6 +177,13 @@ function batchTopOne(arm, size) {
 
 check('bench queries-a 上 current 臂 R@1 73/75（BM25 排序后）', 73, batchTopOne('current', 75))
 
+// 注入相关性基线（inject-relevance.mts）：改前/改后的数字必须留在文档里，
+// 否则下一轮排序改动就没有可比的锚点。
+const benchReadme = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'README.md'), 'utf8')
+check('bench 文档记录注入基线 listed 25.1→20.4', true, benchReadme.includes('25.1') && benchReadme.includes('20.4'))
+check('bench 文档记录注入前 6 相关 113/120', true, benchReadme.includes('113/120'))
+check('bench 文档记录注入 opening 相关 51.5%→63.4%', true, benchReadme.includes('51.5%') && benchReadme.includes('63.4%'))
+
 // 「dense 臂用 qwen3-embedding:0.6b（1024 维）」，缓存以 base64 float32 存盘。
 function embeddingShape(cache) {
   if (cache === undefined) return undefined

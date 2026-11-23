@@ -124,7 +124,7 @@ DeepSeek 的 key 从环境变量 `DEEPSEEK_API_KEY` 或 `~/.dsh/.credentials.yam
 node bench/verify-doc.mts
 ```
 
-三份 bench 文档共用这一份判定：脚本只读 `bench/data/`、`scenarios*.mts` 与预算常量，逐项打印 `PASS` / `MISMATCH` / `UNVERIFIABLE`，有 `MISMATCH` 时退出码非 0。当前 124 项里 PASS 100 项、UNVERIFIABLE 24 项、无 `MISMATCH`。
+三份 bench 文档共用这一份判定：脚本只读 `bench/data/`、`scenarios*.mts` 与预算常量，逐项打印 `PASS` / `MISMATCH` / `UNVERIFIABLE`，有 `MISMATCH` 时退出码非 0。当前 127 项里 PASS 103 项、UNVERIFIABLE 24 项、无 `MISMATCH`。
 
 可复算：题库 23 + 30 = 53，bank v2 哈希 `23876acceb0e…`，轮 4（bank v1 + 判分器 v3）、4′（判分器 v4）、轮 5 的题库与费用、5′（判分器 v5 逐点）的三臂分数与费用，以及第五轮逐题复核里的单题结论。
 

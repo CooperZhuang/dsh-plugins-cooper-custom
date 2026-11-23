@@ -171,7 +171,7 @@ node bench/real/diagnose.mts --llm --provider deepseek   # 三类归因（约 ¥
 node bench/verify-doc.mts
 ```
 
-三份 bench 文档共用这一份判定：脚本只读 `bench/data/`、题库与预算源码常量，逐项打印 `PASS` / `MISMATCH` / `UNVERIFIABLE`，有 `MISMATCH` 时退出码非 0。当前 124 项里 PASS 100 项、UNVERIFIABLE 24 项、无 `MISMATCH`。
+三份 bench 文档共用这一份判定：脚本只读 `bench/data/`、题库与预算源码常量，逐项打印 `PASS` / `MISMATCH` / `UNVERIFIABLE`，有 `MISMATCH` 时退出码非 0。当前 127 项里 PASS 103 项、UNVERIFIABLE 24 项、无 `MISMATCH`。
 
 可复算：采样统计 390 / 389 / 66 / 20 与每场关联记忆 3–32 条；两轮题库的哈希（`b042f0a0…`、`acb35abc…`）、场次与题数、三臂通过数、费用分项与合计；v1 的 13 题失败归因（10 + 3）；三次 replay 的条目数 98 / 175 / 236、memory 19 / 22 / 24、重放费用与打分费用；more20 + commit 的 26/33 与 7 题归因（3 + 4）；joint 留存的生产路径 run（memory+raw 30/33、rag 33/33）。
 
