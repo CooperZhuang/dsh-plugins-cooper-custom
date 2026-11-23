@@ -52,6 +52,13 @@
  * 页，不是配置菜单。卡片体一个字符都没改：这个槽不传 `form`，所以注册项的 `inject`
  * 把 `ctx.configForms.get('session-toolbox')` 的 `{ state, mutate }` 喂给它。
  *
+ * ## 会话面板（0.2.2-rc.3+）：只读的「会话日志」section
+ *
+ * 会话标题栏的「会话面板」里注册一个只读 section（`conversation.session.panel.section`、
+ * id `dsh-session-ops:session`、order 350）：一次 `/session-admin/api/health`（Host 侧
+ * `sessionPersistence.stat`）展示日志路径 / 大小 / 压缩格式 / 格式分类 / 驻留与运行状态。
+ * 不整读日志；0.2.1 宿主没有这个槽时注册挂起、不报错。
+ *
  * @module dsh-session-ops/client
  */
 ;
@@ -103,6 +110,12 @@
             badge: { fontSize: 10.5, padding: '0 5px', borderRadius: 999, border: '1px solid var(--dsh-border, #d0d5dd)', opacity: 0.75, whiteSpace: 'nowrap' },
             result: { border: '1px solid var(--dsh-border-subtle, rgba(128,128,128,0.22))', borderRadius: 8, padding: '8px 10px', fontSize: 12 },
             headerIconButton: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, padding: 6, border: 'none', borderRadius: 28, background: 'transparent', color: 'inherit', cursor: 'pointer', flex: 'none', opacity: 0.78 },
+            // 「会话日志」section：只读的一小块元数据，没有表单与列表。
+            log: { display: 'flex', flexDirection: 'column', gap: 5, minWidth: 0 },
+            logRow: { display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', minWidth: 0 },
+            logRefresh: { marginLeft: 'auto', flex: 'none' },
+            logPath: { fontFamily: 'ui-monospace, Consolas, monospace', fontSize: 11, lineHeight: 1.4, opacity: 0.62, wordBreak: 'break-all' },
+            logPathDense: { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', wordBreak: 'normal' },
         };
         /**
          * 面板的两种排版。
@@ -188,6 +201,237 @@
                 return body.value;
             }
             return { call };
+        }
+        // ── 「本会话日志」section（DSH 0.2.2-rc.3+ 的会话面板） ─────────────────────
+        //
+        // 数据来自 Host 的只读 `health` 方法：一次 `sessionPersistence.stat()`，不整读日志。
+        // 这一段与右栏页签、标题栏垃圾桶完全解耦——它只读，不参与删除/搬迁。
+        /**
+         * 「会话日志」section 的数据面：按 sessionId 缓存 + 同一会话单飞 + 切会话取消。
+         *
+         * 做成独立对象而不是组件里的 useState，有三个理由：
+         *   - 面板每次展开都会重新挂载 section，缓存要跨挂载保留，否则每次展开都重新 stat；
+         *   - 切 `sessionId` 时必须能**主动 abort** 上一条在途请求（慢会话的结果回来时界面
+         *     已经在看另一条会话了）；
+         *   - 注册项通过 `inject` 把它交给组件，测试可以直接拿到它验证取消行为，不用渲染 React。
+         * @param api - 删除半边的 Host API 客户端（与页面共用 `/session-admin/api` 前缀）。
+         * @returns 数据面：`entryOf` / `load` / `refresh` / `subscribe` / `abort`。
+         */
+        function createSessionLogHealth(api) {
+            /** sessionId → `{state, value?, message?, at?}`。 */
+            const entries = new Map();
+            /** sessionId → 在途请求的 AbortController。 */
+            const controllers = new Map();
+            const listeners = new Set();
+            const notify = () => {
+                for (const listener of [...listeners]) {
+                    try {
+                        listener();
+                    }
+                    catch {
+                        /* 单个订阅者失败不影响其它 */
+                    }
+                }
+            };
+            const setEntry = (sessionId, entry) => {
+                entries.set(sessionId, entry);
+                notify();
+            };
+            const isCurrent = (sessionId, controller) => controllers.get(sessionId) === controller;
+            const dropController = (sessionId, controller) => {
+                if (isCurrent(sessionId, controller))
+                    controllers.delete(sessionId);
+            };
+            /**
+             * 取消**其它**会话的在途请求。面板同一时刻只显示一条会话，切走之后旧请求的结果
+             * 已经没人看；只取消别的 id，不碰当前 id 自己的请求。
+             */
+            function abortOthers(sessionId) {
+                for (const [other, controller] of [...controllers]) {
+                    if (other === sessionId)
+                        continue;
+                    controllers.delete(other);
+                    try {
+                        controller.abort();
+                    }
+                    catch {
+                        /* 已结束的控制器再 abort 也无害 */
+                    }
+                }
+            }
+            /**
+             * 读一条会话的日志摘要。
+             * @param sessionId - 会话 id。
+             * @param options - `{force: true}` 跳过缓存（手动刷新）；默认命中 ready 缓存直接返回。
+             * @returns 该会话的最新条目（被取消/失败时也 resolve，状态里写着原因）。
+             */
+            async function load(sessionId, options = {}) {
+                if (typeof sessionId !== 'string' || sessionId === '')
+                    return undefined;
+                const cached = entries.get(sessionId);
+                if (options.force !== true && cached !== undefined && cached.state === 'ready')
+                    return cached;
+                abortOthers(sessionId);
+                if (controllers.has(sessionId))
+                    return entries.get(sessionId);
+                const controller = new AbortController();
+                controllers.set(sessionId, controller);
+                // 这次 loading 的身份标记：被取消时只撤掉自己写入的那条，不覆盖后来者的条目。
+                const token = {};
+                setEntry(sessionId, { state: 'loading', value: cached?.value, at: cached?.at, token });
+                try {
+                    const value = await api.call('health', { sessionId }, controller.signal);
+                    dropController(sessionId, controller);
+                    if (controller.signal.aborted)
+                        return entries.get(sessionId);
+                    setEntry(sessionId, { state: 'ready', value, at: Date.now() });
+                }
+                catch (error) {
+                    dropController(sessionId, controller);
+                    if (controller.signal.aborted) {
+                        // 取消不是失败：把这次 loading 撤掉，回到取消前的样子。
+                        const current = entries.get(sessionId);
+                        if (current?.token === token) {
+                            if (cached === undefined) {
+                                entries.delete(sessionId);
+                                notify();
+                            }
+                            else {
+                                setEntry(sessionId, cached);
+                            }
+                        }
+                        return entries.get(sessionId);
+                    }
+                    setEntry(sessionId, {
+                        state: 'error',
+                        message: String(error?.message ?? error),
+                        value: cached?.value,
+                        at: cached?.at,
+                    });
+                }
+                return entries.get(sessionId);
+            }
+            return {
+                /** 当前已知条目；没有就是 undefined（首次加载中）。 */
+                entryOf(sessionId) {
+                    return entries.get(sessionId);
+                },
+                load,
+                /** 手动刷新：绕过缓存。 */
+                refresh(sessionId) {
+                    return load(sessionId, { force: true });
+                },
+                /** 订阅状态变化；返回退订函数。 */
+                subscribe(listener) {
+                    listeners.add(listener);
+                    return () => {
+                        listeners.delete(listener);
+                    };
+                },
+                /** 取消某条会话的在途请求（section 卸载时用：没人等这个结果了）。 */
+                abort(sessionId) {
+                    const controller = controllers.get(sessionId);
+                    if (controller === undefined)
+                        return;
+                    controllers.delete(sessionId);
+                    try {
+                        controller.abort();
+                    }
+                    catch {
+                        /* 同上 */
+                    }
+                },
+            };
+        }
+        /** `formatStatus` 的界面文案。 */
+        function describeFormat(status) {
+            if (status === 'current')
+                return '格式正常';
+            if (status === 'migration-required')
+                return '需要迁移';
+            return '格式未知';
+        }
+        /** 压缩格式的界面文案（`''` 是内核 jsonl 后端的「未压缩」）。 */
+        function describeCompression(compression) {
+            if (compression === 'zstd')
+                return 'zstd';
+            if (compression === '')
+                return '未压缩';
+            if (typeof compression === 'string' && compression !== '')
+                return compression;
+            return '压缩未知';
+        }
+        /** `found:false` 的一句话原因。 */
+        function describeMissingLog(entry) {
+            const reason = entry?.value?.reason;
+            if (reason === 'not-found')
+                return '宿主上没有这条会话的日志';
+            if (reason === 'persistence-unavailable')
+                return '宿主未暴露会话持久化 stat，读不到日志信息';
+            if (reason === 'read-failed')
+                return `读取失败：${entry?.value?.message ?? '未知错误'}`;
+            return '没有可显示的日志信息';
+        }
+        /**
+         * 「会话日志」section：只读展示本会话的落盘工件。
+         *
+         * 加载中也要渲染占位：这个槽**内容为空时连 section 标题都不画**，返回 null 会让
+         * 整个入口看起来不存在。overlay 展示时降密度（路径单行省略、格式徽章只在不正常时出现）。
+         * @param React - 外壳预置的 React。
+         * @param fallbackHealth - 数据面；注册项的 `inject` 会给同一个对象。
+         * @returns React 组件。
+         */
+        function createSessionLogSection(React, fallbackHealth) {
+            const h = React.createElement;
+            return function SessionLogSection(props) {
+                const health = props?.health ?? fallbackHealth;
+                const sessionId = typeof props?.sessionId === 'string' ? props.sessionId : '';
+                const dense = props?.presentation === 'overlay';
+                const [, setTick] = React.useState(0);
+                React.useEffect(() => {
+                    let alive = true;
+                    const unsubscribe = health.subscribe(() => {
+                        if (alive)
+                            setTick((value) => value + 1);
+                    });
+                    void health.load(sessionId);
+                    return () => {
+                        alive = false;
+                        unsubscribe();
+                        health.abort(sessionId);
+                    };
+                }, [sessionId]);
+                const entry = health.entryOf(sessionId);
+                const refreshButton = h('button', { type: 'button', style: S.button, onClick: () => void health.refresh(sessionId) }, '刷新');
+                if (entry === undefined || entry.state === 'error') {
+                    return h('div', { style: S.log }, h('div', { style: entry === undefined ? S.muted : S.error }, entry === undefined ? '读取中…' : `读取失败：${entry.message}`), entry === undefined ? null : refreshButton);
+                }
+                const value = entry.value;
+                if (value === undefined || value?.found !== true) {
+                    return h('div', { style: S.log }, h('div', { style: S.muted }, describeMissingLog(entry)), refreshButton);
+                }
+                const badges = [
+                    h('span', {
+                        key: 'size',
+                        style: S.badge,
+                        title: Number.isFinite(value.sizeBytes) ? `${value.sizeBytes} B` : undefined,
+                    }, Number.isFinite(value.sizeBytes) ? human(value.sizeBytes) : '大小未知'),
+                ];
+                // overlay 只保留「不正常」的格式提示：正常时不再占一行。
+                if (!dense || (value.formatStatus !== undefined && value.formatStatus !== null && value.formatStatus !== 'current')) {
+                    badges.push(h('span', { key: 'format', style: S.badge }, describeFormat(value.formatStatus)));
+                    badges.push(h('span', { key: 'compression', style: S.badge }, describeCompression(value.compression)));
+                }
+                if (value.running === true)
+                    badges.push(h('span', { key: 'running', style: S.badge }, '运行中'));
+                if (value.resident === true)
+                    badges.push(h('span', { key: 'resident', style: S.badge }, '驻留'));
+                if (entry.state === 'loading')
+                    badges.push(h('span', { key: 'loading', style: S.muted }, '刷新中…'));
+                return h('div', { style: S.log }, h('div', { style: S.logRow }, badges, h('span', { style: S.logRefresh }, refreshButton)), value.path === null
+                    ? null
+                    : h('div', { style: dense ? { ...S.logPath, ...S.logPathDense } : S.logPath, title: value.path }, value.path));
+            };
         }
         /**
          * 「未分组有多少条」的角标数据源。
@@ -1143,6 +1387,25 @@
                         }
                     };
                 });
+                // 6) 会话面板（DSH 0.2.2-rc.3+）：「会话日志」section。
+                //
+                // 面板由内核的 `@deepseek-ai/dsh-client-ui-session-panel` 提供，槽是
+                // `conversation.session.panel.section`（kind list、scope session）。order 350
+                // 排在现网占位之后（environment 0 / change-requests 100 / subagents 200 /
+                // shared-tasks 250 / background-jobs 300），是「这条会话自己」的信息，不抢前面。
+                //
+                // 数据来自 Host 的只读 `health`（一次 sessionPersistence.stat，不整读日志）；
+                // 数据面通过注册项的 `inject` 交给组件——同时让测试能直接拿到它验证取消行为。
+                //
+                // 兼容：0.2.1 宿主不声明这个槽，`ctx.slots.inject` 会一直挂着且不报错，其余入口照旧。
+                const sessionLogHealth = createSessionLogHealth(api);
+                ctx.slots.inject('conversation.session.panel.section', () => ctx.slots.register({
+                    name: 'conversation.session.panel.section',
+                    id: 'dsh-session-ops:session',
+                    order: 350,
+                    label: () => '会话日志',
+                    inject: () => ({ health: sessionLogHealth }),
+                }, createSessionLogSection(React, sessionLogHealth)));
             }
             // `configForms`：配置卡片挂的是插件页的 `plugins.bundle.config`，那个槽不传共享
             // 表单，卡片要自己从 `ctx.configForms.get(CONFIG_ENTRY_ID)` 取（见上面第 4 条）。

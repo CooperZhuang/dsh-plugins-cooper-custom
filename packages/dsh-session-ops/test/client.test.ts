@@ -14,11 +14,14 @@ import assert from 'node:assert/strict'
 
 /** 当前这轮 `fetch` 收到的 URL（数据面断言用）。 */
 let fetched = []
+/** 当前这轮 `fetch` 收到的请求明细（方法名 / AbortSignal，取消用例用）。 */
+let requests = []
 /** 当前这轮 `config` 接口的应答（垃圾桶用例用）。 */
 let configReply = { headerDeleteButton: true }
 /**
- * 按方法名定制的应答（右键菜单用例用）：key 是 URL 末段的方法名（`delete` / `list`…），
- * 没配的方法回落到 `configReply`。
+ * 按方法名定制的应答（右键菜单/日志 section 用例用）：key 是 URL 末段的方法名
+ * （`delete` / `list` / `health`…），没配的方法回落到 `configReply`。值是对象时原样
+ * 返回，是函数时以 `fetch` 的 init 调用它（可以返回挂起/拒绝的 Promise，用来测取消）。
  */
 let apiReplies = {}
 
@@ -28,11 +31,13 @@ let apiReplies = {}
 // 什么、请求打到哪"，所以进程级替换掉这两个全局即可。
 globalThis.setInterval = () => 0
 globalThis.clearInterval = () => {}
-globalThis.fetch = async (url) => {
+globalThis.fetch = async (url, init) => {
   const target = String(url)
   fetched.push(target)
   const method = target.replace(/\/+$/, '').split('/').pop()
-  const value = Object.hasOwn(apiReplies, method) ? apiReplies[method] : configReply
+  requests.push({ url: target, method, signal: init?.signal, body: init?.body })
+  let value = Object.hasOwn(apiReplies, method) ? apiReplies[method] : configReply
+  if (typeof value === 'function') value = await value(init)
   return { status: 200, json: async () => ({ ok: true, value }) }
 }
 
@@ -482,3 +487,154 @@ test('移动动作的 run 也重校验：菜单打开后会话跑起来了就只
   assert.match(state.notifications[0].text, /运行中/)
 })
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 会话面板 section（DSH 0.2.2-rc.3+）：`conversation.session.panel.section`
+//
+// 面板渲染由内核的 ui-session-panel 负责，这里只验证本插件注册了什么、数据面
+// 的取消/缓存行为，以及组件在这两种 presentation 下渲染出哪些事实。
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** 把元素树里的文本节点摊平成一串。 */
+function textOf(node) {
+  if (Array.isArray(node)) return node.map(textOf).join(' ')
+  if (node === null || node === undefined) return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (typeof node !== 'object') return ''
+  return textOf(node.children)
+}
+
+/** 找到「会话日志」section 的注册项。 */
+function sessionLogRegistration(state) {
+  const entry = state.registered.find((item) => item.surface === 'conversation.session.panel.section')
+  assert.ok(entry, `missing session panel section: ${state.registered.map((item) => item.surface).join(',')}`)
+  return entry
+}
+
+test('会话面板 section：注册「会话日志」（name/id/order/label），加载中也有占位', async () => {
+  fetched = []
+  requests = []
+  apiReplies = {}
+  configReply = { headerDeleteButton: false }
+  const { state } = await mount()
+
+  const section = sessionLogRegistration(state)
+  assert.equal(section.options.name, 'conversation.session.panel.section')
+  assert.equal(section.options.id, 'dsh-session-ops:session')
+  assert.equal(section.options.order, 350, '排在现网占位之后（environment 0 / … / background-jobs 300）')
+  assert.equal(typeof section.options.label, 'function')
+  assert.equal(section.options.label(), '会话日志')
+  assert.equal(typeof section.component, 'function')
+
+  // 数据面通过注册项的 inject 交给组件（测试也靠它验证取消）。
+  const injected = section.options.inject()
+  assert.equal(typeof injected.health.load, 'function')
+  assert.equal(typeof injected.health.refresh, 'function')
+
+  // 加载中必须渲染占位：这个槽内容为空时连 section 标题都不画。
+  const docked = textOf(section.component({ sessionId: 'session-x', presentation: 'docked', health: injected.health }))
+  assert.match(docked, /读取中/)
+  const overlay = textOf(section.component({ sessionId: 'session-x', presentation: 'overlay', health: injected.health }))
+  assert.match(overlay, /读取中/)
+})
+
+test('会话日志数据面：切 sessionId 会 abort 旧请求，同一会话命中缓存，手动刷新绕缓存', async () => {
+  fetched = []
+  requests = []
+  apiReplies = {}
+  configReply = { headerDeleteButton: false }
+  const { state } = await mount()
+  const health = sessionLogRegistration(state).options.inject().health
+  const healthCalls = () => requests.filter((entry) => entry.method === 'health')
+
+  // a 的请求一直挂着（直到被 abort 才 reject）；b 的立即答。
+  apiReplies.health = (init) =>
+    new Promise((resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new Error('aborted')))
+    })
+  const first = health.load('session-a')
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.equal(healthCalls().length, 1, '先给 a 发一次请求')
+  const signalA = healthCalls()[0].signal
+  assert.equal(signalA.aborted, false)
+
+  apiReplies.health = {
+    id: 'session-b',
+    found: true,
+    path: '/tmp/b/session.v3.jsonl.zstd',
+    sizeBytes: 2048,
+    compression: 'zstd',
+    formatStatus: 'current',
+    workspaceId: null,
+    resident: false,
+    running: false,
+  }
+  const second = await health.load('session-b')
+  assert.equal(second.state, 'ready')
+  assert.equal(second.value.path, '/tmp/b/session.v3.jsonl.zstd')
+  assert.equal(signalA.aborted, true, '切会话必须 abort 上一条在途请求')
+  assert.equal(health.entryOf('session-a'), undefined, '被取消的请求不该留下错误态')
+  await first
+
+  // 缓存：同一会话再要一次不再打 Host。
+  const before = healthCalls().length
+  await health.load('session-b')
+  assert.equal(healthCalls().length, before, '命中缓存不该再打 Host')
+
+  // 手动刷新：绕过缓存。
+  apiReplies.health = {
+    id: 'session-b',
+    found: true,
+    path: '/tmp/b/session.v4.jsonl.zstd',
+    sizeBytes: 4096,
+    compression: 'zstd',
+    formatStatus: 'current',
+    workspaceId: null,
+    resident: false,
+    running: false,
+  }
+  const refreshed = await health.refresh('session-b')
+  assert.equal(healthCalls().length, before + 1)
+  assert.equal(refreshed.value.path, '/tmp/b/session.v4.jsonl.zstd')
+  assert.equal(refreshed.value.sizeBytes, 4096)
+})
+
+test('会话日志 section 渲染：docked 显示大小/格式/压缩/路径/运行/驻留，overlay 降密度', async () => {
+  fetched = []
+  requests = []
+  apiReplies = {
+    health: {
+      id: 'session-b',
+      found: true,
+      path: '/very/long/path/--proj--/session-b/session.v3.jsonl.zstd',
+      sizeBytes: 12 * 1024 * 1024,
+      compression: 'zstd',
+      formatStatus: 'current',
+      workspaceId: 'ws-1',
+      resident: true,
+      running: true,
+    },
+  }
+  configReply = { headerDeleteButton: false }
+  const { state } = await mount()
+  const section = sessionLogRegistration(state)
+  const health = section.options.inject().health
+  const loaded = await health.load('session-b')
+  assert.equal(loaded.state, 'ready')
+
+  const docked = textOf(section.component({ sessionId: 'session-b', presentation: 'docked' }))
+  assert.match(docked, /12\.0 MB/)
+  assert.match(docked, /格式正常/)
+  assert.match(docked, / zstd /, '压缩格式徽章在 docked 里出现')
+  assert.match(docked, /运行中/)
+  assert.match(docked, /驻留/)
+  assert.ok(docked.includes('/very/long/path/'), 'docked 要显示日志路径')
+
+  // overlay 只保留异常提示：正常格式/压缩不再占位，其余事实仍在。
+  const overlay = textOf(section.component({ sessionId: 'session-b', presentation: 'overlay' }))
+  assert.match(overlay, /12\.0 MB/)
+  assert.doesNotMatch(overlay, /格式正常/)
+  assert.doesNotMatch(overlay, / zstd /, 'overlay 不再单列压缩格式徽章（路径里的 .zstd 不算）')
+  assert.match(overlay, /运行中/)
+  assert.ok(overlay.includes('/very/long/path/'), 'overlay 也要显示路径（单行省略）')
+})
