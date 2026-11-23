@@ -83,3 +83,24 @@ bench 的 hybrid 臂（BM25 + ollama 嵌入 RRF）在 queries-b 上：R@1 74.7�
 R@5 96.0（92.0）、落榜 1（5）。收益集中在「落榜」和 R@5，R@1 反而略降。引入它需要
 把同步的 `searchMemories` 异步化，并让运行时依赖本机 ollama；本机 ollama 的定位是
 冒烟，所以先不做，作为已量化的备选。
+
+### 改了排序或注入之后：重启与验证
+
+宿主加载的是 profile 里的副本（`file:` 安装，构建不会自动写穿），所以改完要：
+
+```bash
+# 1. 让构建进入 profile（硬链接安装时 build 只写穿已存在的文件）
+rsync -a packages/dsh-cross-memory/lib/ ~/.dsh/profiles/desktop/node_modules/dsh-cross-memory/lib/
+node packages/dsh-cross-memory/scripts/verify-install.mts   # 应打印 install matches the build
+
+# 2. 退出并重开宿主（关窗口不算退出，必须 quit 进程）
+osascript -e 'quit app "DSH Desktop Beta"' && sleep 2 && open -a "DSH Desktop Beta"
+```
+
+重启后按顺序跑，数字应与本文基线一致：
+
+```bash
+node bench/inject-relevance.mts   # listed 20.4/会话、前 6 条相关 94.2%
+node bench/recall-quality.mts     # 需要新会话产生日志，对比前 3 条平均 BM25
+node bench/verify-doc.mts         # 无 MISMATCH
+```
