@@ -9,6 +9,7 @@ node bench/ablate.mts                   # 复刻打分函数后逐项拆解：id
 node bench/analyze.mts                  # 字段贡献、闸门拒绝原因、按 kind 的召回
 node bench/sensitivity.mts              # BM25 的 k1×b×字段重复 64 格敏感性
 node bench/inject-relevance.mts      # 注入块实际渲染的条目与主题相关率（前缀切分）
+node bench/recall-quality.mts         # 日志里真实 recall 案例的排序质量（新/旧顺序对比）
 node bench/e2e/run.mts                  # 端到端三臂（记忆 / 整段原文 / 闭卷），见 e2e/README.md
 node bench/real/sample.mts               # 真实会话取样 → 出题 → 三臂评测，见 real/README.md
 ```
@@ -61,3 +62,24 @@ node bench/verify-doc.mts
 绝对相关数几乎不变（约 12.9 条/会话），减少的是噪声条目。前 6 条的差距最大，因为
 字节预算稳定渲染的就是头部。收窄 `maxSummaryBytes` 不是替代手段：渲染器按
 perScope 分级降级，预算一紧每节只渲染 1 条，相关绝对数反而掉到 4.4。
+
+### 按需召回的排序质量（2026-11-23）
+
+`recall-quality.mts` 读日志里的真实 recall 案例，比较 BM25 顺序与它取代的
+relevance 顺序。**判据不是「相关率」**：真实用户轮多是短句（人工判 top-1 相关
+约 40%，见 e2e/real 的说明），所以用排序质量——前 3 条的平均 BM25 分数。
+
+| 指标 | 改前（relevance） | 改后（BM25） |
+| --- | ---: | ---: |
+| 前 3 条平均 BM25（32 案例） | 46.49 | 54.91 |
+| 改善 / 变差 / 持平 | — | 25 / 0 / 7 |
+
+拼前几轮用户消息做 query 实测只把主题相关从 36.4 提到 38.0（+4%），不是短轮弱的
+根因；要再进一步只能靠 dense 语义通道（见下）。
+
+### 未采纳的方向：dense 语义通道
+
+bench 的 hybrid 臂（BM25 + ollama 嵌入 RRF）在 queries-b 上：R@1 74.7（BM25 76.0）、
+R@5 96.0（92.0）、落榜 1（5）。收益集中在「落榜」和 R@5，R@1 反而略降。引入它需要
+把同步的 `searchMemories` 异步化，并让运行时依赖本机 ollama；本机 ollama 的定位是
+冒烟，所以先不做，作为已量化的备选。
