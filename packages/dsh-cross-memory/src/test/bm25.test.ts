@@ -12,6 +12,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { BM25_B, BM25_K1, bm25Rank, createBm25Index } from '../bm25.js'
+import { relevanceOf, searchMemories } from '../search.js'
 import type { MemoryEntry, MemoryKind } from '../types.js'
 
 /** Build one corpus entry. */
@@ -97,4 +98,22 @@ test('CJK bigrams rank a Chinese query without a model call', () => {
   const ranked = bm25Rank(corpus, '该插件是否有日志')
   assert.equal(ranked[0]?.id, 'logs')
   assert.ok(!ranked.some((value) => value.id === 'cost'), 'an unrelated entry does not surface')
+})
+
+test('the ranker changes the order, never the admitted set', () => {
+  // The gatekeeper decides what may be recalled; BM25 only decides which of
+  // those comes first. If a ranker ever adds or drops an entry, the recall
+  // gate has silently changed meaning — so pin the set.
+  const corpus = [
+    entry('logs', '插件日志查看方式', '日志写在文件里。', { keys: ['logging'] }),
+    entry('order', '插件注册顺序', '启动时注册。', { tags: ['插件'] }),
+    entry('push', '提交后主动推送', '提交完直接推 origin。', { appliesTo: '准备推送代码之前' }),
+    entry('cost', '成本计量的坑', '另一件事。'),
+    entry('restart', '重启 dsh web', '用 restart 端点。'),
+  ]
+  const groups = [{ scope: 'global' as const, label: 'global', entries: corpus }]
+  const query = '插件的日志和推送'
+  const admitted = corpus.filter((value) => relevanceOf(value, query) > 0).map((value) => value.id).sort()
+  const ranked = searchMemories(groups, query, { limit: 10 }).map((hit) => hit.entry.id).sort()
+  assert.deepEqual(ranked, admitted, 'BM25 must not admit an entry the gatekeeper refused, or hide one it admitted')
 })
