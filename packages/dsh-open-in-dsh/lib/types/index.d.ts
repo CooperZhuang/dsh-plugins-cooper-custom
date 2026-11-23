@@ -1,5 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import z from '@deepseek-ai/schemastery';
+import type { OpenInDshConfig } from './types.js';
+export type { OpenInDshConfig };
 /** A thrown value from a failed spawn: an `Error` that may carry an errno code. */
 interface ExecFailure extends Error {
     code?: string | number;
@@ -82,13 +84,8 @@ export interface RequestEntry {
     readonly path: string;
     readonly at: number;
 }
-/** The settings the page receives in the `hello` frame. */
-export interface HubSettings {
-    readonly alwaysNewSession: boolean;
-}
 /** Options for {@link createHub}. */
 export interface HubOptions {
-    alwaysNewSession?: boolean;
     backlogTtlMs?: number;
     now?: () => number;
 }
@@ -99,7 +96,6 @@ export interface Hub {
     subscribe(response: EventStream): () => void;
     clients(): number;
     close(): void;
-    readonly settings: HubSettings;
     readonly seq: number;
     readonly lastSeenAt: number;
 }
@@ -174,21 +170,31 @@ export declare const DEFAULT_SOCKET_PATH: string;
  * 默认值、profile 补丁层的覆盖、`$DSH_HOME/settings.yaml` 里同名的段，都在这条路径上
  * 合并成一份，`Config.listConfigs` 也就读得到 schema——写配置的人（或 agent）不用再猜键名。
  *
+ * 标了 `.volatile()` 的字段还会被内核投影成 graph row 的 synced config，浏览器半边
+ * 在 `apply(ctx, config)` 里直接拿到它的实时引用（`@deepseek-ai/dsh-client-config/types`
+ * 的 `SyncedConfig`）。所以「页面该怎么处理这次右键」这类每次都要重新判断的字段标
+ * volatile；挂载时消费一次的值（总开关、回环策略、补收窗口、套接字路径）不标——
+ * 改它们本来就该重挂这一行，标成 volatile 反而会让改动原地生效、路由却不重建。
+ *
  * 它**不会**凭空长出一个可编辑的配置表单：「设置 → 插件」按设计就是只读清单
  * （inspect plugins *without changing their configuration*），而侧边栏「插件」页里那块
  * 可编辑区域要由插件**自己注册一个配置页**（官方插件是配套 UI 包做的）。
- * 本插件只有下面四个开关，不值得为它单开一页——改它们直接写 YAML 或 settings.yaml。
+ * 本插件只有这几个字段，不值得为它单开一页——改它们直接写 YAML 或 settings.yaml。
  */
 export declare const Config: z<Schemastery.ObjectS<NoInfer<{
-    /** 总开关。关掉后连路由都不注册。 */
+    /** 总开关。关掉后连路由都不注册；挂载时读一次，改它需要重挂。 */
     enabled: z<boolean, boolean, "defined">;
     /**
      * 每次右键都新建一个空白会话。
      *
      * **默认 false**：复用该工作区已有的空白会话。同一个文件夹点几次就堆几个空会话
      * 是很容易发生的，而复用正是 DSH 侧边栏「新会话」自己的语义。
+     *
+     * **volatile**：页面在每次打开文件夹时现读（`config.alwaysNewSession.get()`），
+     * 所以改这个值不用重启宿主、也不用刷新页面，下一次右键就按新值走；宿主半边自己
+     * 不读它，只靠 schema 把它投影给浏览器半边。
      */
-    alwaysNewSession: z<boolean, boolean, "defined">;
+    alwaysNewSession: z<boolean, boolean, "volatile-defined">;
     /**
      * 是否接受非回环来源。**默认 false，不要轻易打开。**
      *
@@ -211,15 +217,19 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
      */
     socketPath: z<string, string, "defined">;
 }>>, Schemastery.ObjectT<NoInfer<{
-    /** 总开关。关掉后连路由都不注册。 */
+    /** 总开关。关掉后连路由都不注册；挂载时读一次，改它需要重挂。 */
     enabled: z<boolean, boolean, "defined">;
     /**
      * 每次右键都新建一个空白会话。
      *
      * **默认 false**：复用该工作区已有的空白会话。同一个文件夹点几次就堆几个空会话
      * 是很容易发生的，而复用正是 DSH 侧边栏「新会话」自己的语义。
+     *
+     * **volatile**：页面在每次打开文件夹时现读（`config.alwaysNewSession.get()`），
+     * 所以改这个值不用重启宿主、也不用刷新页面，下一次右键就按新值走；宿主半边自己
+     * 不读它，只靠 schema 把它投影给浏览器半边。
      */
-    alwaysNewSession: z<boolean, boolean, "defined">;
+    alwaysNewSession: z<boolean, boolean, "volatile-defined">;
     /**
      * 是否接受非回环来源。**默认 false，不要轻易打开。**
      *
@@ -242,14 +252,21 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
      */
     socketPath: z<string, string, "defined">;
 }>>, "plain">;
-/** The config after the schema has applied its shipped defaults. */
-export interface OpenInDshConfig {
-    enabled: boolean;
-    alwaysNewSession: boolean;
-    allowNonLoopback: boolean;
-    backlogTtlMs: number;
-    socketPath: string;
-}
+/**
+ * Resolve one entry config into the shape this half reads.
+ *
+ * Two callers, two shapes, one result: the Loader hands `apply` a row where every
+ * `.volatile()` field is already a reference, while a test passes the raw block
+ * the schema still has to validate and default. References are lifted out first
+ * and put back after the plain remainder is parsed, so the function is
+ * idempotent — resolving an already-resolved row keeps the same references,
+ * which is what makes the volatile update path work: the kernel commits later
+ * writes into those objects in place.
+ *
+ * @param rawConfig - the row as `apply` received it.
+ * @returns the row with defaults applied and live references preserved.
+ */
+export declare function resolveConfig(rawConfig: unknown): OpenInDshConfig;
 /** The endpoint the Explorer verb's launcher calls. Mirrored in `scripts/`. */
 export declare const ROUTE_OPEN = "/dsh-open-in-dsh/api/v1/open";
 /** The endpoint the browser half follows. Hand-mirrored in `client/index.ts`. */
@@ -330,22 +347,23 @@ export declare function availableApps(platform?: string, exists?: ExistsFn, appD
  */
 export declare function openWithCommand(platform: string, appId: string, target: LaunchTarget): LaunchCommand | null;
 /**
- * Install the three routes.
+ * Install the six routes.
  *
  * `webServer` is acquired through `ctx.inject` rather than read directly: the
  * service appears asynchronously, and a plain read inside `apply` would
  * silently see nothing and never register the routes.
  *
- * The raw row config is run through `Config` first so a partial block, a
- * `settings.yaml` override and the shipped defaults all resolve the same way —
- * `apply` then reads one already-resolved object instead of re-deciding each
- * default at the point of use.
+ * The row config arrives already resolved when the Loader mounts the plugin; a
+ * test passes the raw block. {@link resolveConfig} accepts both and yields one
+ * object with the shipped defaults applied, so `apply` reads one shape instead
+ * of re-deciding each default at the point of use.
  *
  * @param ctx - host plugin context.
- * @param rawConfig - the profile row's `config` block.
+ * @param rawConfig - the row as the Loader hands it over (resolved), or the raw
+ *   `config` block from a test or hand-written composition.
  * @returns nothing; the routes are registered once `webServer` appears.
  */
-export declare function apply(ctx: HostContext, rawConfig?: Partial<OpenInDshConfig>): void;
+export declare function apply(ctx: HostContext, rawConfig?: unknown): void;
 /**
  * The one piece of shared state: the request sequence and its followers.
  *
@@ -353,8 +371,11 @@ export declare function apply(ctx: HostContext, rawConfig?: Partial<OpenInDshCon
  * replayable backlog row for the same request, an expiring replay window, and
  * a sequence that rewinds on host restart — can be tested without HTTP.
  *
+ * It carries no session policy: `alwaysNewSession` is a volatile config field,
+ * so the browser half reads its own synced reference. Sending the value through
+ * an SSE frame as well would be a second, staler source of truth.
+ *
  * @param options - hub options.
- * @param options.alwaysNewSession - session policy sent to the browser half.
  * @param options.backlogTtlMs - replay window in milliseconds.
  * @param options.now - clock, for tests.
  * @returns the hub.
@@ -469,4 +490,3 @@ export declare function directoryPath(value: unknown): string | null;
  * @returns canonical path plus the directory flag, or null when it is not one.
  */
 export declare function existingPath(value: unknown, stat?: StatFn): LaunchTarget | null;
-export {};

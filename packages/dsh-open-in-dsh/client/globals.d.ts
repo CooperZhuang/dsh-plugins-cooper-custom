@@ -27,6 +27,7 @@ interface DshOpenInDebug {
   /** A snapshot of the stream state, for `console.log(__dshOpenIn.status())`. */
   status: () => {
     lastSeq: number
+    /** The live synced setting: read from the Host reference on each call. */
     settings: { alwaysNewSession: boolean }
     uiWorkspace: boolean
     readyState: number | null

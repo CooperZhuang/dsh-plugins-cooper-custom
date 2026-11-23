@@ -4,9 +4,11 @@
 # package.json declares `dsh.client.platform: web` is mounted in the Client
 # tree by the same entry, so the Client half never needs its own row.
 #
-# `alwaysNewSession` is read back by the browser half over the plugin's own
-# HTTP surface (`GET /dsh-open-in-dsh/api/v1/events`), because a Client plugin
-# is applied as `apply(ctx)` and never receives this config block.
+# `alwaysNewSession` is declared `.volatile()` in the Host schema, so the kernel
+# projects it into this row's graph data and hands the browser half the live
+# reference in `apply(ctx, config)` (a `SyncedConfig`). A write reaches the
+# loaded page in place — no host restart, no page reload, and no second copy of
+# the value travelling over the plugin's own SSE stream.
 - insert:
     - id: open-in-dsh
       name: dsh-open-in-dsh

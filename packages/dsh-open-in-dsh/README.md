@@ -100,6 +100,10 @@ bundle 自带的 `cordis.patch.yml` 只是默认值；覆盖写在 profile 的 `
 
 `Config` schema 的作用是让这一行的 `config` 在加载时被校验并补上默认值，并让 `Config.listConfigs` 读得到键名；它不会长出一个可编辑表单。「设置 → 插件」是只读清单，开关插件请用侧边栏「插件」页。
 
+`alwaysNewSession` 是**实时**字段：Config 里标了 `.volatile()`，内核把它作为 synced config 交给浏览器半边，页面在每次打开文件夹时现读当前值。所以改这个值**不用重启宿主、也不用刷新页面**——保存后下一次右键就按新值走；页面已经开着也一样，因为引用是原地更新的。
+
+其余字段是挂载时读一次的部署参数（总开关、回环策略、补收窗口、套接字路径）。改它们要重挂这一行：路由与套接字跟着重建，不会靠一次原地更新假装生效。
+
 ## 工作方式
 
 ### Windows
@@ -110,7 +114,7 @@ bundle 自带的 `cordis.patch.yml` 只是默认值；覆盖写在 profile 的 `
 |---|---|---|
 | 1 | 菜单动词 | `open-in-dsh.vbs` 用环境变量把 `%V` 交给 `open-in-dsh.ps1`，后者解析端口/应用并 POST 到 `127.0.0.1:<port>/dsh-open-in-dsh/api/v1/open`；没人应答就先把桌面版启动起来再重投 |
 | 2 | 宿主半边 | 校验路径（必须存在且是目录、只接受回环来源），入队并广播 |
-| 3 | 页面 | 通过 SSE 收到请求：`alwaysNewSession` 为 `false` 时走 `workspaces.create({ path })` + `uiWorkspace.openWorkspace(id)`；为 `true` 时走 `workspaces.create({ path })` + `sessions.create({ workspaceId })` + `uiWorkspace.openSession(id)` |
+| 3 | 页面 | 通过 SSE 收到请求，按 synced config 里 `alwaysNewSession` 的当前值分流：`false` 时走 `workspaces.create({ path })` + `uiWorkspace.openWorkspace(id)`；`true` 时走 `workspaces.create({ path })` + `sessions.create({ workspaceId })` + `uiWorkspace.openSession(id)` |
 | 4 | 启动器 | 桌面版：再启动一次应用把窗口提到最前（单实例锁 → `second-instance` → 聚焦）；`dsh web`：没人跟随时打开浏览器 URL |
 
 动词指向 `wscript.exe` 而不是 PowerShell，路径通过进程环境变量传：GUI 子系统的 wscript 不会创建控制台窗口，因此右键不会闪窗；`%V` 里的空格、单引号、盘符根目录的结尾反斜杠也不经过引号转义。
@@ -168,7 +172,8 @@ Chrome 会把后台页面的定时器节流到每分钟一次，而刚点完右�
 - 只注册了「文件夹」和「文件夹空白处」。右键盘符（如 `D:\`）需要再注册 `Drive\shell\DSHOpen`，路径规范化已支持盘符根目录。
 - 桌面版提窗口靠「再启动一次应用」（每次多一个立即退出的短进程）。能不能真的抢到前台取决于 Windows 的前台权限策略；应用没开时走冷启动，窗口必然起来。
 - 桌面版登录页出现时页面还没跑起来：请求会待在回放窗口里，登录进去、页面加载后才落地，超过 `backlogTtlMs` 就过期，需要重按一次。
-- 宿主半边改代码要重启宿主才生效；桌面版必须整个退出再打开。
+- 宿主半边改代码要重启宿主才生效；桌面版必须整个退出再打开。配置里的 `alwaysNewSession` 是例外（实时字段，保存即生效）；其余配置字段改完由内核重载这一行。
+- 内核 0.2.2-rc.3 之前没有 synced config：浏览器半边 `apply` 收不到这行配置，`alwaysNewSession: true` 会退回默认（复用空白会话）。要这个开关就升级内核。
 - macOS：快速操作在子菜单里，不是顶层条目（顶层需要 Finder Sync 扩展 + Xcode 工程 + 签名）；右键文件夹空白处没有入口（服务总要有选中项）；移动 checkout 后启动器绝对路径会失效，重跑一次 `install-macos.sh install`——`status` 会打印 `STALE` 并以非 0 退出。
 - 宿主重启后插件重新绑定套接字/路由；套接字不在时启动器明确报错并写日志，不会假装成功。
 - Windows 桌面版的端口**每次启动都变**（桌面壳用 --port 0）。动词里存的是 0，启动器每次现场发现：从 DSH 进程的 loopback 连接反推端口，再用 /dsh-open-in-dsh/api/v1/status 确认（这版 Windows 上监听套接字不在 
@@ -177,17 +182,17 @@ etstat 表里，所以只能靠连接反推）。发现失败会回落到 19387 
 ## 验证（开发）
 
 ```sh
-npm test                            # 82 个测试（含客户端构建与语法检查）
+npm test                            # 89 个测试（含客户端构建与语法检查）
 node --test test/macos.test.ts     # macOS 启动器/安装器 17 个测试
 ```
 
-`npm test` 覆盖宿主路由与回放、`%V` 的各种形态、脚本镜像（路由路径/端口/`-Probe` 一致）、白名单与「打开方式」策略、会话定位，以及真实 `node:http` 上的集成路由（含跨域拒绝）。
+`npm test` 覆盖宿主路由与回放、`%V` 的各种形态、脚本镜像（路由路径/端口/`-Probe` 一致）、白名单与「打开方式」策略、会话定位、synced config 的实时读取，以及真实 `node:http` 上的集成路由（含跨域拒绝）。
 
 ## 兼容性
 
-- **DSH**：`engines.dsh: ^0.2.1-rc.2 || ^0.2.2-alpha.2`；Node.js `>=24`。
+- **DSH**：`engines.dsh: ^0.2.1-rc.2 || ^0.2.2-alpha.2 || ^0.2.3-alpha.1`；Node.js `>=24`。
 - **会话存储**：宿主半边通过 `dsh-session-ops/store` 读会话头（peer 依赖，`dsh-session-ops >= 0.1.0`），与 `dsh-session-ops` 共用同一份存储格式。
-- 本插件不 import 任何内核包，只使用内核提供的服务（`webServer`、`workspaces`、`sessions`、`uiWorkspace`、客户端模块系统）；接口变化时最坏结果是某个入口失效，不会影响 DSH 本身。
+- 本插件运行时不 import 任何内核包，只使用内核提供的服务（`webServer`、`workspaces`、`sessions`、`uiWorkspace`、客户端模块系统）；类型层面只 `import type` 了 `@deepseek-ai/cordis` 的 `Volatile`（编译器会擦掉）。接口变化时最坏结果是某个入口失效，不会影响 DSH 本身。
 - DSH 侧「打开方式」菜单依赖内核的 `@deepseek-ai/dsh-client-ui-context-menu` 客户端包。
 
 ## License
