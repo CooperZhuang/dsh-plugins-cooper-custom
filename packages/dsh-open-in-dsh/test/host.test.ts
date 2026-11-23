@@ -25,7 +25,7 @@ function fakeStream() {
 }
 
 test('a published request reaches a subscribed page and the replay window', () => {
-  const hub = createHub({ alwaysNewSession: true, now: () => 1000 })
+  const hub = createHub({ now: () => 1000 })
   const stream = fakeStream()
   hub.subscribe(stream)
 

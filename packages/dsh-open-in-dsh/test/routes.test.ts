@@ -22,6 +22,7 @@ import test from 'node:test'
 import {
   apply,
   Config,
+  resolveConfig,
   ROUTE_APPS,
   ROUTE_EVENTS,
   ROUTE_OPEN,
@@ -200,7 +201,7 @@ test('the event stream greets a new page and replays what it missed', async () =
       text += decoder.decode(value, { stream: true })
     }
 
-    assert.match(text, /event: hello\ndata: \{"seq":1,"settings":\{"alwaysNewSession":false\}\}/)
+    assert.match(text, /event: hello\ndata: \{"seq":1\}\n\n/)
     assert.match(text, /event: request\ndata: \{"seq":1,/)
     assert.match(text, new RegExp(`"path":"${folder.replace(/\\/g, '\\\\\\\\')}"`))
 
@@ -210,17 +211,40 @@ test('the event stream greets a new page and replays what it missed', async () =
   }
 })
 
-test('alwaysNewSession is reported to the page from the config', async () => {
-  const mounted = await mount({ alwaysNewSession: false })
+test('alwaysNewSession travels as a synced reference, not through the hello frame', async () => {
+  const config = Config({ alwaysNewSession: true })
+  assert.equal(typeof config.alwaysNewSession.get, 'function')
+  assert.equal(config.alwaysNewSession.get(), true)
+
+  // The reference is what the kernel projects into the graph row; the stream
+  // carries only the sequence, so there is no second, staler copy to disagree.
+  const mounted = await mount({ ...config, socketPath: '' })
   try {
     const controller = new AbortController()
     const response = await fetch(`${mounted.base}${ROUTE_EVENTS}?since=0`, { signal: controller.signal })
     const { value } = await response.body.getReader().read()
-    assert.match(new TextDecoder().decode(value), /"settings":\{"alwaysNewSession":false\}/)
+    const text = new TextDecoder().decode(value)
+    assert.match(text, /event: hello\ndata: \{"seq":0\}\n\n/)
+    assert.doesNotMatch(text, /settings/)
     controller.abort()
   } finally {
     await mounted.close()
   }
+})
+
+test('resolving an already-resolved row keeps the live reference', () => {
+  // The Loader validates the row against Config before apply runs, so a
+  // volatile field arrives as a reference. Re-parsing one throws, and a
+  // re-parsed value would replace the object the kernel updates in place.
+  const config = Config({ alwaysNewSession: false })
+  const resolved = resolveConfig(config)
+  assert.equal(resolved.alwaysNewSession, config.alwaysNewSession)
+  assert.equal(resolved.alwaysNewSession.get(), false)
+
+  // A raw row still gets the shipped default / its own value through the same
+  // call, which is what the route tests above rely on.
+  assert.equal(resolveConfig({}).alwaysNewSession.get(), false)
+  assert.equal(resolveConfig({ alwaysNewSession: true }).alwaysNewSession.get(), true)
 })
 
 test('a disabled plugin registers nothing', async () => {
@@ -237,13 +261,16 @@ test('the Config schema supplies the shipped defaults for a partial row', () => 
   // but are only reachable by hand-editing YAML.
   const defaults = Config({})
   assert.equal(defaults.enabled, true)
-  assert.equal(defaults.alwaysNewSession, false)
+  // Only the field the page re-reads per request is live (`Volatile`); the
+  // mount-time switches stay values so editing one still remounts the row.
+  assert.equal(typeof defaults.alwaysNewSession.get, 'function')
+  assert.equal(defaults.alwaysNewSession.get(), false)
   assert.equal(defaults.allowNonLoopback, false)
   assert.equal(defaults.backlogTtlMs, 60_000)
 
   // Toggling one switch must not silently reset the others.
   const partial = Config({ alwaysNewSession: true })
-  assert.equal(partial.alwaysNewSession, true)
+  assert.equal(partial.alwaysNewSession.get(), true)
   assert.equal(partial.allowNonLoopback, false)
   assert.equal(partial.backlogTtlMs, 60_000)
 })

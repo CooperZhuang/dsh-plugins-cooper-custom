@@ -1,6 +1,6 @@
 {
   "name": "dsh-open-in-dsh",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "private": false,
   "publishConfig": {
     "access": "public"
@@ -36,7 +36,7 @@
     "build": "tsc -p tsconfig.json && tsc -p tsconfig.client.json && node scripts/build-client.mts",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
     "prepare": "npm run build",
-    "test": "npm run build && node --check lib/index.js && node --check lib/client.js && node --check .client-build/index.js && node --test test/host.test.ts test/routes.test.ts test/scripts.test.ts test/macos.test.ts test/open-with.test.ts test/session.test.ts test/menu.test.ts test/session-menu.test.ts"
+    "test": "npm run build && node --check lib/index.js && node --check lib/client.js && node --check .client-build/index.js && node --test test/host.test.ts test/routes.test.ts test/scripts.test.ts test/macos.test.ts test/open-with.test.ts test/session.test.ts test/menu.test.ts test/session-menu.test.ts test/client-config.test.ts"
   },
   "engines": {
     "node": ">=24",

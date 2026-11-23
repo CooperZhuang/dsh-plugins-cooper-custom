@@ -408,11 +408,27 @@ window.__ModuleLoader__.load({
             }
         }
         /**
+         * Whether a request should land in a brand-new Session.
+         *
+         * Read at the moment of use, never captured: the Host commits a config write
+         * into the synced reference in place, and the plugin is not remounted for it,
+         * so a value read once at mount would stay stale for the life of the page.
+         * Absent means the shipped default (`false`: reuse the Workspace's blank
+         * Session).
+         *
+         * @param config - the synced Config `apply` received.
+         * @returns true when every announced folder opens in a new blank Session.
+         */
+        function readAlwaysNewSession(config) {
+            return config.alwaysNewSession?.get() === true;
+        }
+        /**
          * Mount the plugin.
          * @param ctx - browser plugin context, with `workspaces` and `sessions`.
+         * @param config - the Host's synced volatile Config, handed over by the
+         *   kernel (empty object when the row has none).
          */
-        function apply(ctx) {
-            const settings = { alwaysNewSession: true };
+        function apply(ctx, config = {}) {
             let lastSeq = readSeq();
             let source = null;
             let uiWorkspace = null;
@@ -593,7 +609,9 @@ window.__ModuleLoader__.load({
              */
             const openFolder = async (path) => {
                 const workspace = await ctx.workspaces.create({ path });
-                if (settings.alwaysNewSession === false) {
+                // Read after the Workspace await: a config write may arrive while this
+                // request is in flight, and the newest value is the one the user expects.
+                if (!readAlwaysNewSession(config)) {
                     if (uiWorkspace !== null)
                         await uiWorkspace.openWorkspace(workspace.workspaceId);
                     return;
@@ -642,8 +660,8 @@ window.__ModuleLoader__.load({
                     const payload = parseFrame(event.data);
                     if (payload === null)
                         return;
-                    if (payload.settings !== undefined && payload.settings !== null)
-                        Object.assign(settings, payload.settings);
+                    // Config is not carried by the frame: the synced reference is already
+                    // live. `hello` only reports the sequence.
                     if (Number.isInteger(payload.seq) && payload.seq < lastSeq) {
                         lastSeq = 0;
                         writeSeq(0);
@@ -665,7 +683,8 @@ window.__ModuleLoader__.load({
                 openWith: launch,
                 status: () => ({
                     lastSeq,
-                    settings: { ...settings },
+                    // Read live, like every other consumer of the synced field.
+                    settings: { alwaysNewSession: readAlwaysNewSession(config) },
                     uiWorkspace: uiWorkspace !== null,
                     readyState: source === null ? null : source.readyState,
                 }),

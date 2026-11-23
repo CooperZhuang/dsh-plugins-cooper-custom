@@ -37,6 +37,30 @@ function parseFrame(text) {
   }
 }
 
+/**
+ * One field of this plugin's Host config, as the kernel syncs it.
+ *
+ * Mirrors `SyncedConfigRef<T>` from `@deepseek-ai/dsh-client-config/types`
+ * without importing it: the browser half is spliced into a classic script by
+ * `scripts/build-client.mts` and carries no package dependency of its own. A
+ * field can read `undefined` — the Host may keep a value it cannot project, or
+ * run a build from before this code — so every read handles absence.
+ */
+interface SyncedConfigRef<T> {
+  get(): T | undefined
+}
+
+/**
+ * This plugin's top-level volatile Config fields, as `apply` receives them.
+ *
+ * Mirrors `SyncedConfig<OpenInDshConfig>`. Only `alwaysNewSession` is volatile:
+ * the Host reads it out of the graph row into a reference, and a later config
+ * write updates that reference in place while the page stays loaded.
+ */
+interface SyncedConfig {
+  alwaysNewSession?: SyncedConfigRef<boolean>
+}
+
 /** Dictionary namespace owned by this plugin. */
 const NS = 'dsh-open-in-dsh'
 
@@ -402,11 +426,28 @@ function createPlugin(require) {
   }
 
   /**
+   * Whether a request should land in a brand-new Session.
+   *
+   * Read at the moment of use, never captured: the Host commits a config write
+   * into the synced reference in place, and the plugin is not remounted for it,
+   * so a value read once at mount would stay stale for the life of the page.
+   * Absent means the shipped default (`false`: reuse the Workspace's blank
+   * Session).
+   *
+   * @param config - the synced Config `apply` received.
+   * @returns true when every announced folder opens in a new blank Session.
+   */
+  function readAlwaysNewSession(config: SyncedConfig): boolean {
+    return config.alwaysNewSession?.get() === true
+  }
+
+  /**
    * Mount the plugin.
    * @param ctx - browser plugin context, with `workspaces` and `sessions`.
+   * @param config - the Host's synced volatile Config, handed over by the
+   *   kernel (empty object when the row has none).
    */
-  function apply(ctx) {
-    const settings = { alwaysNewSession: true }
+  function apply(ctx, config: SyncedConfig = {}) {
     let lastSeq = readSeq()
     let source = null
     let uiWorkspace = null
@@ -608,7 +649,9 @@ function createPlugin(require) {
     const openFolder = async (path) => {
       const workspace = await ctx.workspaces.create({ path })
 
-      if (settings.alwaysNewSession === false) {
+      // Read after the Workspace await: a config write may arrive while this
+      // request is in flight, and the newest value is the one the user expects.
+      if (!readAlwaysNewSession(config)) {
         if (uiWorkspace !== null) await uiWorkspace.openWorkspace(workspace.workspaceId)
         return
       }
@@ -655,8 +698,8 @@ function createPlugin(require) {
       source.addEventListener('hello', (event) => {
         const payload = parseFrame(event.data)
         if (payload === null) return
-        if (payload.settings !== undefined && payload.settings !== null) Object.assign(settings, payload.settings)
-
+        // Config is not carried by the frame: the synced reference is already
+        // live. `hello` only reports the sequence.
         if (Number.isInteger(payload.seq) && payload.seq < lastSeq) {
           lastSeq = 0
           writeSeq(0)
@@ -681,7 +724,8 @@ function createPlugin(require) {
       openWith: launch,
       status: () => ({
         lastSeq,
-        settings: { ...settings },
+        // Read live, like every other consumer of the synced field.
+        settings: { alwaysNewSession: readAlwaysNewSession(config) },
         uiWorkspace: uiWorkspace !== null,
         readyState: source === null ? null : source.readyState,
       }),
