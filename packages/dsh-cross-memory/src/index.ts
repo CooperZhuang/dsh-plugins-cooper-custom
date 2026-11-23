@@ -395,6 +395,23 @@ export class MemoriesRuntime {
       llm: () => this.llm,
       log: this.log,
     })
+    // Dense warm-up: embedding the whole store costs under a minute on a local
+    // 0.6b model and must not land inside a user's turn. Fire and forget; the
+    // first recall after this is a cache hit (measured 0.04s).
+    if (this.settings.denseEnabled) void this.warmDense().catch(() => undefined)
+  }
+
+  /** Embed the store once in the background so the first recall is not the slow one. */
+  private async warmDense(): Promise<void> {
+    const entries = [...await this.store.list('global', undefined)]
+    for (const slug of await this.store.listProjects()) {
+      const descriptor = await this.store.readProjectDescriptor(slug)
+      if (descriptor === undefined) continue
+      entries.push(...await this.store.list('project', descriptor.root).catch(() => []))
+    }
+    if (entries.length === 0) return
+    await denseScores(entries, 'warm-up', { url: DEFAULT_DENSE_URL, model: DEFAULT_DENSE_MODEL, cacheDir: this.denseCacheDir() })
+    this.log.info('dsh-cross-memory: dense channel warmed (%d entries)', entries.length)
   }
 
   /**
