@@ -10,8 +10,9 @@
  *   * automatic order by each Workspace's newest human prompt (`updatedAt` on a
  *     non-blank Session), optionally with running Workspaces first;
  *   * pins that keep chosen Workspaces at the front, in pin order;
- *   * a panel beside the sidebar footer to see session/running counts and the
- *     last activity, filter by name, toggle the two rules, and tidy once;
+ *   * a card on this bundle's page in the Plugins view that opens a panel with
+ *     session/running counts, the last activity, a name filter, the two rule
+ *     switches and a "tidy now" button (the sidebar itself gets no icon);
  *   * every write goes through `ctx.workspaces.insertBefore`, the same durable
  *     command a Workspace drag uses.
  *
@@ -294,6 +295,12 @@ function newestActivity(activity) {
         note: '只改侧栏顺序，不动文件与会话',
         disabled: '宿主配置已停用自动排序，只能点「立即整理」',
         ephemeral: '本次会话内的置顶与开关不会保存：宿主是旧版插件，重启一次宿主后即可落盘',
+        cardIntro: '侧栏不放入口图标；排序、置顶与规则开关都在这张卡片打开的面板里。',
+        openPanel: '打开排序面板',
+        autoOn: '自动排序已开',
+        autoOff: '自动排序已关',
+        runningOn: '运行中优先',
+        pinnedCount: '{n} 个置顶',
       },
       en: {
         button: 'Workspace order',
@@ -317,6 +324,12 @@ function newestActivity(activity) {
         note: 'Reorders the sidebar only; it never touches files or sessions',
         disabled: 'Disabled in the Host config; only "Tidy now" works',
         ephemeral: 'Pins and switches are session-only here: the Host runs the previous build, restart it once to persist them',
+        cardIntro: 'No sidebar icon: open the panel from this card to sort, pin and switch the rules.',
+        openPanel: 'Open the sorting panel',
+        autoOn: 'Auto-sort on',
+        autoOff: 'Auto-sort off',
+        runningOn: 'Running first',
+        pinnedCount: '{n} pinned',
       },
     }
 
@@ -345,6 +358,13 @@ function newestActivity(activity) {
 .wss-action:hover{background:var(--dsw-alias-interactive-bg-hover)}
 .wss-note{padding:8px 2px 0;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:16px}
 .wss-warn{color:var(--dsw-alias-state-warn-primary)}
+.wss-card{display:flex;align-items:flex-start;gap:12px;justify-content:space-between;box-sizing:border-box;padding:12px 14px;margin:0 0 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-lg,10px);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
+.wss-card-text{min-width:0}
+.wss-card-title{font-size:13.5px;font-weight:600;margin:0 0 4px}
+.wss-card-note{font-size:12px;line-height:1.55;color:var(--dsw-alias-label-secondary)}
+.wss-card-rules{margin-top:6px;font-size:11.5px;color:var(--dsw-alias-label-secondary)}
+.wss-card-btn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;flex:none;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-sm,6px);background:transparent;color:var(--dsw-alias-label-primary);font-size:12.5px;cursor:pointer}
+.wss-card-btn:hover{background:var(--dsw-alias-interactive-bg-hover)}
 `
 
     /**
@@ -938,27 +958,43 @@ function newestActivity(activity) {
           )
         }
 
-        /** The footer action that opens and closes the panel. */
-        function FooterAction() {
-          const state = useStore(panel)
+        /**
+         * The card on this bundle's page in the Plugins view, and the only entry
+         * point to the panel — the sidebar deliberately gets no footer icon.
+         *
+         * `plugins.bundle.config` hands no form in; the card reads the shared
+         * client stores directly.
+         */
+        function BundleCard() {
+          const tr = t()
+          const statePrefs = useStore(prefs)
+          const rules = []
+          rules.push(statePrefs.auto ? tr('autoOn') : tr('autoOff'))
+          if (statePrefs.runningFirst) rules.push(tr('runningOn'))
+          if (statePrefs.pins.length > 0) rules.push(tr('pinnedCount', { n: statePrefs.pins.length }))
           return h(
-            'button',
-            {
-              type: 'button',
-              className: 'wss-btn',
-              'data-open': state.open ? 'true' : 'false',
-              title: t()('button'),
-              'aria-expanded': state.open ? 'true' : 'false',
-              onClick: () => panel.set({ open: !state.open }),
-            },
-            h(SortIcon, null),
+            'div',
+            { className: 'wss-card' },
+            h(
+              'div',
+              { className: 'wss-card-text' },
+              h('div', { className: 'wss-card-title' }, tr('title')),
+              h('div', { className: 'wss-card-note' }, tr('cardIntro')),
+              h('div', { className: 'wss-card-rules' }, rules.join(' · ')),
+            ),
+            h(
+              'button',
+              { type: 'button', className: 'wss-card-btn', onClick: () => panel.set({ open: true }) },
+              h(SortIcon, null),
+              tr('openPanel'),
+            ),
           )
         }
 
-        ctx.slots.inject('sidebar.footer.action', () =>
+        ctx.slots.inject('plugins.bundle.config', () =>
           ctx.slots.register(
-            { name: 'sidebar.footer.action', id: 'workspace-sort', order: 40, label: () => t()('button') },
-            FooterAction,
+            { name: 'plugins.bundle.config', key: '@cooper-zhuang/dsh-workspace-sort', inject: () => ({}) },
+            BundleCard,
           ),
         )
         ctx.slots.inject('shell.overlay', () =>
