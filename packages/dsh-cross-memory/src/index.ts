@@ -71,6 +71,8 @@ import { MEMORY_KINDS, MEMORY_SOURCE_KIND } from './types.js'
 import type { MemoryDraft, MemoryEntry, MemoryKind, MemoryScope, SessionMode } from './types.js'
 import type { RawExcerpt } from './raw-recall.js'
 import { registerMemoryTool } from './tool.js'
+import { PROPOSAL_ACTION, PROPOSAL_SKILL, registerProposalCard } from './cards.js'
+import type { ProposalCardRuntime, ProposalCards, ProposalSkills } from './cards.js'
 import { REMOTE_CONTRIBUTION, REMOTE_NAMESPACE, REMOTE_SERVICE, createRemoteService } from './remote.js'
 import type { TypertRegistryLike } from './remote.js'
 
@@ -973,9 +975,10 @@ export class MemoriesRuntime {
    * Apply every waiting decision.
    *
    * @param _parent - the agent asking; the stored rows carry their own scope.
-   * @returns a human-readable summary, or `undefined` when nothing is staged.
+   * @returns the command's report plus the counts the action-card decision
+   *   records, or `undefined` when nothing is staged.
    */
-  async applyPendingPlan(_parent: Agent): Promise<string | undefined> {
+  async applyPendingPlan(_parent: Agent): Promise<{ text: string; written: number; retired: number } | undefined> {
     const pending = await readPendingPlan(this.store.memoriesDir)
     if (pending === undefined) return undefined
     const root = pending.projectRoot.length > 0 ? pending.projectRoot : undefined
@@ -984,12 +987,29 @@ export class MemoriesRuntime {
       const result = await applyPlan(pending.plan, this.consolidationTarget(), root, { entries })
       await clearPendingPlan(this.store.memoriesDir)
       this.log.info('dsh-cross-memory: applied %d waiting consolidation decision(s): %d written, %d retired', pending.disputes.length, result.written, result.retired)
-      return `Applied ${pending.disputes.length} decision${pending.disputes.length === 1 ? '' : 's'}: ${result.written} written, ${result.retired} retired.`
+      return {
+        text: `Applied ${pending.disputes.length} decision${pending.disputes.length === 1 ? '' : 's'}: ${result.written} written, ${result.retired} retired.`,
+        written: result.written,
+        retired: result.retired,
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       this.log.warn('dsh-cross-memory: applying the waiting decisions failed: %s', message)
-      return `Applying them failed and the store was rolled back: ${message}`
+      return { text: `Applying them failed and the store was rolled back: ${message}`, written: 0, retired: 0 }
     }
+  }
+
+  /**
+   * Discard every waiting decision, leaving the store untouched.
+   *
+   * @returns how many decisions were dropped, or `undefined` when nothing was staged.
+   */
+  async rejectPendingPlan(): Promise<number | undefined> {
+    const pending = await readPendingPlan(this.store.memoriesDir)
+    if (pending === undefined) return undefined
+    await clearPendingPlan(this.store.memoriesDir)
+    this.log.info('dsh-cross-memory: discarded %d waiting consolidation decision(s)', pending.disputes.length)
+    return pending.disputes.length
   }
 
   /**
@@ -1049,6 +1069,11 @@ export class MemoriesRuntime {
       // retire" and nobody could see that 17 decisions were waiting.
       const needDecision = pending.disputes.length > 0 ? `, ${pending.disputes.length} need you` : ''
       lines.push(`Pending consolidation proposal for ${pending.label}: ${pending.plan.upserts.length} to write, ${pending.plan.retire.length} to retire${needDecision} — review with /memories plan, then /memories apply or /memories reject.`)
+      // The card is the in-answer path to the same question, but only the model
+      // decides to offer it: the skill has to be loaded in the turn and the
+      // block has to be the last thing in the answer. Naming the exact fields
+      // here is what keeps count/stagedAt honest instead of invented.
+      lines.push(`When the user asks about memory changes or pending decisions (记忆变更 / 待确认 / 待裁决), load the ${PROPOSAL_SKILL} skill first, then end the final answer with one \`action-card\` block for this proposal: action "${PROPOSAL_ACTION}", label ${JSON.stringify(pending.label)}, count ${pending.disputes.length}, stagedAt ${pending.at}.`)
     }
     // `dshHome` filters out drafts whose promoted copy is byte-identical: the
     // banner used to report already-promoted skills as pending forever.
@@ -3196,12 +3221,17 @@ export class MemoriesRuntime {
   /**
    * Speak without being asked, when there is something to say.
    *
-   * Two deterministic triggers only, for now: a daily line about what the plugin
-   * maintained, and a warning when decisions have waited long enough that the
-   * pending panel will drop them. Both are judgements a rule can make, which is
-   * why they are the first ones allowed to interrupt. Everything smarter (open
-   * loops, reflections) enters here later through the same queue, and the same
-   * rules apply: evidence or silence, and never the same subject twice.
+   * Two deterministic triggers: a daily line about what the plugin maintained,
+   * and a promise whose deadline has passed. Both are judgements a rule can
+   * make, which is why they are the ones allowed to interrupt. Everything
+   * smarter (reflections) enters here later through the same queue, and the
+   * same rules apply: evidence or silence, and never the same subject twice.
+   *
+   * A staged consolidation proposal no longer comes through this pump: its
+   * backlog branch could not reach the user in this deployment (macOS
+   * `osascript` is unavailable, so every delivery logged `no channel for notice
+   * backlog`), and the answer card plus the injected draft note are the
+   * confirmation path now.
    *
    * Called from the once-per-conversation hook and from the maintenance sweep. A
    * failure is logged and swallowed: speaking is never allowed to break a turn.
@@ -3241,23 +3271,7 @@ export class MemoriesRuntime {
           queue = { ...queue, lastDigestAt: now }
         }
       }
-      // 2. Backlog warning: unanswered decisions go stale and are dropped.
-      const pending = await readPendingPlan(dir).catch(() => undefined)
-      if (pending !== undefined && now - pending.at >= 12 * 3_600_000) {
-        const age = Math.round((now - pending.at) / 3_600_000)
-        const admitted = admitNotice(queue, {
-          kind: 'backlog',
-          createdAt: now,
-          dueAt: now,
-          title: `有 ${pending.disputes.length} 条记忆变更等你确认（已等 ${age} 小时，超时会丢弃）`,
-          body: pending.disputes.map((row) => `- [${row.action}] ${row.title}：${row.reason}`).join('\n'),
-          evidence: pending.disputes.map((row) => row.id),
-          dedupeKey: `backlog:${pending.disputes.length}`,
-        }, policy)
-        if (admitted.ok) queue = { ...queue, notices: [admitted.notice, ...queue.notices] }
-        else this.log.decision('dsh-cross-memory: notice suppressed (%s)', admitted.reason)
-      }
-      // 3. Open loops whose deadline has passed. This is the trigger that makes
+      // 2. Open loops whose deadline has passed. This is the trigger that makes
       // the assistant pro-active rather than reactive: it needs no question to
       // answer, only a promise the user made and has not closed.
       const loopNow = pruneLoops(await readLoops(dir), now)
@@ -4372,6 +4386,37 @@ export function apply(ctx: Context, config: MemoriesConfig = {}): void {
 
   runtime = new MemoriesRuntime(ctx, config, read)
   ctx.effect(() => () => runtime.dispose(), 'dsh-cross-memory.lifecycle')
+  // A staged consolidation proposal can also wait as an answer-embedded action
+  // card: the model offers it from its skill, and the buttons apply or discard
+  // the whole batch. Both services are optional, and an older action-card
+  // service has no `skillProvider`; in either case the command and the settings
+  // panel stay the only confirmation paths, which is the degradation this
+  // plugin has always supported.
+  ctx.inject(['actionCards', 'skills'], (child) => {
+    const { actionCards, skills } = child as unknown as {
+      actionCards?: ProposalCards
+      skills?: ProposalSkills
+    }
+    if (actionCards === undefined || skills === undefined) return
+    if (typeof actionCards.skillProvider !== 'function') {
+      log.info('dsh-cross-memory: the action-card service predates answer cards; the confirmation card is skipped')
+      return
+    }
+    const seam: ProposalCardRuntime = {
+      pending: async () => {
+        const pending = await readPendingPlan(runtime.store.memoriesDir).catch(() => undefined)
+        return pending === undefined
+          ? undefined
+          : { label: pending.label, count: pending.disputes.length, stagedAt: pending.at }
+      },
+      apply: async (agent) => {
+        const result = await runtime.applyPendingPlan(agent)
+        return result === undefined ? undefined : { written: result.written, retired: result.retired }
+      },
+      reject: () => runtime.rejectPendingPlan(),
+    }
+    child.effect(() => registerProposalCard(actionCards, skills, seam), 'dsh-cross-memory.proposalCard')
+  })
   // The consolidation child needs a composition of its own. Since 0.2.1-rc.2 a
   // subagent takes its tool set from the preset it names, and a child that
   // names none inherits the parent's composition — the parent's tools, which is
@@ -4738,11 +4783,13 @@ async function handleCommand(runtime: MemoriesRuntime, invocation: CommandInvoca
     }
     case 'apply': {
       const summary = await runtime.applyPendingPlan(invocation.agent)
-      return { kind: 'success', text: summary ?? 'No consolidation proposal is waiting.' }
+      return { kind: 'success', text: summary?.text ?? 'No consolidation proposal is waiting.' }
     }
     case 'reject': {
-      const dropped = await clearPendingPlan(runtime.store.memoriesDir)
-      return { kind: 'success', text: dropped ? 'Discarded the pending consolidation proposal. The store is unchanged.' : 'No consolidation proposal is waiting.' }
+      const dropped = await runtime.rejectPendingPlan()
+      return dropped === undefined
+        ? { kind: 'success', text: 'No consolidation proposal is waiting.' }
+        : { kind: 'success', text: `Discarded ${dropped} waiting decision${dropped === 1 ? '' : 's'}. The store is unchanged.` }
     }
     case 'mine': {
       const count = await runtime.mineNow(invocation.agent)

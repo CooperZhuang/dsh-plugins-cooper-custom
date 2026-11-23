@@ -44,6 +44,7 @@ dsh-cross-memory 把会话里值得长期保留的内容（偏好、决定、踩
 - 可以自动执行的是可逆改动：合并重复、收紧措辞、退役从没被读过的条目。可能丢信息的改写与退役进入**待裁决**：人手写、置顶或永久保留的条目，被读到过的退役，丢失正文里文件路径引用或正文不到原来一半的改写，都不会被静默处理。
 - 已在库里的条目不会换作用域，新记忆才由这一遍决定放在 `global` 还是 `project`。
 - 待裁决方案在 `consolidateProposalMaxAgeHours`（默认 72）小时后自动作废；`autoDecide`（默认开）允许 AI 先判断是否丢信息，置信度低于 `autoDecideMinConfidence`（默认 0.7）时仍然留给你。
+- 确认入口有三个，操作同一份 `pending/consolidation.json`：回答内的 `resolve_memory_proposal` 卡片（确认应用 / 拒绝 / 稍后）、设置页「待裁决」逐条处理、`/memories plan|apply|reject`。卡片由模型按 `memory-proposal` 技能在最终回答末尾用 `action-card` 块给出，`details` 只带当前提案的 `label`/`count`/`stagedAt`；点按钮前 Host 会先 reconcile，提案已被 `/memories`、设置页或新的一轮合并处理掉时卡片落 `settled-elsewhere`/`superseded`，不会重复应用。通知泵不再推送待确认积压（本机没有可用的 `osascript` 投递通道），待确认只走上面三个入口。
 - 两条记忆互相矛盾时，子代理把这一对列进冲突报告（保留哪条、丢弃哪条），而不是悄悄挑一个。
 - 合并会维护画像，`persona/human.lock` 存在时跳过；也会把重复流程提成技能草稿（每轮最多 2 个），草稿落在 `memories/skills/<name>/SKILL.md`，`/memories promote` 才复制到 `$DSH_HOME/skills/<name>/SKILL.md`；已晋升的文件比草稿新时，重复晋升会被拒绝。
 
