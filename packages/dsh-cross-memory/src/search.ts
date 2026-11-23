@@ -18,6 +18,10 @@
 import type { MemoryEntry, MemoryHit, MemoryKind, MemoryScope } from './types.js'
 import { queryMessages } from './query.js'
 import { parseTimeRange, within, type TimeRange } from './time.js'
+import { isNoise, termWeight, tokenize } from './tokenize.js'
+import { createBm25Index } from './bm25.js'
+
+export { tokenize, termWeight } from './tokenize.js'
 
 /** A CJK ideograph, including the extension blocks in common use. */
 const CJK = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/u
@@ -153,51 +157,6 @@ function sharedRuns(queryRuns: readonly string[], field: string, minimum: number
     }
   }
   return shared
-}
-
-/** Split text into searchable terms: ASCII words and CJK character bigrams.
- *
- * A CJK run also contributes bigrams of its neighbours, so "该插件是否有日志"
- * yields "该插","插件","件是","是否","否有","有日","日志". A one-character run
- * contributes itself, since a lone ideograph has no bigram.
- *
- * @param text - raw text.
- * @returns lowercase terms; a run that yields nothing contributes nothing.
- */
-export function tokenize(text: string): string[] {
-  const lower = text.toLowerCase()
-  const terms: string[] = []
-  for (const word of lower.match(WORD) ?? []) terms.push(word)
-  const chars = lower.match(CJK_CHAR) ?? []
-  if (chars.length === 1) terms.push(chars[0] as string)
-  for (let index = 0; index + 1 < chars.length; index += 1) {
-    terms.push(`${chars[index]}${chars[index + 1]}`)
-  }
-  return terms
-}
-
-/**
- * A term's weight for scoring purposes.
- *
- * One CJK bigram is a much weaker claim than one Latin word — "日志" occurs in
- * countless texts where "logging" does not — so a bigram earns less. Without
- * this every Chinese question would clear the recall gate on noise alone.
- *
- * @param term - one term from {@link tokenize}.
- * @returns a multiplier in `(0, 1]`.
- */
-export function termWeight(term: string): number {
-  const cjk = (term.match(CJK_CHAR) ?? []).length
-  if (cjk === 0) return 1
-  // Two-character bigram: half credit. A longer CJK term cannot occur (the
-  // tokenizer emits bigrams), but treat it as stronger if it ever does.
-  return cjk <= 2 ? 0.5 : Math.min(1, 0.5 + (cjk - 2) * 0.15)
-}
-
-/** A short token carries little signal and is skipped as a query term. */
-function isNoise(token: string): boolean {
-  if (CJK.test(token)) return false
-  return token.length < 2
 }
 
 /** Count occurrences of `needle` in `haystack`. */
@@ -1232,19 +1191,30 @@ export function searchMemories(
   // The injector keeps the opposite order on purpose: it volunteers memories
   // nobody asked for, and there the track record is the point. Both numbers are
   // computed here, so neither surface has to guess.
-  const hits: (MemoryHit & { readonly relevance: number })[] = []
+  const hits: (MemoryHit & { readonly relevance: number; readonly bm25: number })[] = []
+  // One index over every entry this search can see, so a global and a project
+  // entry are scored against the same document frequencies and their numbers
+  // are comparable. Per-scope indexes would make `dsh` cheap in the 1155-entry
+  // global scope and expensive in a 30-entry project scope, and the project
+  // entries would lose every tie they should win.
+  const pool: MemoryEntry[] = []
   for (const group of groups) {
     if (wantedScopes !== undefined && !wantedScopes.includes(group.scope)) continue
     for (const entry of group.entries) {
       if (wantedKinds !== undefined && !wantedKinds.includes(entry.kind)) continue
       if (wantedTags.length > 0 && !wantedTags.every((tag) => entry.tags.includes(tag))) continue
-      const { relevance, score } = rankEntry(entry, query, now, window)
-      if (relevance <= 0) continue
-      hits.push({ entry, score, relevance })
+      pool.push(entry)
     }
   }
-  const byWords = (left: MemoryHit & { readonly relevance: number }, right: MemoryHit & { readonly relevance: number }): number =>
-    right.relevance - left.relevance
+  const bm25 = createBm25Index(pool).score(query)
+  for (const entry of pool) {
+    const { relevance, score } = rankEntry(entry, query, now, window)
+    if (relevance <= 0) continue
+    hits.push({ entry, score, relevance, bm25: bm25.get(entry.id) ?? 0 })
+  }
+  const byWords = (left: (MemoryHit & { readonly relevance: number; readonly bm25: number }), right: (MemoryHit & { readonly relevance: number; readonly bm25: number })): number =>
+    right.bm25 - left.bm25
+    || right.relevance - left.relevance
     || right.score - left.score
     || right.entry.updatedAt - left.entry.updatedAt
     || left.entry.title.localeCompare(right.entry.title)
@@ -1264,7 +1234,14 @@ export function searchMemories(
   // this surface ranks in: a hop scored against the seed's attention score would
   // be sorting apples against oranges. The injector passes attention scores
   // instead, for the same reason.
-  const seeds = hits.slice(0, EXPAND_SEEDS)
+  // The seeds are the strongest hits in the currency the hop is paid in.
+  // `relatedHits` multiplies a seed's own score, so a seed picked by BM25 order
+  // would pass a BM25 number into a relevance formula; the relevance top three
+  // keeps the activation spreading from the entries the gatekeeper rated
+  // strongest, which is also what the expansion eval measured.
+  const seeds = [...hits]
+    .sort((left, right) => right.relevance - left.relevance || right.score - left.score)
+    .slice(0, EXPAND_SEEDS)
   const related = relatedHits(groups, seeds.map((hit) => ({ entry: hit.entry, score: hit.relevance })), {
     ...options,
     limit: EXPAND_MAX,
@@ -1274,28 +1251,34 @@ export function searchMemories(
   // one, and never carries `via`: it matched, and saying otherwise would be a
   // lie about the one thing the marker exists to state.
   const directById = new Map(hits.map((hit) => [hit.entry.id, hit]))
-  const merged: (MemoryHit & { readonly relevance: number })[] = [...hits]
+  type Ranked = MemoryHit & { readonly relevance: number; readonly bm25: number }
+  const merged: Ranked[] = [...hits]
   for (const hit of related) {
     const direct = directById.get(hit.entry.id)
     // A hop ranks in word units too (`hit.score`), but reports an attention
     // score like every other hit: `score` means one thing on every row, and the
     // row's *place* is decided by the other number.
     const attention = hit.score * importanceOf(hit.entry) * decayOf(hit.entry, now)
+    // A hop carries no BM25 of its own: it matched no query word, so it must
+    // sort behind everything the query did match rather than inherit the seed's
+    // number and displace a direct hit.
+    const hopScore = direct?.bm25 ?? 0
     if (direct === undefined) {
       merged.push({
         entry: hit.entry,
         score: attention,
         relevance: hit.score,
+        bm25: hopScore,
         ...hit.via === undefined ? {} : { via: hit.via },
       })
     } else if (hit.score > direct.relevance) {
-      merged.push({ entry: direct.entry, score: direct.score, relevance: hit.score })
+      merged.push({ entry: direct.entry, score: direct.score, relevance: hit.score, bm25: hopScore })
     }
   }
   // Keep the best record per id. The direct list comes first, so keeping the
   // first occurrence would silently discard every upgrade — which is exactly
   // what the first version of this did, and what the eval caught.
-  const unique = new Map<string, MemoryHit & { readonly relevance: number }>()
+  const unique = new Map<string, Ranked>()
   for (const hit of merged) {
     const previous = unique.get(hit.entry.id)
     if (previous === undefined || hit.relevance > previous.relevance) unique.set(hit.entry.id, hit)

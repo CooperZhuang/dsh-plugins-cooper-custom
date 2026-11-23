@@ -41,6 +41,19 @@ function stubAgent(session: Session): Agent {
   return { id: 'test-session', session, status: 'idle' } as unknown as Agent
 }
 
+/** One rendered section's text, located by its heading rather than its place.
+ *
+ * Project memories render before global ones, so a test that splits on the
+ * first `## ` would be asserting an order rather than a cap.
+ */
+function sectionOf(summary: string, heading: string): string {
+  const lines = summary.split('\n')
+  const start = lines.findIndex((line) => line.startsWith(`## ${heading}`))
+  if (start < 0) return ''
+  const end = lines.findIndex((line, at) => at > start && line.startsWith('## '))
+  return lines.slice(start, end < 0 ? lines.length : end).join('\n')
+}
+
 test('injection is once per conversation, not once per turn', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'dsh-cross-memory-inj-'))
   const runtime = new MemoriesRuntime(stubContext, { memoriesDir: dir, autoExtract: false })
@@ -202,7 +215,10 @@ test('the global section is capped so it cannot bury the project scope', async (
 
   const summary = await runtime.summary(agent.session)
   assert.ok(summary !== undefined)
-  const [globalPart, projectPart] = summary.split('\n## Project')
+  // Sections are parsed by heading, not by position: project memories render
+  // before global ones, because they are the ones about this workspace.
+  const globalPart = sectionOf(summary, 'Global memories')
+  const projectPart = sectionOf(summary, 'Project memories')
   const globalBullets = (globalPart ?? '').split('\n').filter((line) => line.startsWith('- ') && !line.startsWith('- …'))
   assert.equal(globalBullets.length, 2, 'the global half stops at its own cap')
   assert.match(projectPart ?? '', /This repo is special/u, 'and the project half still appears')
@@ -278,7 +294,7 @@ test('a never-surfaced backlog cannot swallow the shared global half', async (t)
 
   const summary = await runtime.summary(agent.session)
   assert.ok(summary !== undefined)
-  const [globalPart] = summary.split('\n## Project')
+  const globalPart = sectionOf(summary, 'Global memories')
   const freshShown = (globalPart ?? '').split('\n').filter((line) => /^- (?:📌 )?Newest note/u.test(line)).length
   const bullets = (globalPart ?? '').split('\n').filter((line) => line.startsWith('- ') && !line.startsWith('- …')).length
   assert.equal(bullets, 4, 'the global half still fills its own cap')

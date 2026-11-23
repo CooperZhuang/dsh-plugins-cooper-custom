@@ -41,8 +41,9 @@ const groups = [{ scope: 'global', label: 'global', entries: corpus }]
 
 /* ---------------------------------------------------------------- arms ---- */
 
-/** Arm 1: the shipped scorer. `searchMemories` also filters, so a gated-out
- * target simply never appears — which is the behaviour under test. */
+/** Arm 1: the shipped scorer. Since 2026-11-23 `searchMemories` ranks by BM25,
+ * so this arm and the `bm25` arm differ only in the one-hop expansion and the
+ * attention tie-break — identical numbers are the expected result, not a bug. */
 function armCurrent(query) {
   return searchMemories(groups, query, { limit: LIMIT }).map((hit) => hit.entry.id)
 }

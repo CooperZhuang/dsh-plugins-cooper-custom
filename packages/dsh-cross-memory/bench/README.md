@@ -39,8 +39,8 @@ node bench/real/sample.mts               # 真实会话取样 → 出题 → 三
 node bench/verify-doc.mts
 ```
 
-三份 bench 文档共用这一份判定：脚本只读 `bench/data/` 与题库源码，逐项打印 `PASS` / `MISMATCH` / `UNVERIFIABLE`，有 `MISMATCH` 时退出码非 0。当前 123 项里 PASS 99 项、UNVERIFIABLE 24 项、无 `MISMATCH`。
+三份 bench 文档共用这一份判定：脚本只读 `bench/data/` 与题库源码，逐项打印 `PASS` / `MISMATCH` / `UNVERIFIABLE`，有 `MISMATCH` 时退出码非 0。当前 124 项里 PASS 100 项、UNVERIFIABLE 24 项、无 `MISMATCH`。
 
-可复算：语料 732 条、`queries-a` / `queries-b` 各 75 条、`queries-a` 上出厂打分 R@1 = 75/75、dense 缓存的模型 `qwen3-embedding:0.6b` 与 1024 维。
+可复算：语料 732 条、`queries-a` / `queries-b` 各 75 条、`queries-a` 上 current 臂 R@1 = 73/75（2026-11-23 排序层改 BM25 后；改前词法排序是 75/75）、dense 缓存的模型 `qwen3-embedding:0.6b` 与 1024 维。
 
 不能复算：「项目作用域的 150 个目标只命中 2 条」对应的命中比对没有留存产物，`bench/data/sample.json` 只有 150 条抽样，不要把 2 条这个数当成可验证的结论引用。

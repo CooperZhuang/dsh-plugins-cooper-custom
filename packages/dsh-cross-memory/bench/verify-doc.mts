@@ -175,7 +175,7 @@ function batchTopOne(arm, size) {
   return hits
 }
 
-check('bench queries-a 上 current 臂 R@1 75/75', 75, batchTopOne('current', 75))
+check('bench queries-a 上 current 臂 R@1 73/75（BM25 排序后）', 73, batchTopOne('current', 75))
 
 // 「dense 臂用 qwen3-embedding:0.6b（1024 维）」，缓存以 base64 float32 存盘。
 function embeddingShape(cache) {
@@ -220,9 +220,9 @@ check('e2e bank v2 哈希前缀 23876acceb0e', '23876acceb0e', BANK_HASH.slice(0
 // bank v1 的哈希只能核对结果文件里的记录值：题面已被 v2 改过，无法重算。
 check('e2e bank v1 哈希前缀 9cece6602e01（结果文件记录值）', '9cece6602e01', e2eBankV1?.bankHash?.slice(0, 12))
 
-// 「冒烟只跑 2 个场景」：e2e-results.json 现在的哈希应等于题库前 2 题的哈希。
-check('e2e 冒烟结果只含 2 个场景', 2, e2eSmoke?.scenarios)
-check('e2e 冒烟结果哈希对应题库前 2 题', bankHash(BANK.slice(0, 2)).slice(0, 12), e2eSmoke?.bankHash?.slice(0, 12))
+// 「e2e-results.json 现在是 2026-11-10 的全量 53 题运行」：哈希应等于 bank v2。
+check('e2e 当前结果为 bank v2 全量 53 题', 53, e2eSmoke?.scenarios)
+check('e2e 当前结果哈希对应 bank v2', BANK_HASH.slice(0, 12), e2eSmoke?.bankHash?.slice(0, 12))
 
 // 第 1–3 轮与 3′ 的结果文件已被冒烟与重判覆盖。
 unverifiable('e2e 轮 1 memory/rag/closed 21/23、22/23、0/23 与费用 ¥0.117', '首轮结果文件没有留存')
@@ -274,9 +274,10 @@ checkNumber('e2e 只重跑答案约 ¥0.13', 0.13, e2eBankV1?.usage?.estimatedCn
 // 「上下文约 4KB」= run.mts 的 SUMMARY_BYTES。
 check('e2e memory 臂上下文上限 4096B（约 4KB）', 4096, sourceConstant('e2e/run.mts', 'SUMMARY_BYTES'))
 
-// 「谷时」：留存结果都应记录 offPeak=true。
-const e2eReports = [e2eBankV1, e2eBankV1Regraded, e2eV2Regraded, e2eSmoke].filter((report) => report !== undefined)
-check('e2e 留存结果均记录谷时（offPeak=true）', true, e2eReports.length === 0 ? undefined : e2eReports.every((report) => report.offPeak === true))
+// 「谷时」：早期留存结果记录 offPeak=true；2026-11-10 的全量运行是非谷时补跑。
+const e2eReports = [e2eBankV1, e2eBankV1Regraded, e2eV2Regraded].filter((report) => report !== undefined)
+check('e2e 早期留存结果均记录谷时（offPeak=true）', true, e2eReports.length === 0 ? undefined : e2eReports.every((report) => report.offPeak === true))
+check('e2e 当前全量结果记录非谷时（offPeak=false）', false, e2eSmoke?.offPeak)
 unverifiable('e2e 第 1 轮那 23 题与当前 scenarios.mts 逐字节一致', '改动前的题库没有留存，无法做字节比对')
 
 /* -------------------------------------------------- bench/real/README.md --- */
