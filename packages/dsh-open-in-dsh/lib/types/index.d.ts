@@ -34,11 +34,22 @@ export interface EventStream {
 }
 /** One incoming HTTP request handler, as `webServer.register` takes it. */
 export type RouteHandler = (request: IncomingMessage, response: ServerResponse) => void | Promise<void>;
-/** The exact-route row this plugin registers. */
+/** The `auth` policy a WebServer route accepts since DSH 0.2.2-rc.2. */
+export type WebAuthPolicy = 'anonymous' | 'required' | 'deny';
+/**
+ * The exact-route row this plugin registers.
+ *
+ * Every route here is a loopback-fenced callback for this machine's own
+ * launcher scripts (Finder/Explorer, macOS `open` helper) rather than a page
+ * fetch, so each one declares `auth: 'anonymous'`: DSH 0.2.2-rc.2 made
+ * `required` the default and the TCP launchers have no cookie to present
+ * (`401`). The handlers keep their own loopback + same-origin fences.
+ */
 export interface ExactRoute {
     kind: 'exact';
     path: string;
     handler: RouteHandler;
+    auth?: WebAuthPolicy;
 }
 /** The `webServer` service slice the plugin uses. */
 export interface WebServerService {
