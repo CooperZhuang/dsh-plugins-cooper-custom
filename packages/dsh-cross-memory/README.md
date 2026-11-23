@@ -72,6 +72,16 @@ dsh plugin --profile <profile> add /path/to/packages/dsh-cross-memory
 - **怎么编辑**：**设置 → 记忆 → 画像**，改完点「保存画像」即写回，不经过后台合并，不用重启宿主。
 - **锁定**：同一页勾选「锁定画像」会在画像旁边写 `persona/human.lock`；锁定后后台 consolidation 即使提出画像改写也会跳过（日志会记 `persona is locked; the automatic profile update was skipped`），只有你手动保存才会改变它。取消勾选即解除。
 
+### 确认合并提案
+
+后台合并把「可能丢信息」的改动留在待确认里。除了 **设置 → 记忆 → 待裁决** 和 `/memories plan|apply|reject`，现在还可以直接在回答里确认：
+
+1. 问助手「记忆变更 / 待确认 / 待裁决」。
+2. 助手加载 `memory-proposal` 技能，在最终回答末尾给出一张卡片，显示范围、待确认条数和生成时间。
+3. 点「确认应用」整批应用，「拒绝」整批丢弃，「稍后」保留待确认。
+
+卡片只在确实存在待确认提案时出现。出卡依赖模型按技能格式在回答末尾写出 `action-card` 块；模型没写就没有卡片，旧入口照常可用。三个入口操作的是同一份 `pending/consolidation.json`，进度一致。
+
 更细的设计说明见 [`docs/DETAIL.zh.md`](docs/DETAIL.zh.md)（英文版 [`docs/DETAIL.md`](docs/DETAIL.md)）。
 
 ## 配置
@@ -200,7 +210,7 @@ $DSH_HOME/memories/
 - **后台模型调用**会经过你配置的模型路由（默认沿用会话自己的路由）。抽取输入是会话尾部，只取用户与助手正文，丢弃工具结果和插件注入的内容，避免记忆自噬；落盘前做密钥擦除（`sk-…`、`ghp_…`、`AKIA…`、JWT、私钥块、`api_key=…`、`Bearer …` 等）。
 - **注入的内容是背景数据，不是指令**：注入块会明确告诉模型，记忆记录的是写入时的事实，不一定现在仍成立。
 - **原始片段是 opt-in**：`rawRecall` 默认关闭；打开后补注块会附带来源会话的原文（只读本机会话日志）。
-- **通知可选**：默认通过操作系统通知提醒（每日摘要、积压警告、到期承诺），`noticeQuietHours` 可设置静默时段，`noticesEnabled: false` 完全关闭。通知投递目前只在 macOS 生效（走 `osascript`）；其他平台投递失败，通知仍留在队列里，可用 `/memories notices` 查看。
+- **通知可选**：默认通过操作系统通知提醒（每日摘要、到期承诺），`noticeQuietHours` 可设置静默时段，`noticesEnabled: false` 完全关闭。通知投递目前只在 macOS 生效（走 `osascript`）；其他平台投递失败，通知仍留在队列里，可用 `/memories notices` 查看。
 - **彻底关掉后台行为**：`autoExtract: false`、`consolidate: false`、`reflectionEnabled: false`；再设 `maxSummaryBytes: 0` 或 `recallMode: off` 就只剩 `memory` 工具与 `/memories` 命令。
 - 归档与合并只动 `$DSH_HOME` 下的文件；归档条目可 `restore`，合并失败的改动会回滚。
 

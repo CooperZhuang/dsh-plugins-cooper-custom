@@ -6,7 +6,7 @@
  * `factory(require)`, and mounts the exported plugin (`apply` + `inject`) into
  * the browser Cordis tree.
  *
- * It contributes two surfaces, both fed by the same pieces:
+ * It contributes three surfaces, fed by the same pieces:
  *
  *   - the **Memories page** (`settings.section`): it lists, searches, adds, and
  *     deletes memories through the Remote namespace the host registers, and it
@@ -16,6 +16,9 @@
  *     on the Plugins page, between the description and the rows — where the
  *     official plugins put their configuration. The card is reused verbatim;
  *     only its registration is new.
+ *   - the **confirmation card body** (`ctx.actionCards.register`, since 0.2.9):
+ *     the buttons of the `resolve_memory_proposal` card the Host kind offers in
+ *     an answer. Without this body the shell's frame would offer only Not now.
  *
  * Both edit the entry's own live form, so the two editors can never disagree.
  * The page keeps its menu: it is a feature surface, not a configuration menu.
@@ -47,9 +50,25 @@ function createPlugin(require) {
   const React = require('react')
   const Card = createMemoriesCard(React)
   const Section = createMemoriesSection(React, Card)
+  const ProposalCard = createProposalCardBody(React)
 
   const apply = async (ctx) => {
     ensureStyles()
+    // The consolidation confirmation card: the shell's action-card frame finds
+    // this body by the action the Host kind registered. Both services are
+    // optional — an older shell keeps the memories page and simply offers no
+    // card body (its frame would show Not now alone), which is the same
+    // degradation the page already documents.
+    if (typeof ctx.inject === 'function') {
+      ctx.inject(['actionCards', 'locale'], (child) => {
+        child.effect(() => child.locale.register(PROPOSAL_CARD_LOCALE, PROPOSAL_COPY), 'dsh-cross-memory.proposalLocale')
+        child.effect(() => child.actionCards.register({
+          action: PROPOSAL_CARD_ACTION,
+          locale: PROPOSAL_CARD_LOCALE,
+          Body: ProposalCard,
+        }), 'dsh-cross-memory.proposalCard')
+      })
+    }
     // The form is shared with every other editor of this entry and owned by the
     // settings provider, so this half only subscribes to it (inside
     // `useSnapshot`) and never disposes it.
