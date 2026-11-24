@@ -191,6 +191,10 @@ export interface SessionPersistenceStatLike {
     /**
      * 只读观察一条会话：一次 stat + 一次头部读，**不解压事件日志**。
      * 会话不存在时返回 undefined。
+     *
+     * 调用方必须写成 `persistence.stat(id)`：内核实现依赖 `this`
+     * （`this.ensureRootEncoding()` / `this.tracker` / `this.findLog`），摘成游离
+     * 函数调用会拿到 `this === undefined`，直接抛 TypeError。
      */
     stat?: ((sessionId: string) => Promise<StoredSessionSnapshotLike | undefined>) | undefined;
     /** 压缩格式（jsonl 后端为 `'zstd'`；未压缩为空字符串）。 */

@@ -743,6 +743,10 @@ export interface SessionPersistenceStatLike {
   /**
    * 只读观察一条会话：一次 stat + 一次头部读，**不解压事件日志**。
    * 会话不存在时返回 undefined。
+   *
+   * 调用方必须写成 `persistence.stat(id)`：内核实现依赖 `this`
+   * （`this.ensureRootEncoding()` / `this.tracker` / `this.findLog`），摘成游离
+   * 函数调用会拿到 `this === undefined`，直接抛 TypeError。
    */
   stat?: ((sessionId: string) => Promise<StoredSessionSnapshotLike | undefined>) | undefined
   /** 压缩格式（jsonl 后端为 `'zstd'`；未压缩为空字符串）。 */
@@ -880,11 +884,18 @@ export async function sessionHealth(
     resident: residentOf(holds, id),
     running: runningOf(holds, id),
   }
-  const stat = source.persistence?.stat
-  if (typeof stat !== 'function') return { ...base, reason: 'persistence-unavailable' }
+  // 必须**在接收者上**调用：内核 JSONL 后端的 `stat` 是原型方法，方法体第一句读
+  // `this.ensureRootEncoding()`（还有 `this.tracker` / `this.findLog`）。摘成游离函数
+  // 再 `stat(id)` 会以 `this === undefined` 调用，抛
+  // `Cannot read properties of undefined (reading 'ensureRootEncoding')`——
+  // 0.2.4 的「会话日志」section 就是这么整块报「读取失败」的。
+  const persistence = source.persistence
+  if (typeof persistence?.stat !== 'function') {
+    return { ...base, reason: 'persistence-unavailable' }
+  }
   let snapshot: StoredSessionSnapshotLike | undefined
   try {
-    snapshot = await stat(id)
+    snapshot = await persistence.stat(id)
   } catch (error) {
     return { ...base, reason: 'read-failed', message: messageOf(error) }
   }

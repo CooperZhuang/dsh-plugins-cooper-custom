@@ -229,6 +229,59 @@ test('health：返回与 stat 一致的 path / sizeBytes，并带上压缩格式
   })
 })
 
+/**
+ * 内核真身形状的假后端：`stat` 是**原型方法**，方法体依赖 `this`。
+ *
+ * 0.2.4 的 health 路由写成 `const stat = persistence.stat` 再 `stat(id)`，`this` 变成
+ * `undefined`；内核 JSONL 后端的 `stat` 第一句是 `this.ensureRootEncoding()`，于是抛
+ * `Cannot read properties of undefined (reading 'ensureRootEncoding')`，面板整块显示
+ * 「读取失败」。用同一形状把「必须绑在接收者上调用」这条契约锁住。
+ */
+class KernelShapedPersistence {
+  #rootEncodingCheck
+
+  constructor(logPath) {
+    this.logPath = logPath
+  }
+
+  /** 内核同名方法：确保每轮 stat 都先走一遍根编码检查。 */
+  ensureRootEncoding() {
+    this.#rootEncodingCheck ??= Promise.resolve()
+    return this.#rootEncodingCheck
+  }
+
+  async stat(id) {
+    await this.ensureRootEncoding()
+    return {
+      header: { id },
+      sizeBytes: 1,
+      formatStatus: 'current',
+      location: { kind: 'jsonl', path: this.logPath },
+    }
+  }
+}
+
+test('health：stat 必须绑在接收者上调用（内核 stat 依赖 this，摘出来就抛 TypeError）', async () => {
+  await inSandbox(async ({ home }) => {
+    const logPath = writeSession(home, 'session-health')
+    const mounted = await mount({
+      persistence: new KernelShapedPersistence(logPath),
+      registry: fakeRegistry(['session-health']),
+    })
+    try {
+      const { status, body } = await callHealth(mounted.base, { sessionId: 'session-health' })
+      assert.equal(status, 200)
+      assert.equal(body.ok, true)
+      assert.equal(body.value.found, true)
+      assert.equal(body.value.reason, undefined)
+      assert.equal(body.value.path, logPath)
+      assert.equal(body.value.sizeBytes, 1)
+    } finally {
+      await mounted.close()
+    }
+  })
+})
+
 test('health：会话不存在时返回 200 + found:false + reason:not-found（不是裸异常）', async () => {
   await inSandbox(async ({ home }) => {
     const logPath = writeSession(home, 'session-health')

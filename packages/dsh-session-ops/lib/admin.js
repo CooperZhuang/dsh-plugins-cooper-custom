@@ -604,12 +604,18 @@ export async function sessionHealth(sessionId, source, holds) {
         resident: residentOf(holds, id),
         running: runningOf(holds, id),
     };
-    const stat = source.persistence?.stat;
-    if (typeof stat !== 'function')
+    // 必须**在接收者上**调用：内核 JSONL 后端的 `stat` 是原型方法，方法体第一句读
+    // `this.ensureRootEncoding()`（还有 `this.tracker` / `this.findLog`）。摘成游离函数
+    // 再 `stat(id)` 会以 `this === undefined` 调用，抛
+    // `Cannot read properties of undefined (reading 'ensureRootEncoding')`——
+    // 0.2.4 的「会话日志」section 就是这么整块报「读取失败」的。
+    const persistence = source.persistence;
+    if (typeof persistence?.stat !== 'function') {
         return { ...base, reason: 'persistence-unavailable' };
+    }
     let snapshot;
     try {
-        snapshot = await stat(id);
+        snapshot = await persistence.stat(id);
     }
     catch (error) {
         return { ...base, reason: 'read-failed', message: messageOf(error) };
