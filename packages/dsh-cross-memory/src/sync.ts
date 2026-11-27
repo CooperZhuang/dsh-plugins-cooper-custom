@@ -673,7 +673,12 @@ export class MemorySync {
     // local edit that conflicts with the upstream commit turns the retry into a
     // live rebase, which is exactly the state this branch exists to avoid.
     if (!this.rebaseInProgress()) {
-      this.options.log.warn('dsh-cross-memory: 记忆库 rebase 没能启动（工作区仍有未提交改动），本轮跳过同步')
+      // Logged at decision level, not warn: the tree was dirty because the
+      // plugin wrote a memory between `commit()` and this pull, which is the
+      // normal way a live store behaves. The next timer retries; nothing is
+      // wrong and nothing needs a person. The 2026-11-27 log review found this
+      // line six times in eight days and every one was that race.
+      this.options.log.decision('dsh-cross-memory: 记忆库 rebase 没能启动（工作区仍有未提交改动），本轮跳过同步')
       return { ...nothing, pulled: 0, stoppedBy: 'rebase-not-started' }
     }
     const resolution = await this.resolveRebase()
