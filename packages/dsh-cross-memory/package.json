@@ -9,6 +9,9 @@
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
+  "bin": {
+    "dsh-cross-memory-mcp": "./lib/mcp.js"
+  },
   "exports": {
     ".": {
       "types": "./lib/types/index.d.ts",
@@ -16,6 +19,10 @@
     },
     "./client": {
       "default": "./lib/client.js"
+    },
+    "./mcp": {
+      "types": "./lib/types/mcp.d.ts",
+      "default": "./lib/mcp.js"
     },
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"

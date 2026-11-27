@@ -127,9 +127,9 @@ export async function embed(texts: readonly string[], options: DenseOptions): Pr
   const BATCH = 16
   for (let start = 0; start < missing.length; start += BATCH) {
     const batch = missing.slice(start, start + BATCH)
+    const vectors = await callService(options.url, options.model, batch.map((item) => item.text))
     for (let index = 0; index < batch.length; index += 1) {
-      const vectors = await callService(options.url, options.model, [batch[index]!.text])
-      cache.vectors[batch[index]!.key] = encode(vectors[0]!)
+      cache.vectors[batch[index]!.key] = encode(vectors[index]!)
     }
   }
   if (missing.length > 0) {

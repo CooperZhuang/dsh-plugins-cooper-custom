@@ -28,6 +28,7 @@
  *
  * @module dsh-cross-memory/sync
  */
+import { dedupePersona, isNearDuplicateBullet } from './persona.js'
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
@@ -176,19 +177,27 @@ export function isPersonaPath(path: string): boolean {
 }
 
 /**
- * Merge two versions of a persona file as a bullet union.
+ * Merge two versions of a persona file as a deduplicated bullet union.
  *
  * A persona file is headings plus bullet lists; both machines append their own
- * observations, so a line-level union keeps every rule either machine recorded.
- * Bullets are matched on their trimmed text (duplicates are dropped), inserted
- * after the last bullet of the same section, and a whole section that only
- * `theirs` has is appended at the end. Non-bullet lines come from `ours`.
+ * observations, so a section-aware union keeps every rule either machine
+ * recorded. Bullets are matched not only on exact text but also on near-duplicate
+ * token overlap within the same section — otherwise a consolidation pass that
+ * tightens wording on one machine causes the next sync to append the older
+ * phrasing beside it and double every section. Non-bullet lines come from `ours`.
  */
 export function mergePersona(ours: string, theirs: string): string {
-  const result = ours.split('\n')
-  const seen = new Set<string>()
+  const result = dedupePersona(ours).split('\n')
+  const sectionBullets = new Map<string, string[]>()
+  let oursSection = ''
   for (const line of result) {
-    if (line.startsWith('- ')) seen.add(line.trim())
+    if (line.startsWith('#')) {
+      oursSection = line.trim()
+    } else if (line.startsWith('- ')) {
+      const list = sectionBullets.get(oursSection) ?? []
+      list.push(line.trim())
+      sectionBullets.set(oursSection, list)
+    }
   }
   // Bucket the bullets that only the other side has, by their section heading.
   const pending = new Map<string, string[]>()
@@ -197,14 +206,16 @@ export function mergePersona(ours: string, theirs: string): string {
     if (line.startsWith('#')) section = line.trim()
     else if (line.startsWith('- ')) {
       const key = line.trim()
-      if (seen.has(key)) continue
-      seen.add(key)
+      const existing = sectionBullets.get(section) ?? []
+      if (existing.some((item) => isNearDuplicateBullet(item, key))) continue
+      existing.push(key)
+      sectionBullets.set(section, existing)
       const bucket = pending.get(section) ?? []
       bucket.push(line)
       pending.set(section, bucket)
     }
   }
-  if (pending.size === 0) return ours
+  if (pending.size === 0) return result.join('\n')
   // Insert each bucket after the last line that belongs to its section.
   const sectionRanges: Array<{ heading: string; start: number; end: number }> = []
   let current: { heading: string; start: number; end: number } | undefined
@@ -230,7 +241,7 @@ export function mergePersona(ours: string, theirs: string): string {
     if (heading !== '') result.push('', heading)
     result.push(...bucket)
   }
-  return result.join('\n')
+  return dedupePersona(result.join('\n'))
 }
 
 /**

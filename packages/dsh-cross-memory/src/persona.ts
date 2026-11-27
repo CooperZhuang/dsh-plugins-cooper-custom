@@ -62,11 +62,99 @@ export async function readPersona(memoriesDir: string): Promise<string | undefin
   return body !== undefined && body.length > 0 ? body : undefined
 }
 
+/** A Latin/digit/underscore word run. */
+const PERSONA_LATIN = /^[0-9a-z_]+$/u
+
+/** Split a persona bullet into normalized tokens (Latin words + CJK chars/bigrams). */
+function personaTokens(line: string): Set<string> {
+  const body = line.replace(/^\s*[-*]\s+/u, '').toLowerCase()
+  const tokens = new Set<string>()
+  for (const raw of body.split(/[^\p{L}\p{N}_]+/u)) {
+    if (raw.length === 0) continue
+    if (PERSONA_LATIN.test(raw)) {
+      tokens.add(raw)
+      continue
+    }
+    const chars = [...raw]
+    for (const char of chars) tokens.add(char)
+    for (let i = 0; i + 1 < chars.length; i += 1) tokens.add(`${chars[i]}${chars[i + 1]}`)
+  }
+  return tokens
+}
+
+/**
+ * Whether two persona bullets express the same rule (rephrased or tightened).
+ *
+ * A consolidation pass often tightens a bullet's wording on one machine while
+ * another machine still holds the older phrasing. Exact-string matching treats
+ * both as distinct rules and doubles every section on sync. Token overlap +
+ * containment catches rewrites without merging genuinely different rules.
+ */
+export function isNearDuplicateBullet(left: string, right: string): boolean {
+  const a = left.trim()
+  const b = right.trim()
+  if (a === b) return true
+  const ta = personaTokens(a)
+  const tb = personaTokens(b)
+  const smaller = Math.min(ta.size, tb.size)
+  // Short bullets (e.g. "- 左机的规则" vs "- 右机的规则") share most of their
+  // tokens through a common suffix; only full-sentence rules are candidates for
+  // fuzzy deduplication.
+  if (smaller < 12) return false
+  let shared = 0
+  for (const token of ta) if (tb.has(token)) shared += 1
+  if (shared < 10) return false
+  const jaccard = shared / (ta.size + tb.size - shared)
+  if (jaccard >= 0.48) return true
+  const containment = shared / smaller
+  return containment >= 0.72
+}
+
+/**
+ * Deduplicate exact and near-duplicate bullets inside each section of a persona
+ * markdown document, keeping the earlier bullet when two bullets state the same
+ * rule. Also collapses repeated blank lines.
+ */
+export function dedupePersona(body: string): string {
+  const out: string[] = []
+  let sectionBullets: string[] = []
+  let prevBlank = false
+  for (const rawLine of body.split('\n')) {
+    const line = rawLine.trimEnd()
+    if (line.startsWith('#')) {
+      sectionBullets = []
+      if (out.length > 0 && !prevBlank) out.push('')
+      out.push(line)
+      prevBlank = false
+      continue
+    }
+    if (/^\s*[-*]\s+/u.test(line)) {
+      if (sectionBullets.some((existing) => isNearDuplicateBullet(existing, line))) continue
+      sectionBullets.push(line)
+      out.push(line)
+      prevBlank = false
+      continue
+    }
+    if (line.trim() === '') {
+      if (out.length === 0 || prevBlank) continue
+      out.push('')
+      prevBlank = true
+      continue
+    }
+    out.push(line)
+    prevBlank = false
+  }
+  while (out.length > 0 && out[out.length - 1] === '') out.pop()
+  return out.join('\n')
+}
+
 /**
  * Replace the profile atomically.
  *
  * A half-written profile is worse than a stale one — it would be injected into
  * every conversation — so the write goes through a temp file and a rename.
+ * Deduplicates near-identical bullets within each section before persisting so
+ * neither consolidation nor multi-machine sync can double the profile.
  *
  * @param memoriesDir - the memory store root.
  * @param body - the new markdown profile.
@@ -76,7 +164,8 @@ export async function writePersona(memoriesDir: string, body: string): Promise<s
   const target = personaPath(memoriesDir)
   await mkdir(dirname(target), { recursive: true })
   const temp = `${target}.${process.pid}.${Date.now().toString(36)}.tmp`
-  await writeFile(temp, `${body.trim()}\n`, 'utf8')
+  const cleaned = dedupePersona(body.trim())
+  await writeFile(temp, `${cleaned}\n`, 'utf8')
   await rename(temp, target)
   return target
 }

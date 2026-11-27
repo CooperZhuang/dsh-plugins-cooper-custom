@@ -1636,7 +1636,7 @@ export class MemoriesRuntime {
     // returns an empty map and the lexical order stands.
     if (this.settings.denseEnabled && eligible.length > 1) {
       const dense = await denseScores(
-        states.flatMap((state) => state.entries),
+        eligible.map((item) => item.entry),
         query,
         { url: DEFAULT_DENSE_URL, model: DEFAULT_DENSE_MODEL, cacheDir: this.denseCacheDir() },
       )

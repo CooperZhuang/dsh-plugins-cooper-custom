@@ -11,6 +11,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import type { Context } from '@deepseek-ai/cordis'
 import type { MemoriesRuntime } from './index.js'
+import { redactSecrets } from './extract.js'
 import { renderEntry, renderEvidence, renderHit } from './render.js'
 import type { MemoryScope } from './types.js'
 
@@ -172,12 +173,12 @@ export function registerMemoryTool(ctx: Context, runtime: MemoriesRuntime): () =
           }
           const result = await runtime.write(session, {
             scope: args.scope,
-            title: title.slice(0, 120),
-            body,
+            title: redactSecrets(title).slice(0, 120),
+            body: redactSecrets(body),
             tags: args.tags ?? [],
             ...args.kind === undefined ? {} : { kind: args.kind },
             ...args.keys === undefined ? {} : { keys: args.keys },
-            ...args.appliesTo === undefined ? {} : { appliesTo: args.appliesTo },
+            ...args.appliesTo === undefined ? {} : { appliesTo: redactSecrets(args.appliesTo) },
             ...args.durability === undefined ? {} : { durability: args.durability },
             ...asOf === undefined ? {} : { asOf },
             ...args.pinned === undefined ? {} : { pinned: args.pinned },

@@ -164,6 +164,9 @@ test('redactSecrets removes credential-shaped text and keeps prose', () => {
   assert.equal(redactSecrets('AWS AKIAABCDEFGHIJKLMNOP here'), 'AWS [redacted] here')
   assert.equal(redactSecrets('Authorization: Bearer abcdefghijklmnopqrstuvwxyz'), 'Authorization: [redacted]')
   assert.equal(redactSecrets('api_key = "supersecretvalue"'), '[redacted]')
+  assert.equal(redactSecrets('路由器管理密码 402402402，登录后取 token'), '路由器[redacted]，登录后取 token')
+  assert.equal(redactSecrets('默认口令是 Mubea2026!，旧口令已被黑名单拦截'), '[redacted]，旧口令已被黑名单拦截')
+  assert.equal(redactSecrets('快照里的口令未知，密码不对或命中弱口令黑名单'), '快照里的口令未知，密码不对或命中弱口令黑名单')
   assert.equal(redactSecrets('plain prose about pnpm'), 'plain prose about pnpm')
 })
 

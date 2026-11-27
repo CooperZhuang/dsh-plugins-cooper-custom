@@ -14,10 +14,10 @@ dsh-cross-memory 把会话里值得长期保留的内容（偏好、决定、踩
 每个会话按顺序拿到下面这些块，每块都有自己的预算：
 
 1. `<persona>`：用户画像快照，预算 `personaMaxBytes`（默认 12000 字节，`0` 关闭），超长部分按行截断。旧的单文件 `persona.md` 仍会被读取，保存后写到 `persona/human.md`。
-2. 记忆摘要：在 `maxSummaryBytes`（默认 4096）内分 `global` 与 `project` 两段；两段共用一个字节预算，`global` 先渲染，另有 `globalSummaryEntries` 与 `globalSummaryBytes` 限制它的大小。
+2. 记忆摘要：在 `maxSummaryBytes`（默认 8192）内分 `global` 与 `project` 两段；两段共用一个字节预算，`global` 先渲染，另有 `globalSummaryEntries` 与 `globalSummaryBytes` 限制它的大小。
 3. 增量块：摘要注入之后新写入的记忆以小块补发（`injectDelta`，每会话最多两次、每次 `deltaMaxBytes` 默认 1600 字节；一条完整条目约 200–350 字节，旧的 800 只装得下一两条）。
 4. 标题轮转：只列摘要没提到的标题，每会话 `rotationEntries`（默认 16）条，同一个长会话里每 `rotationEveryTurns`（默认 8）个用户轮重新发一次。
-5. 按需补注：当前用户轮与某条记忆的标题、`keys`、`tags`、`appliesTo` 命中足够多的实词（或整句短语命中）才会注入（`recallMinTerms` 默认 2、`recallMinScore` 默认 9、每会话最多 `recallMaxPerConversation` 条）；在单个作用域里出现比例超过 `evidenceMaxDf`（默认 0.15）的词不计入证据。严格门没过时还有一道别名回退：只对 `keys` 与 `appliesTo` 计分、只要求一个实词、门槛按 `ALIAS_FLOOR_SHARE`（0.5）缩放（默认 9 的一半），最多补 2 条，注入块里会写明「按别名匹配」。它存在的原因是用户常按「另一个名字」提问，那种回合只共享一个词，会被两词门槛挡掉。门槛必须缩放不能共用：一个中文别名词在这两个字段里最多得 6 分，用同一个 9 分门槛就等于只对英文提问生效。同一别名只登记在一个字段里（3.5 分）仍然不补，正文里的词从不参与这条路径。
+5. 按需补注：当前用户轮与某条记忆的标题、`keys`、`tags`、`appliesTo` 命中足够多的实词（或整句短语命中）才会注入（`recallMinTerms` 默认 1、`recallMinScore` 默认 6、每会话最多 `recallMaxPerConversation` 条）；在单个作用域里出现比例超过 `evidenceMaxDf`（默认 0.15）的词不计入证据。严格门没过时还有一道别名回退：只对 `keys` 与 `appliesTo` 计分、只要求一个实词、门槛按 `ALIAS_FLOOR_SHARE`（0.5）缩放，最多补 2 条，注入块里会写明「按别名匹配」。它存在的原因是用户常按「另一个名字」提问，门槛缩放可避免中文单别名在两个字段里最高 6 分被拦掉。同一别名只登记在一个字段里（3.5 分）仍然不补，正文里的词从不参与这条路径。
 6. 原始片段：`rawRecall` 打开时，补注块附带来源会话的原文片段，只读本机会话日志。
 
 注入块都写明记忆是背景数据、不是指令，并且记录的是写入时成立的事实，可能已经过期。
@@ -50,9 +50,9 @@ dsh-cross-memory 把会话里值得长期保留的内容（偏好、决定、踩
 
 ## 保留与归档
 
-- `maxUnusedDays`（默认 90）内没有被读到、没有被注入摘要、也不是新写的记忆会被归档；归档不是删除，`/memories restore` 可以取回。
-- `durability=snapshot` 的条目另按 `snapshotMaxAgeDays`（默认 60）从测量时间起算归档，被读一次不会让读数变新。
-- `maxEntriesPerScope`（默认 1000）是每个作用域的上限，超出时归档最久没有被读到或注入的条目；`pinned`、`permanent` 与 `source=user` 的条目不会被自动退役，所以作用域可能略超上限。
+- `maxUnusedDays`（默认 `0` 关闭；设为正数后启用）内没有被读到、没有被注入摘要、也不是新写的记忆会被归档；归档不是删除，`/memories restore` 可以取回。
+- `durability=snapshot` 的条目另按 `snapshotMaxAgeDays`（默认 `0` 关闭；设为正数后启用）从测量时间起算归档，被读一次不会让读数变新。
+- `maxEntriesPerScope`（默认 `0` 不限制；设为正数后启用）是每个作用域的上限，超出时归档最久没有被读到或注入的条目；`pinned`、`permanent` 与 `source=user` 的条目不会被自动退役，所以作用域可能略超上限。
 - 每个作用域的 `archive/` 目录只保留最新的 500 个文件，更早的归档会被清理。
 - `sessions/` 下的证据笔记只保留最新的 200 份，更早的会被清掉；笔记不在时 `evidence` 会直接说明没有这份证据笔记，而不是编造内容。
 - `/memories forget` 与 `memory` 工具的 `forget` 是**物理删除**，不可恢复。

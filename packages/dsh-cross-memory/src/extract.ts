@@ -129,6 +129,7 @@ export const EXTRACT_SYSTEM = [
   'NO POINTER MEMORIES: do not write 「详见 docs/某报告」「见某文档 §5」 and do not store a review report as a pointer to itself. The body must carry the FACT — the mechanism, the number, the decision, the trap — so a later session can act without opening anything. A pointer is only worth writing when the fact is nowhere else and the document is the authority; even then, state the fact first and name the document as a reference.',
   'ORDER what you keep by value, and keep at most the requested number: 约定/承诺 > 日期/改口/冲突 > 身份/称呼/边界/第三方人物与变化 > 偏好/计划 > 其他明确事实. Greetings, small talk, repeated restatements and ordinary daily log flow are not worth a memory; when nothing qualifies, return nothing rather than padding.',
   'REPORTS: when the transcript is an implementation/audit/review report (often a subagent\'s), record what the report LEARNED — the mechanism, the interface trap, the root cause, the measured result, the open gap — and skip what it was ASKED to do: the task boundary ("只改这 5 个文件", "不要 git commit"), the verification commands, the review verdict, the commit hash. Those expire with the task; the finding does not.',
+  'NO ROUTINE PATROL LOGS: do NOT record single readings from routine patrols or daily health checks — such as today\'s disk size (".dsh 1.72 GiB"), "0 items cleaned / no changes today", or periodic app-update check counts ("19 项有更新", "某软件仍未升级"). Only record a durable root cause, a new rule, or a structural change discovered during a patrol.',
   '',
   'Write every title and body in Simplified Chinese. Keep paths, commands, identifiers, product names and error strings exactly as they are.',
   'The injected summary shows only the title and roughly the first 100 characters of the body (the budget forces short previews), so lead with the trigger and the decision; put the detail after.',
@@ -288,6 +289,7 @@ const SECRET_PATTERNS: readonly RegExp[] = [
   /\beyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]{10,}\b/gu,
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/gu,
   /\b(?:api[_-]?key|apikey|access[_-]?token|auth[_-]?token|client[_-]?secret|password|passwd|secret|token)\b\s*[:=]\s*["']?[^\s"',;]{8,}["']?/giu,
+  /(?:(?:管理|登录|管理员|默认|root|wifi|路由器)?(?:密码|口令))\s*(?:[:=：为是]\s*|\s+)(?![不无别空未缺占位示例])["'「『]?[A-Za-z0-9!@#$%^&*_.-]{4,}["'」』]?/giu,
   /\bBearer\s+[\w.-]{20,}/gu,
 ]
 
