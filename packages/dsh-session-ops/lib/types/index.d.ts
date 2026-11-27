@@ -44,11 +44,11 @@
  * @module dsh-session-ops
  */
 import z from '@deepseek-ai/schemastery';
-import { ADMIN_API_PREFIX, createSessionAdmin, isInside, isTrustedRequest as isTrustedAdminRequest, mountAdmin } from './admin.js';
+import { ADMIN_API_PREFIX, __setDirOpenerForTests, createSessionAdmin, isInside, isTrustedRequest as isTrustedAdminRequest, mountAdmin, openSessionDir, sessionHealth, systemDirOpener } from './admin.js';
 import { MOVE_API_PREFIX, isTrustedRequest as isTrustedMoveRequest, mountForkMembershipRepair, mountMove, sweepForkChildrenOnBoot } from './move.js';
 import type { WorkspaceRegistryLike } from './store/registry.js';
 import type { SessionPersistenceLike } from './move.js';
-export { ADMIN_API_PREFIX, MOVE_API_PREFIX, createSessionAdmin, isInside, isTrustedAdminRequest, isTrustedMoveRequest, mountAdmin, mountForkMembershipRepair, mountMove, sweepForkChildrenOnBoot, };
+export { ADMIN_API_PREFIX, MOVE_API_PREFIX, __setDirOpenerForTests, createSessionAdmin, isInside, isTrustedAdminRequest, isTrustedMoveRequest, mountAdmin, mountForkMembershipRepair, mountMove, openSessionDir, sessionHealth, sweepForkChildrenOnBoot, systemDirOpener, };
 /**
  * 搬迁半边原来的公开名（`dsh-session-move` 的 `API_PREFIX = '/session-move/api'`）。
  *

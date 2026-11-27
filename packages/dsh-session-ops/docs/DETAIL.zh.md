@@ -17,8 +17,8 @@
 
 在会话标题栏的会话面板里注册一个只读 section：槽 `conversation.session.panel.section`、id `dsh-session-ops:session`、order 350（排在 environment 0 / change-requests 100 / subagents 200 / shared-tasks 250 / background-jobs 300 之后）。
 
-- 数据面：`/session-admin/api/health`，一次 `ctx.sessionPersistence.stat(sessionId)` 返回 `path` / `sizeBytes` / `compression` / `formatStatus` / `workspaceId` / `resident` / `running`。
-- 不 list、不 scan、不整读日志（`readStoredLog` 会解压整条帧链）；面板里只有刷新，深度检查留给后续。
+- 数据面：`/session-admin/api/health`，一次 `ctx.sessionPersistence.stat(sessionId)` 返回 `path` / `dir` / `sizeBytes` / `compression` / `formatStatus` / `workspaceId` / `resident` / `running`。
+- 不 list、不 scan、不整读日志（`readStoredLog` 会解压整条帧链）；面板显示日志**目录**，并提供「打开目录」按钮（`/session-admin/api/openDir`）：浏览器只传 sessionId，目录由 Host 从 stat 结果推导，没有任意路径打开能力；打开失败在面板内显示一句话。深度检查留给后续。
 - 会话不存在、宿主没有 `stat`、`stat` 抛错都返回 200 + `{found:false, reason}`；非法 id（空串、路径分隔符等）返回 400 结构化错误。
 - 0.2.1 宿主不声明该槽：注册挂起、不报错，其余入口照旧。
 

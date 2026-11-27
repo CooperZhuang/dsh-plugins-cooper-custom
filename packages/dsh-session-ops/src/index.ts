@@ -53,10 +53,14 @@ import {
 } from './store/host.js'
 import {
   ADMIN_API_PREFIX,
+  __setDirOpenerForTests,
   createSessionAdmin,
   isInside,
   isTrustedRequest as isTrustedAdminRequest,
   mountAdmin,
+  openSessionDir,
+  sessionHealth,
+  systemDirOpener,
 } from './admin.js'
 import {
   MOVE_API_PREFIX,
@@ -72,6 +76,7 @@ import { messageOf } from './store/util.js'
 export {
   ADMIN_API_PREFIX,
   MOVE_API_PREFIX,
+  __setDirOpenerForTests,
   createSessionAdmin,
   isInside,
   isTrustedAdminRequest,
@@ -79,7 +84,10 @@ export {
   mountAdmin,
   mountForkMembershipRepair,
   mountMove,
+  openSessionDir,
+  sessionHealth,
   sweepForkChildrenOnBoot,
+  systemDirOpener,
 }
 
 /**

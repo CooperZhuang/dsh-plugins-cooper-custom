@@ -219,6 +219,8 @@ export interface SessionHealth {
     found: boolean;
     /** 会话日志的物理路径；后端没有实体文件（未落盘）时为 null。 */
     path: string | null;
+    /** 会话日志所在目录（`dirname(path)`）；后端没有实体文件时为 null。 */
+    dir: string | null;
     /** 物理文件字节数；后端给不出时为 null。 */
     sizeBytes: number | null;
     /** 压缩格式（`'zstd'` / `''` 未压缩）；后端不暴露时为 null。 */
@@ -249,6 +251,42 @@ export interface SessionHealth {
  * @throws 会话 id 不合法（交给路由层转 400）。
  */
 export declare function sessionHealth(sessionId: unknown, source: HealthSource, holds: Holds): Promise<SessionHealth>;
+/** 打开一个目录的宿主动作（默认调用系统文件管理器；测试可替换）。 */
+export type DirOpener = (dir: string) => Promise<void>;
+/**
+ * 用系统文件管理器打开目录：macOS `open`、Windows `explorer`、其余 `xdg-open`。
+ *
+ * `detached + unref` 让子进程脱离 Host 的生命周期——面板点一下不该在 Host 里留下
+ * 一个常驻子进程；只等 `spawn` 事件确认命令确实起来，不等它退出。
+ * @returns 打开动作。
+ */
+export declare function systemDirOpener(): DirOpener;
+/**
+ * 仅供测试：替换/还原 {@link openSessionDir} 使用的系统打开动作。
+ * @param opener - 假的打开动作；传 undefined 还原为真实实现。
+ */
+export declare function __setDirOpenerForTests(opener: DirOpener | undefined): void;
+/** `/session-admin/api/openDir` 的结果。 */
+export interface OpenDirResult {
+    ok: boolean;
+    /** 打开（或失败时想打开）的目录。 */
+    dir?: string | null;
+    /** `ok:false` 的机器可读原因。 */
+    reason?: 'not-found' | 'persistence-unavailable' | 'read-failed' | 'no-directory' | 'open-failed';
+    /** `open-failed` 时的错误正文。 */
+    message?: string;
+}
+/**
+ * 在系统文件管理器里打开一条会话的日志目录。
+ *
+ * 目录由 Host 从 `sessionPersistence.stat()` 的结果推导，**浏览器不能传任意路径**——
+ * 这个动作只可能打开本机会话日志所在目录，不构成通用的「打开任意文件夹」接口。
+ * @param sessionId - 请求里的会话 id（会先校验，非法时抛给路由层转 400）。
+ * @param source - 持久化后端与归属查询。
+ * @param holds - `{resident, running}`。
+ * @returns 结构化结果（`ok` + `dir` / 失败原因）。
+ */
+export declare function openSessionDir(sessionId: unknown, source: HealthSource, holds: Holds): Promise<OpenDirResult>;
 /**
  * Host cordis 上下文里删除半边用到的那部分（最小本地接口，见 `src/index.ts` 的说明）。
  */
