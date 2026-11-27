@@ -237,6 +237,15 @@ test('renderConsolidationInput groups by scope and lists ids', () => {
   assert.match(text, /## project/u)
   assert.match(text, /id: g1/u)
   assert.match(text, /id: p1/u)
+
+  const withSkills = renderConsolidationInput(
+    [entry({ id: 'g1', title: 'Global one', body: 'g', scope: 'global' })],
+    'project:demo',
+    undefined,
+    [{ name: 'homebrew-upgrade-repair', description: 'Homebrew 升级修复流程' }],
+  )
+  assert.match(withSkills, /## Existing skill drafts/u)
+  assert.match(withSkills, /homebrew-upgrade-repair: Homebrew 升级修复流程/u)
 })
 
 test('parsePlan keeps only ids that exist and drops self-contradictory retirements', () => {

@@ -51,7 +51,7 @@ export const CONSOLIDATE_SYSTEM = [
   '- A problem that is already fixed is recorded as fixed ("已修 in <commit>"); never leave it reading as an open problem.',
   '- Write each body as 1-4 self-contained sentences. Titles are short and imperative.',
   '',
-  'When two or more memories together describe a repeatable procedure that would be worth running again, also return it as a skill: a short kebab-case name, a one-line description, and the ordered steps. Skills are drafts a human promotes; return at most 2.',
+  'When two or more memories together describe a repeatable procedure that would be worth running again, also return it as a skill: a short kebab-case name, a one-line description, and the ordered steps. Skills are drafts a human promotes; return at most 2. If "Existing skill drafts" are listed in the input and one already covers the same workflow, either reuse its EXACT name to refine it or omit it — never invent a synonymous new skill name.',
   '',
   'When two memories contradict each other, do not quietly pick one: list the pair under "conflicts" with the id to keep, the id to drop, and one sentence saying what disagrees. A memory from the user ("voice: user") beats one the assistant concluded, and the newer statement beats the older — unless a rule is permanent, in which case name the pair and drop the OTHER one. "conflicts" is a report as much as an instruction: it is how the user finds out they changed their mind.',
   'Also maintain "persona": a short profile of the USER, in markdown, built only from what they themselves said. The input marks those entries with "voice: user" and may include the current profile — refine it in place, do not rewrite it from nothing, deduplicate any repeated or near-identical bullets within each section (keep only the single sharpest version; never append a rephrased copy of an existing bullet), and keep it under 40 lines. Contents: how they want work done, the corrections they have issued, how they write, what they care about, and what they never want. Write it in the third person ("他要求…"), never as instructions to yourself. If no entry carries voice: user, and no current profile exists, omit the field entirely.',
@@ -170,6 +170,7 @@ export function renderConsolidationInput(
   entries: readonly MemoryEntry[],
   projectLabel: string,
   currentPersona?: string,
+  existingSkills?: readonly { readonly name: string; readonly description: string }[],
 ): string {
   const sections = new Map<MemoryScope, MemoryEntry[]>()
   for (const entry of entries) {
@@ -181,6 +182,13 @@ export function renderConsolidationInput(
   if (currentPersona !== undefined && currentPersona.trim().length > 0) {
     blocks.push('## Current profile of the user (refine it; do not rewrite it from nothing)')
     blocks.push(currentPersona.trim(), '')
+  }
+  if (existingSkills !== undefined && existingSkills.length > 0) {
+    blocks.push('## Existing skill drafts (reuse exact name to refine; never invent a synonymous new name)')
+    for (const skill of existingSkills) {
+      blocks.push(`- ${skill.name}${skill.description.length > 0 ? `: ${skill.description}` : ''}`)
+    }
+    blocks.push('')
   }
   for (const scope of ['global', 'project'] as const) {
     const list = sections.get(scope)
@@ -448,6 +456,8 @@ export interface ConsolidateRequest {
   readonly entries: readonly MemoryEntry[]
   /** The profile as it stands, so the pass refines it rather than re-inventing it. */
   readonly persona?: string
+  /** Existing skill drafts so the pass reuses names instead of creating duplicates. */
+  readonly existingSkills?: readonly { readonly name: string; readonly description: string }[]
   /** Model-facing project label. */
   readonly projectLabel: string
   /** Cap on returned memories. */
@@ -634,7 +644,7 @@ export function denyToolsFor(available: ReadonlySet<string>): string[] {
 export async function runConsolidation(seam: SubagentSeam, request: ConsolidateRequest): Promise<ConsolidationPlan | undefined> {
   if (request.entries.length === 0) return undefined
   const known = new Set(request.entries.map((entry) => entry.id))
-  const input = renderConsolidationInput(request.entries, request.projectLabel, request.persona)
+  const input = renderConsolidationInput(request.entries, request.projectLabel, request.persona, request.existingSkills)
   const timeout = AbortSignal.any([request.signal, AbortSignal.timeout(request.timeoutMs)])
   const prompt = [{ type: 'text' as const, text: `${CONSOLIDATE_SYSTEM}\n\n---\n\n${input}` }]
   const answer = await runChild(seam, prompt, request, timeout)
@@ -831,7 +841,7 @@ export async function runConsolidationDirect(llm: LlmRuntime, request: Consolida
   const route = request.route
   if (route === undefined) return undefined
   const known = new Set(request.entries.map((entry) => entry.id))
-  const input = renderConsolidationInput(request.entries, request.projectLabel, request.persona)
+  const input = renderConsolidationInput(request.entries, request.projectLabel, request.persona, request.existingSkills)
   const messages = [createUserMessage({
     content: [{ type: 'text', text: input }],
     source: { kind: MEMORY_SOURCE_KIND },

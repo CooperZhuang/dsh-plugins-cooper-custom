@@ -170,6 +170,24 @@ test('redactSecrets removes credential-shaped text and keeps prose', () => {
   assert.equal(redactSecrets('plain prose about pnpm'), 'plain prose about pnpm')
 })
 
+test('mustCoverCandidates skips routine patrol readings and parseExtraction reads closedLoops', () => {
+  const candidates = mustCoverCandidates([
+    { seq: 1, text: '2026-11-27 巡检：.dsh 1.72 GiB，无待归位会话、0 项清理，今日无变化。' },
+    { seq: 2, text: '2026-11-27 版本对比巡检：19 项有更新，免费 9 付费 8。' },
+    { seq: 3, text: '约定：生产包必须只发 .pyc 并附带 sha256 清单，发布前先跑全量回放。' },
+  ])
+  assert.equal(candidates.length, 1)
+  assert.equal(candidates[0]?.seq, 3)
+
+  const parsed = parseExtraction(JSON.stringify({
+    memories: [],
+    loops: [],
+    closedLoops: ['loop-1f2eibj', 'loop-1f2eibj', ''],
+    summary: 'done',
+  }), 5, 's1')
+  assert.deepEqual(parsed.closedLoops, ['loop-1f2eibj'])
+})
+
 test('parseExtraction keeps the string keys and drops the rest', () => {
   const parsed = parseExtraction('{"memories":[{"scope":"global","title":"Prefer pnpm","body":"Use pnpm.","keys":["monorepo",7]}]}', 5, 'session-1')
   assert.deepEqual([...parsed.drafts[0]?.keys ?? []], ['monorepo'])

@@ -2764,6 +2764,13 @@ export class MemoriesRuntime {
           window,
           projectLabel,
           ...knownTitles.length === 0 ? {} : { knownTitles },
+          ...await readLoops(this.store.memoriesDir).then((ledger) => {
+            const open = ledger.loops
+              .filter((loop) => loop.state === 'open')
+              .slice(-25)
+              .map((loop) => ({ id: loop.id, text: loop.text }))
+            return open.length === 0 ? {} : { openLoops: open }
+          }).catch(() => ({})),
           ...this.settings.extractProvider.length > 0 && this.settings.extractModel.length > 0
             ? { provider: this.settings.extractProvider, model: this.settings.extractModel }
             : {},
@@ -2826,7 +2833,7 @@ export class MemoriesRuntime {
         }).catch((error: unknown) => {
           this.log.warn('dsh-cross-memory: could not write the evidence note for session %s: %o', key, error)
         })
-        await this.recordLoops(key, outcome.loops)
+        await this.recordLoops(key, outcome.loops, outcome.closedLoops)
         this.log.info('dsh-cross-memory: stored %d memories from session %s (%s)%s%s', outcome.drafts.length, key, stored.join(', '), spend,
           outcome.truncated === true ? ` — the reply hit the ${this.settings.extractMaxOutputTokens}-token cap and was salvaged; raise extractMaxOutputTokens to keep the rest` : '')
         // A pass that always lands on the cap is a pass whose ceiling is the
@@ -3501,16 +3508,28 @@ export class MemoriesRuntime {
    * lifecycle and a deadline, it is never recalled by retrieval, and its id must
    * stay stable across rewrites so one promise cannot become three reminders.
    */
-  private async recordLoops(sessionKey: string, candidates: readonly { text: string; dueAt?: number }[]): Promise<void> {
-    if (candidates.length === 0) return
+  private async recordLoops(
+    sessionKey: string,
+    candidates: readonly { text: string; dueAt?: number }[],
+    closedIds: readonly string[] = [],
+  ): Promise<void> {
+    if (candidates.length === 0 && closedIds.length === 0) return
     try {
       const dir = this.store.memoriesDir
       const now = Date.now()
-      const current = pruneLoops(await readLoops(dir), now)
-      const next = mergeLoops(current, candidates, now, sessionKey)
+      let current = pruneLoops(await readLoops(dir), now)
+      let closed = 0
+      for (const id of closedIds) {
+        const outcome = closeLoop(current, id)
+        if (outcome.closed !== undefined) {
+          current = outcome.store
+          closed += 1
+        }
+      }
+      const next = candidates.length > 0 ? mergeLoops(current, candidates, now, sessionKey) : current
       await writeLoops(dir, next)
-      this.log.info('dsh-cross-memory: open loops now %d (from %d candidate(s))',
-        next.loops.filter((loop) => loop.state === 'open').length, candidates.length)
+      this.log.info('dsh-cross-memory: open loops now %d (from %d candidate(s), %d closed)',
+        next.loops.filter((loop) => loop.state === 'open').length, candidates.length, closed)
     } catch (error) {
       this.log.warn('dsh-cross-memory: could not record open loops: %s', error instanceof Error ? error.message : String(error))
     }
@@ -3728,6 +3747,9 @@ export class MemoriesRuntime {
       // The profile as it stands, so the pass refines it instead of re-inventing
       // one every six hours. Read before the call: the pass writes it back.
       ...await readPersona(this.store.memoriesDir).then((text) => text === undefined ? {} : { persona: text }),
+      ...await listDrafts(this.store.memoriesDir, this.deployment.dshHome).then((drafts) =>
+        drafts.length === 0 ? {} : { existingSkills: drafts.map((d) => ({ name: d.name, description: d.description })) },
+      ).catch(() => ({})),
       projectLabel: root === undefined ? NO_PROJECT_LABEL : this.store.target('project', root).label,
       maxUpserts: this.settings.consolidateMaxEntries,
       // The deny list only reaches the pre-0.2.1 seam, whose request still

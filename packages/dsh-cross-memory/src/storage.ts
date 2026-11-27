@@ -1200,7 +1200,16 @@ export class MemoryStore {
     if (explicit !== undefined && explicit.length > 0) supersedes = explicit
     else if (similar !== undefined) {
       const previous = await this.read(draft.scope, projectRoot, similar)
-      supersedes = previous !== undefined && carriesForward(previous, draft) ? similar : undefined
+      if (previous !== undefined) {
+        if (carriesForward(previous, draft)) {
+          supersedes = similar
+        } else if (source === 'auto') {
+          // A background extraction that re-derives an existing memory under a
+          // re-worded title with LESS detail/tags must not create a second file:
+          // keep the richer existing entry intact and skip the redundant copy.
+          return { entry: previous, action: 'updated' }
+        }
+      }
     }
     // Evidence binding is tied to the exact body it supported. A draft that
     // carries a verified quote (automatic extraction) sets it; a rewrite that

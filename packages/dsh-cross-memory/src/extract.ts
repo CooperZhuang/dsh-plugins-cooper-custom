@@ -172,8 +172,9 @@ export const EXTRACT_SYSTEM = [
   '- "dueAt" only when a deadline was actually said, as ISO date or date-time. Never invent one: a loop without a deadline is a note, and nagging somebody about a note turns help into supervision.',
   '- PROGRESS: when the user reports that part of an existing obligation is done ("先还一件，还剩两件"), the loop text MUST be the REMAINING part with the original promise\'s wording kept ("还剩两件夜班见闻（原欠三件）"), because the ledger recognises it as the same promise and replaces the old amount. A loop that still states the full original amount ("三天内讲完欠的三件") is WRONG after a progress report: it leaves the ledger owing what is already done. Skip the obligation entirely only when nothing is left.',
   '- Skip what the session shows as already done, and skip the assistant\'s own to-dos. An empty array is the normal result.',
+  '- CLOSING LOOPS: when "Current open loops" are listed below and the transcript clearly shows one of them has been completed, return its exact id in "closedLoops":[string]. Only close a loop when the transcript proves it is done.',
   'Prefer few high-value memories over many trivial ones. Return at most the requested number. If the transcript only supports three, return three: padding a short session with one-off detail is how noise gets into the store and pushes real memories out of the summary.',
-  'Reply with JSON only, no prose and no code fence: {"memories":[{"scope":"global"|"project","kind":string,"title":string,"body":string,"tags":string[],"keys":string[],"entities":string[],"appliesTo":string,"quote":string,"voice":"user"|"assistant"}],"loops":[{"text":string,"dueAt":string?}],"summary":string}',
+  'Reply with JSON only, no prose and no code fence: {"memories":[{"scope":"global"|"project","kind":string,"title":string,"body":string,"tags":string[],"keys":string[],"entities":string[],"appliesTo":string,"quote":string,"voice":"user"|"assistant"}],"loops":[{"text":string,"dueAt":string?}],"closedLoops":[string],"summary":string}',
   'Write the "memories" array first and the "summary" paragraph last: the reply is capped, and a summary written first can spend the whole budget before the first memory is complete.',
   'Write "summary" as one paragraph (2-4 sentences) saying what this session was about — the task, the decisions, and anything that would help someone judge the memories above later. It is stored as the evidence behind them.',
   'When nothing is worth remembering, reply exactly {"memories":[],"summary":""}.'
@@ -233,6 +234,10 @@ export const EXTRACT_JSON_SCHEMA = {
           dueAt: { type: 'string' },
         },
       },
+    },
+    closedLoops: {
+      type: 'array',
+      items: { type: 'string' },
     },
     summary: { type: 'string' },
   },
@@ -476,8 +481,8 @@ export function resolveLlmRoute(
  * @param sessionId - session the drafts came from, recorded as provenance.
  * @returns the drafts, the evidence summary, and how many were over the cap.
  */
-export function parseExtraction(text: string, maxMemories: number, sessionId: string): { drafts: MemoryDraft[]; loops: { text: string; dueAt?: number }[]; summary: string; dropped: number } {
-  const result = { drafts: [] as MemoryDraft[], loops: [] as { text: string; dueAt?: number }[], summary: '', dropped: 0 }
+export function parseExtraction(text: string, maxMemories: number, sessionId: string): { drafts: MemoryDraft[]; loops: { text: string; dueAt?: number }[]; closedLoops: string[]; summary: string; dropped: number } {
+  const result = { drafts: [] as MemoryDraft[], loops: [] as { text: string; dueAt?: number }[], closedLoops: [] as string[], summary: '', dropped: 0 }
   const trimmed = text.trim().replace(/^```(?:json)?\s*/iu, '').replace(/```$/u, '').trim()
   const start = trimmed.indexOf('{')
   const end = trimmed.lastIndexOf('}')
@@ -489,7 +494,7 @@ export function parseExtraction(text: string, maxMemories: number, sessionId: st
     return result
   }
   if (typeof parsed !== 'object' || parsed === null || !('memories' in parsed)) return result
-  const envelope = parsed as { memories: unknown; loops?: unknown; summary?: unknown }
+  const envelope = parsed as { memories: unknown; loops?: unknown; closedLoops?: unknown; summary?: unknown }
   if (typeof envelope.summary === 'string') {
     result.summary = redactSecrets(envelope.summary.replace(/\s+/gu, ' ').trim()).slice(0, 1_200)
   }
@@ -555,6 +560,9 @@ export function parseExtraction(text: string, maxMemories: number, sessionId: st
   result.drafts = usable.slice(0, Math.max(0, maxMemories))
   result.dropped = usable.length - result.drafts.length
   result.loops = parseLoops(envelope.loops)
+  result.closedLoops = Array.isArray(envelope.closedLoops)
+    ? [...new Set(envelope.closedLoops.filter((id): id is string => typeof id === 'string' && id.trim().length > 0).map((id) => id.trim()))].slice(0, 20)
+    : []
   return result
 }
 
@@ -733,7 +741,10 @@ const ANNOTATED_DATE = /^（\d{4}-\d{2}-\d{2}）/u
  * shape as the reference implementation this was adapted from.
  */
 const WORK_SALIENCE_STRONG = /今天|明天|昨天|前天|后天|大后天|下周|上周|这周|月底|月初|年初|年底|星期[一二三四五六日天]|周[一二三四五六日天]|\d{1,2}\s*[月日号]|\d{4}\s*[-/年]|\d{1,2}\s*[点时]|答应|约定|承诺|说好|提醒|记得|别忘|改口|说错|更正|其实|矛盾|两版|之前说|截止|到期|欠|借|还|决定|口径|规范|流程|必须|一律|禁止|不得|要求|确认|验收|发布|上线|部署|迁移|升级|回滚|报价|人天|合同|投标|方案|需求|修复|缺陷|根因|新增|改动|实现|评审|审计|测试|用例|报告|接口|字段|脚本|版本|提交|合并|分支|构建/gu
-const WORK_SALIENCE_WEAK = /叫|称呼|名字|负责|接手|登记|换|工作|职业|同事|师傅|老板|客户|供应商|喜欢|讨厌|不吃|不要|不能|不想|边界|打算|计划|准备|要去|想去|巡检|接口|字段|配置|权限|分支|提交|合并|构建|报错|异常|失败|超时|崩溃|日志|数据|数据库|表|文件|目录|路径|仓库|服务|端口|环境|依赖|锁|并发|幂等|回执|部署|切页|归档|回填|识别|查验|投递|生成|打包|镜像|快照/gui
+const WORK_SALIENCE_WEAK = /叫|称呼|名字|负责|接手|登记|换|工作|职业|同事|师傅|老板|客户|供应商|喜欢|讨厌|不吃|不要|不能|不想|边界|打算|计划|准备|要去|想去|接口|字段|配置|权限|分支|提交|合并|构建|报错|异常|失败|超时|崩溃|日志|数据|数据库|表|文件|目录|路径|仓库|服务|端口|环境|依赖|锁|并发|幂等|回执|部署|切页|归档|回填|识别|查验|投递|生成|打包|镜像|快照/gui
+
+/** Routine patrol / daily health-check readings that must not be promoted to must-cover. */
+const PATROL_NOISE_TURN = /(?:今日无变化|0\s*项清理|无待归位会话|版本对比巡检.*\d+\s*项|巡检.*\b\d+(?:\.\d+)?\s*(?:GiB|GB|MB)\b|\b\d+(?:\.\d+)?\s*(?:GiB|GB|MB)\b.*巡检)/u
 
 /** The salience score of one text: strong hits count double. */
 function workSalience(text: string): number {
@@ -759,6 +770,7 @@ export function mustCoverCandidates(
   max = 6,
 ): { seq: number; score: number; snippet: string }[] {
   const rows = sources
+    .filter((source) => !PATROL_NOISE_TURN.test(source.text))
     .map((source) => ({
       seq: source.seq,
       score: workSalience(source.text),
@@ -843,6 +855,8 @@ export interface ExtractionRequest {
    * the title differently and ids come from titles.
    */
   readonly knownTitles?: readonly string[]
+  /** Open loops currently tracked, so the extractor can close completed ones. */
+  readonly openLoops?: readonly { readonly id: string; readonly text: string }[]
   /** Explicit route override. */
   readonly provider?: string
   readonly model?: string
@@ -892,6 +906,8 @@ export type ExtractionOutcome =
     readonly drafts: readonly MemoryDraft[]
     /** Promises the user made that are still open. */
     readonly loops: readonly { text: string; dueAt?: number }[]
+    /** Ids of previously open loops that this transcript shows are now done. */
+    readonly closedLoops?: readonly string[]
     /** What the session was about, stored as the evidence behind the drafts. */
     readonly summary: string
     /** Usable drafts the reply offered beyond `maxMemories`, reported to the caller. */
@@ -985,6 +1001,7 @@ export async function runExtraction(llm: LlmRuntime, request: ExtractionRequest)
   if (route === undefined) return { kind: 'none', reason: 'no-route' }
   const maxMemories = effectiveMaxMemories(request.maxMemories, request.window.messages)
   const known = request.knownTitles ?? []
+  const openLoops = request.openLoops ?? []
   const framed = [
     `Workspace scope label: ${request.projectLabel}`,
     `Today's date is ${localDate()} (the user's local date). Resolve every relative time in the transcript against it.`,
@@ -994,6 +1011,11 @@ export async function runExtraction(llm: LlmRuntime, request: ExtractionRequest)
       'Memories already stored in the scopes this pass writes to:',
       ...known.map((title) => `- ${title}`),
       'If the transcript adds to (or corrects) one of those, reuse its EXACT title so that entry is updated instead of duplicated. Only invent a new title for a genuinely new fact.',
+    ],
+    ...openLoops.length === 0 ? [] : [
+      '',
+      'Current open loops (return an id in "closedLoops" ONLY if the transcript clearly shows it is now DONE):',
+      ...openLoops.map((loop) => `- [${loop.id}] ${loop.text}`),
     ],
     // The must-cover list is built locally from the window, so it costs no model
     // call: the turns most likely to be skipped (a new person, a changed name, a
@@ -1059,6 +1081,7 @@ export async function runExtraction(llm: LlmRuntime, request: ExtractionRequest)
         kind: 'memories',
         drafts: timed,
         loops: salvaged.loops,
+        ...salvaged.closedLoops.length === 0 ? {} : { closedLoops: salvaged.closedLoops },
         summary: salvaged.summary,
         dropped: salvaged.dropped,
         unsupported: bound.unsupported,
@@ -1080,7 +1103,7 @@ export async function runExtraction(llm: LlmRuntime, request: ExtractionRequest)
   if (bound.drafts.length === 0) {
     return { kind: 'none', reason: 'unsupported-evidence', route, ...usage === undefined ? {} : { usage } }
   }
-  return { kind: 'memories', drafts: timed, loops: parsed.loops, summary: parsed.summary, dropped: parsed.dropped, unsupported: bound.unsupported, ...bound.dropped.length === 0 ? {} : { droppedEvidence: bound.dropped }, route, ...usage === undefined ? {} : { usage } }
+  return { kind: 'memories', drafts: timed, loops: parsed.loops, ...parsed.closedLoops.length === 0 ? {} : { closedLoops: parsed.closedLoops }, summary: parsed.summary, dropped: parsed.dropped, unsupported: bound.unsupported, ...bound.dropped.length === 0 ? {} : { droppedEvidence: bound.dropped }, route, ...usage === undefined ? {} : { usage } }
 }
 
 /**

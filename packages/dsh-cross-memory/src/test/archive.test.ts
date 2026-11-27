@@ -200,3 +200,23 @@ test('a near-duplicate rewrite that keeps everything still supersedes', async (t
   assert.ok(!live.some((entry) => entry.id === older.entry.id), 'the predecessor is retired')
   assert.deepEqual((await store.listArchived('global', undefined)).map((entry) => entry.id), [older.entry.id])
 })
+
+test('an auto-extracted near-duplicate that drops material skips creating a second copy', async (t) => {
+  const { store, dir } = await tempStore()
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  store.similarityLimit = () => 0.7
+  const older = await store.upsert({
+    scope: 'global', title: 'Push rule public repositories private',
+    body: 'public repositories push directly; private repositories ask first.',
+    tags: ['git', 'push'],
+  }, undefined, 'tool', 1)
+  const dup = await store.upsert({
+    scope: 'global', title: 'Push rule public repositories',
+    body: 'public repositories push directly; private repositories ask first.',
+    tags: ['git'],
+  }, undefined, 'auto', 2)
+  assert.equal(dup.action, 'updated')
+  assert.equal(dup.entry.id, older.entry.id)
+  const live = await store.list('global', undefined, { fresh: true })
+  assert.equal(live.length, 1, 'no redundant second file is written for weaker auto duplicates')
+})
