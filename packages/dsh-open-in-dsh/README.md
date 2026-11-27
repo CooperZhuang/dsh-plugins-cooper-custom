@@ -45,6 +45,7 @@ pwsh -File "$env:USERPROFILE\.dsh\profiles\<profile>\node_modules\dsh-open-in-ds
 - `-Action status`：只查看当前注册与解析结果；`-Action uninstall`：移除。
 - 不带 `-Port` / `-App` 就是自动：桌面版只把「每次点击时现场发现端口」这件事写进动词（存的是 `0`），并记住应用路径；没有桌面版时退回 `dsh web`（3080）+ 浏览器 URL。也可以显式钉住：`-Port 3080 -App <exe 路径>`。
 - 写入两个 HKCU 动词：`Directory\shell\DSHOpen`（右键文件夹）与 `Directory\Background\shell\DSHOpen`（右键文件夹空白处）。
+- **Windows 11 26H2（build 26200/26300，KB5127936 起）**：新版资源管理器右键菜单把第三方入口统一收进「应用扩展」子菜单，且只收录打包的 `IExplorerCommand` 扩展；传统注册表动词不再出现在新菜单里。DSH 这条动词仍在，只是要走经典菜单——**Shift+右键**，或在 设置 → 个性化 → 上下文菜单 → 其他选项 打开「显示更多选项」让右键默认走经典菜单。要直接进「应用扩展」得做 MSIX/sparse package，不在本插件范围内。
 - 装完重启一次资源管理器：Explorer 按进程缓存右键菜单，不重启看不到新条目。
 
 **macOS**

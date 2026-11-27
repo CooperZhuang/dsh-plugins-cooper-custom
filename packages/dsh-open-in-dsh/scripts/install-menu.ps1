@@ -15,11 +15,17 @@
   HKCU, not HKLM: nothing here needs elevation, and a per-user verb is the
   right blast radius for a personal tool.
 
-  Windows 11: measured on build 26200, a classic verb registered this way does
-  appear in the trimmed top-level menu (next to PowerShell 7 and VS Code), not
-  only under "显示更多选项". No MSIX sparse package or `IExplorerCommand` is
-  needed for this machine's build. Explorer caches context menus per process,
-  so restart the shell once after installing.
+  Windows 11 26H2 (build 26200/26300 with KB5127936, 2026-10-28) redesigned
+  the Explorer context menu. A plain right-click now shows a compact menu whose
+  only third-party slot is the "应用扩展" submenu, and that submenu lists
+  packaged IExplorerCommand extensions only. A classic `Directory\shell` verb
+  like this one is therefore NOT shown there; it stays reachable from the
+  classic menu -- Shift+right-click, or right-click then 显示更多选项 after
+  enabling it in 设置 -> 个性化 -> 上下文菜单 -> 其他选项. Surfacing in the new
+  menu would need an MSIX/sparse package implementing IExplorerCommand, which
+  is out of scope for this script.
+  Explorer caches context menus per process, so restart the shell once after
+  installing.
 
 .PARAMETER Action
   install, uninstall, or status.
@@ -222,5 +228,7 @@ if ($verbApp -ne '') {
 }
 if (Test-Path -LiteralPath $iconPath) { Write-Output "  icon:        $iconPath" }
 Write-Output ''
-Write-Output 'Windows 11: restart Explorer (or sign out and back in) once so the'
-Write-Output 'shell rebuilds its context-menu cache, then right-click any folder.'
+Write-Output 'Windows 11 26H2+: the compact menu keeps classic verbs out of the top'
+Write-Output 'level. Use Shift+right-click, or enable 设置 -> 个性化 -> 上下文菜单 ->'
+Write-Output '其他选项 -> 显示更多选项 to make right-click open the classic menu.'
+Write-Output 'Restart Explorer once so the shell rebuilds its context-menu cache.'
