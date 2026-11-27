@@ -669,6 +669,9 @@ export class MemorySync {
     // cycle cheaply and let the next timer retry once the writes settle; the
     // --autostash shortcut is not used because a concurrent edit to a file the
     // upstream commit also rewrites would resurface as conflict markers.
+    // A "commit then retry once" variant was tried on 2026-11-27 and reverted: a
+    // local edit that conflicts with the upstream commit turns the retry into a
+    // live rebase, which is exactly the state this branch exists to avoid.
     if (!this.rebaseInProgress()) {
       this.options.log.warn('dsh-cross-memory: 记忆库 rebase 没能启动（工作区仍有未提交改动），本轮跳过同步')
       return { ...nothing, pulled: 0, stoppedBy: 'rebase-not-started' }

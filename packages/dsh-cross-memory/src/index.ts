@@ -85,6 +85,17 @@ export const name = 'memories'
 const EXIT_FLUSH_TIMEOUT_MS = 8_000
 
 /**
+ * Let the host event loop breathe between two bounded slices of background work.
+ *
+ * The periodic pass walks every open session and the whole store on the main
+ * thread; measured on 29 live sessions, one uninterrupted walk held the loop for
+ * 5.6-8.3 s every 30 minutes (the host reported `Host event loop stalled` each
+ * time). Yielding between slices keeps the same work but caps one slice at a few
+ * milliseconds, so an interactive turn is never parked behind the pass.
+ */
+const yieldToEventLoop = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
+
+/**
  * How often a periodic pass that changed nothing still reports at info level.
  *
  * An hour: often enough that a stall is visible within one working session, rare
@@ -2301,7 +2312,8 @@ export class MemoriesRuntime {
     const limit = this.settings.maxSessionsPerPass
     const ordered = [...candidates.values()].sort((left, right) => this.activityOf(right) - this.activityOf(left))
     let mined = 0
-    for (const agent of ordered) {
+    for (const [index, agent] of ordered.entries()) {
+      if (index > 0 && index % 4 === 0) await yieldToEventLoop()
       if (this.lifecycle.signal.aborted) return
       counts.tracked += 1
       const session = agent.session
@@ -2653,6 +2665,14 @@ export class MemoriesRuntime {
    */
   private hasNothingNew(session: Session): boolean {
     const after = this.state.getSession(session.id)?.lastSeq ?? 0
+    // Cheap gate before the window walk. A live process keeps every settled
+    // session in `candidates`, and on a caught-up session the walk still pays a
+    // full pass over the surface graph for nothing. The surface nodes are kept
+    // in seq order, so a last node at or below the watermark means no message
+    // can be newer than it — no window can exist, and no string is built.
+    const nodes = session.surface.nodes
+    const newest = nodes[nodes.length - 1]
+    if (newest !== undefined && newest <= after) return true
     const window = collectWindow(session, after, this.settings.extractWindowMessages, this.settings.extractMaxInputChars)
     return window.lastSeq === undefined || window.text.trim().length === 0
   }
@@ -2680,7 +2700,7 @@ export class MemoriesRuntime {
 
   /** Bound `beforeExit` handler. */
   private readonly exitFlush = (): void => {
-    void this.flushExit().catch(() => undefined)
+    Promise.resolve(this.flushExit()).catch(() => undefined)
   }
 
   /**
@@ -3158,7 +3178,18 @@ export class MemoriesRuntime {
         this.consolidateSkip = `only ${entries.length} memories are eligible for a pass`
         return undefined
       }
-      const proposed = await this.runConsolidationPass(parent, entries, root)
+      const proposedRaw = await this.runConsolidationPass(parent, entries, root)
+      // Two routes feed this plan (the subagent seam and the direct model call),
+      // and a malformed element in any array reaches `item.id` in the classifier
+      // as a TypeError whose message names no field. Drop holes here, once, so a
+      // bad reply costs one skipped row instead of the whole pass.
+      const proposed = proposedRaw === undefined ? undefined : {
+        ...proposedRaw,
+        upserts: proposedRaw.upserts.filter((item) => item !== null && item !== undefined),
+        ...proposedRaw.conflicts === undefined ? {} : {
+          conflicts: proposedRaw.conflicts.filter((conflict) => conflict !== null && conflict !== undefined),
+        },
+      }
       if (proposed === undefined) {
         this.state.deleteJob(CONSOLIDATE_JOB)
         // `onSkip` records the concrete reason; this is the fallback for a
@@ -3274,6 +3305,12 @@ export class MemoriesRuntime {
       })
       this.noteLimitRefusal(error)
       this.log.warn('dsh-cross-memory: consolidation failed for session %s: %s', parent.session.id, message)
+      // The failure is a plain TypeError from a field access, and its message
+      // alone ("reading 'id'") names no call site. Record the stack once at
+      // decision level so the next occurrence is locatable without a rebuild.
+      if (error instanceof Error && typeof error.stack === 'string' && error.stack.length > 0) {
+        this.log.decision('dsh-cross-memory: consolidation failure stack: %s', error.stack)
+      }
       // The command reports `consolidateSkipReason`; without this the failure
       // surfaced as "Nothing to consolidate: unknown reason".
       this.consolidateSkip = `the pass failed: ${message}`
@@ -3806,6 +3843,10 @@ export class MemoriesRuntime {
       }
       scopes += 1
       archived += await this.retain('project', descriptor.root, now)
+      // The sweep walks every known workspace on the main thread; on a store
+      // with 40 scopes that is one long tick. Yield between scopes so the pass
+      // never holds the loop beyond a slice.
+      if (scopes % 4 === 0) await yieldToEventLoop()
     }
     const rehomed = await this.store.adoptMisnamedProjects().catch(() => [])
     for (const move of rehomed) {
@@ -4037,9 +4078,12 @@ export class MemoriesRuntime {
       now,
     })
     let archived = 0
+    let examined = 0
     for (const decision of expired) {
       this.log.decision('dsh-cross-memory: archiving %s/%s, unused for %d days', decision.scope, decision.id, Math.round(decision.ageDays))
       if (await this.store.archive(scope, root, decision.id, now, 'retention')) archived += 1
+      examined += 1
+      if (examined % 25 === 0) await yieldToEventLoop()
     }
     return archived
   }
@@ -4656,7 +4700,11 @@ export function apply(ctx: Context, config: MemoriesConfig = {}): void {
     runtime.cancelExtraction(agent)
     // A short-lived process may exit before the idle timer ever fires; the
     // disposal boundary is the last moment an extraction can still run.
-    void runtime.flushExit().catch(() => undefined)
+    // `flushExit` is declared async, but the registry wraps every listener and
+    // reports anything it throws as "agent/disposed listener threw". Normalise
+    // the return value first: a `.catch` on a non-promise is exactly the failure
+    // the host logged in 2026-11-22..26, and disposal must never be the raiser.
+    Promise.resolve(runtime.flushExit()).catch(() => undefined)
   })
 
   // 0.1.7-rc.1 起宿主把 `agent/session-start` 改名为 `agent/created`（公告见 v0.1.7-rc.1
