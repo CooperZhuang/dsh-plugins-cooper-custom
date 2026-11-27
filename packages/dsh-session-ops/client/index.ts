@@ -332,6 +332,22 @@
           listeners.delete(listener)
         }
       },
+      /**
+       * 在系统文件管理器里打开该会话日志所在目录。
+       *
+       * 只把 sessionId 交给 Host（目录由 Host 从 stat 结果推导），浏览器拿不到任意
+       * 路径的打开能力；失败时返回结构化原因，交给按钮显示一句话。
+       * @param sessionId - 会话 id。
+       * @returns `{ok:true, dir}` 或 `{ok:false, reason, message?}`（请求本身失败也算结果）。
+       */
+      async openDir(sessionId) {
+        try {
+          const result = await api.call('openDir', { sessionId })
+          return typeof result === 'object' && result !== null ? result : { ok: false, reason: 'unknown' }
+        } catch (error) {
+          return { ok: false, reason: 'request-failed', message: String(error?.message ?? error) }
+        }
+      },
       /** 取消某条会话的在途请求（section 卸载时用：没人等这个结果了）。 */
       abort(sessionId) {
         const controller = controllers.get(sessionId)
@@ -370,6 +386,24 @@
     return '没有可显示的日志信息'
   }
 
+  /** 「打开目录」失败时的界面文案。 */
+  function describeOpenFailure(reason) {
+    if (reason === 'not-found') return '这条会话已不在磁盘上'
+    if (reason === 'persistence-unavailable') return '宿主未暴露会话持久化 stat'
+    if (reason === 'read-failed') return '读取会话失败'
+    if (reason === 'no-directory') return '这条会话还没有落盘文件'
+    if (reason === 'open-failed') return '系统没能打开目录'
+    if (reason === 'request-failed') return '请求失败'
+    return '打开失败'
+  }
+
+  /** 从文件路径取目录（浏览器里没有 node:path，只做最小处理）。 */
+  function dirOfFile(path) {
+    const text = String(path)
+    const index = Math.max(text.lastIndexOf('/'), text.lastIndexOf('\\'))
+    return index > 0 ? text.slice(0, index) : text
+  }
+
   /**
    * 「会话日志」section：只读展示本会话的落盘工件。
    *
@@ -402,10 +436,27 @@
       }, [sessionId])
 
       const entry = health.entryOf(sessionId)
-      const refreshButton = h(
+      const [openState, setOpenState] = React.useState({ kind: 'idle', message: '' })
+      // 失败/读取中只给「重试」；有数据时给「打开目录」——刷新按钮对只读面板没有意义。
+      const retryButton = h(
         'button',
         { type: 'button', style: S.button, onClick: () => void health.refresh(sessionId) },
-        '刷新',
+        '重试',
+      )
+      const openButton = h(
+        'button',
+        {
+          type: 'button',
+          style: S.button,
+          onClick: () => {
+            setOpenState({ kind: 'opening', message: '' })
+            void health.openDir(sessionId).then((result) => {
+              if (result?.ok === true) setOpenState({ kind: 'opened', message: '已在文件管理器中打开' })
+              else setOpenState({ kind: 'error', message: describeOpenFailure(result?.reason) })
+            })
+          },
+        },
+        '打开目录',
       )
 
       if (entry === undefined || entry.state === 'error') {
@@ -417,13 +468,13 @@
             { style: entry === undefined ? S.muted : S.error },
             entry === undefined ? '读取中…' : `读取失败：${entry.message}`,
           ),
-          entry === undefined ? null : refreshButton,
+          entry === undefined ? null : retryButton,
         )
       }
 
       const value = entry.value
       if (value === undefined || value?.found !== true) {
-        return h('div', { style: S.log }, h('div', { style: S.muted }, describeMissingLog(entry)), refreshButton)
+        return h('div', { style: S.log }, h('div', { style: S.muted }, describeMissingLog(entry)), retryButton)
       }
 
       const badges = [
@@ -446,13 +497,21 @@
       if (value.resident === true) badges.push(h('span', { key: 'resident', style: S.badge }, '驻留'))
       if (entry.state === 'loading') badges.push(h('span', { key: 'loading', style: S.muted }, '刷新中…'))
 
+      // 界面上直接给「目录」而不是长文件路径：一键打开的就是这个目录。
+      const dir = typeof value.dir === 'string' ? value.dir : value.path === null ? null : dirOfFile(value.path)
+      const feedback =
+        openState?.kind === 'opened' || openState?.kind === 'error'
+          ? h('div', { style: openState.kind === 'error' ? S.error : S.muted }, openState.message)
+          : null
+
       return h(
         'div',
         { style: S.log },
-        h('div', { style: S.logRow }, badges, h('span', { style: S.logRefresh }, refreshButton)),
-        value.path === null
+        h('div', { style: S.logRow }, badges, h('span', { style: S.logRefresh }, openButton)),
+        dir === null
           ? null
-          : h('div', { style: dense ? { ...S.logPath, ...S.logPathDense } : S.logPath, title: value.path }, value.path),
+          : h('div', { style: dense ? { ...S.logPath, ...S.logPathDense } : S.logPath, title: value.path ?? undefined }, dir),
+        feedback,
       )
     }
   }

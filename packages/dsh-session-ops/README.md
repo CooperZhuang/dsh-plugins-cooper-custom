@@ -53,14 +53,20 @@ shows the current Session's durable artifact:
 
 - size, compression format (`zstd` / uncompressed), header format classification (current /
   migration-required);
-- the log file's absolute path;
+- the log file's **directory** (the full file path is in the row's tooltip);
 - whether the Session is resident in the Host process and mid-turn, plus its workspace.
+
+The section also carries an **打开目录** button: one click opens that directory in the OS file
+manager (Finder / Explorer / xdg-open). It sends only the Session id to
+`/session-admin/api/openDir`; the Host derives the directory from its own
+`sessionPersistence.stat(sessionId)` result, so the browser never gets a generic
+"open any folder" capability. A failed open is reported inline instead of throwing.
 
 The data comes from one read-only `sessionPersistence.stat(sessionId)` call
 (`/session-admin/api/health`). The route **never decompresses or reads the event log** and never
-enumerates all sessions; the section offers a manual refresh only, and deeper checks such as
-frame-level verification are out of scope. It renders a placeholder while loading so the panel
-never hides the section title for lack of content, and lowers its density when shown as an overlay.
+enumerates all sessions; deeper checks such as frame-level verification are out of scope. It
+renders a placeholder while loading so the panel never hides the section title for lack of
+content, and lowers its density when shown as an overlay.
 
 On 0.2.1 hosts the slot is not declared: the registration stays pending without an error, and the
 tabs, header icon, context menu, model tools and both HTTP prefixes keep working.

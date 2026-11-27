@@ -20,7 +20,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 import zlib from 'node:zlib'
 
-import { apply } from '../lib/index.js'
+import { __setDirOpenerForTests, apply } from '../lib/index.js'
 
 /** 会话日志第一行（头部）。 */
 function headerLine(id, cwd) {
@@ -166,6 +166,17 @@ async function mount(options = {}) {
     tools,
     close: () => new Promise((resolve) => server.close(resolve)),
   }
+}
+
+
+/** 调任意一个 `/session-admin/api/<method>`（`openDir` 等用）。 */
+async function callApi(base, method, payload) {
+  const response = await fetch(`${base}/session-admin/api/${method}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  return { status: response.status, body: await response.json() }
 }
 
 /** 调一次 `health`。 */
@@ -366,6 +377,93 @@ test('health：非法 id（空串 / 路径分隔符 / 非字符串）一律 400 
         assert.match(body.error.message, /sessionId/)
       }
     } finally {
+      await mounted.close()
+    }
+  })
+})
+
+
+/** 给任意 id 返回同一条真实日志快照（openDir 用例用）。 */
+function snapshotFor(logPath) {
+  return (id) => ({
+    header: { id, cwd: '/tmp/work' },
+    revision: 'rev-1',
+    sizeBytes: statSync(logPath).size,
+    formatStatus: 'current',
+    location: { kind: 'jsonl', path: logPath },
+  })
+}
+
+// ── openDir：会话日志目录的一键打开（2026-11-27） ─────────────────────────────
+//
+// 面板上的「打开目录」只把 sessionId 交给 Host，目录由 Host 从 stat 结果推导——
+// 浏览器拿不到任意路径的打开能力。这里用假 opener 记录实际传入的目录。
+
+test('openDir：返回日志目录并调用系统打开动作', async () => {
+  await inSandbox(async ({ home }) => {
+    const logPath = writeSession(home, 'session-open-dir')
+    const persistence = fakePersistence({ logPath, stat: snapshotFor(logPath) })
+    const mounted = await mount({ persistence })
+    const opened = []
+    __setDirOpenerForTests(async (dir) => {
+      opened.push(dir)
+    })
+    try {
+      const { status, body } = await callApi(mounted.base, 'openDir', { sessionId: 'session-open-dir' })
+      assert.equal(status, 200)
+      assert.equal(body.ok, true)
+      assert.equal(body.value.ok, true)
+      const expected = join(home, 'sessions', '--proj--', 'session-open-dir')
+      assert.equal(body.value.dir, expected)
+      assert.deepEqual(opened, [expected])
+    } finally {
+      __setDirOpenerForTests(undefined)
+      await mounted.close()
+    }
+  })
+})
+
+test('openDir：会话不存在时不动系统打开动作', async () => {
+  await inSandbox(async () => {
+    const persistence = fakePersistence()
+    const mounted = await mount({ persistence })
+    const opened = []
+    __setDirOpenerForTests(async (dir) => {
+      opened.push(dir)
+    })
+    try {
+      const { status, body } = await callApi(mounted.base, 'openDir', { sessionId: 'session-missing' })
+      assert.equal(status, 200)
+      assert.equal(body.ok, true, '不可用/不存在是结构化结果，不是路由错误')
+      assert.equal(body.value.ok, false)
+      assert.equal(body.value.reason, 'not-found')
+      assert.deepEqual(opened, [])
+    } finally {
+      __setDirOpenerForTests(undefined)
+      await mounted.close()
+    }
+  })
+})
+
+test('openDir：非法 id 400；系统打开失败收敛成 open-failed', async () => {
+  await inSandbox(async ({ home }) => {
+    const logPath = writeSession(home, 'session-open-dir')
+    const persistence = fakePersistence({ logPath, stat: snapshotFor(logPath) })
+    const mounted = await mount({ persistence })
+    try {
+      const bad = await callApi(mounted.base, 'openDir', { sessionId: '../escape' })
+      assert.equal(bad.status, 400)
+
+      __setDirOpenerForTests(async () => {
+        throw new Error('open command exploded')
+      })
+      const failed = await callApi(mounted.base, 'openDir', { sessionId: 'session-open-dir' })
+      assert.equal(failed.status, 200)
+      assert.equal(failed.body.value.ok, false)
+      assert.equal(failed.body.value.reason, 'open-failed')
+      assert.match(failed.body.value.message, /exploded/)
+    } finally {
+      __setDirOpenerForTests(undefined)
       await mounted.close()
     }
   })

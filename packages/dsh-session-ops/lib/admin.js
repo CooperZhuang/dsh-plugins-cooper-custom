@@ -30,9 +30,10 @@
  *
  * @module dsh-session-ops/admin
  */
+import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve, sep } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { readSessionHeader } from './store/frames.js';
 import { dshHome } from './store/host.js';
 import { createApiHandler } from './store/http.js';
@@ -597,6 +598,7 @@ export async function sessionHealth(sessionId, source, holds) {
         id,
         found: false,
         path: null,
+        dir: null,
         sizeBytes: null,
         compression: compressionOf(source),
         formatStatus: null,
@@ -622,15 +624,75 @@ export async function sessionHealth(sessionId, source, holds) {
     }
     if (snapshot === undefined || snapshot === null)
         return { ...base, reason: 'not-found' };
+    const path = typeof snapshot.location?.path === 'string' ? snapshot.location.path : null;
     return {
         ...base,
         found: true,
-        path: typeof snapshot.location?.path === 'string' ? snapshot.location.path : null,
+        path,
+        dir: path === null ? null : dirname(path),
         sizeBytes: typeof snapshot.sizeBytes === 'number' && Number.isFinite(snapshot.sizeBytes)
             ? snapshot.sizeBytes
             : null,
         formatStatus: typeof snapshot.formatStatus === 'string' ? snapshot.formatStatus : null,
     };
+}
+/**
+ * 用系统文件管理器打开目录：macOS `open`、Windows `explorer`、其余 `xdg-open`。
+ *
+ * `detached + unref` 让子进程脱离 Host 的生命周期——面板点一下不该在 Host 里留下
+ * 一个常驻子进程；只等 `spawn` 事件确认命令确实起来，不等它退出。
+ * @returns 打开动作。
+ */
+export function systemDirOpener() {
+    const command = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'explorer' : 'xdg-open';
+    return (dir) => new Promise((resolveOpen, rejectOpen) => {
+        let child;
+        try {
+            child = spawn(command, [dir], { detached: true, stdio: 'ignore' });
+        }
+        catch (error) {
+            rejectOpen(error);
+            return;
+        }
+        child.once('error', (error) => rejectOpen(error));
+        child.once('spawn', () => {
+            child.unref();
+            resolveOpen();
+        });
+    });
+}
+/** 当前生效的打开动作；测试通过 {@link __setDirOpenerForTests} 替换。 */
+let dirOpener = systemDirOpener();
+/**
+ * 仅供测试：替换/还原 {@link openSessionDir} 使用的系统打开动作。
+ * @param opener - 假的打开动作；传 undefined 还原为真实实现。
+ */
+export function __setDirOpenerForTests(opener) {
+    dirOpener = opener ?? systemDirOpener();
+}
+/**
+ * 在系统文件管理器里打开一条会话的日志目录。
+ *
+ * 目录由 Host 从 `sessionPersistence.stat()` 的结果推导，**浏览器不能传任意路径**——
+ * 这个动作只可能打开本机会话日志所在目录，不构成通用的「打开任意文件夹」接口。
+ * @param sessionId - 请求里的会话 id（会先校验，非法时抛给路由层转 400）。
+ * @param source - 持久化后端与归属查询。
+ * @param holds - `{resident, running}`。
+ * @returns 结构化结果（`ok` + `dir` / 失败原因）。
+ */
+export async function openSessionDir(sessionId, source, holds) {
+    const health = await sessionHealth(sessionId, source, holds);
+    if (health.found !== true)
+        return { ok: false, reason: health.reason ?? 'not-found' };
+    if (health.dir === null)
+        return { ok: false, reason: 'no-directory' };
+    try {
+        await dirOpener(health.dir);
+    }
+    catch (error) {
+        return { ok: false, reason: 'open-failed', message: messageOf(error), dir: health.dir };
+    }
+    return { ok: true, dir: health.dir };
 }
 /** `GET` 与 `POST` 共用的方法表。 */
 function buildApi(admin, config, log, holds, health) {
@@ -660,6 +722,14 @@ function buildApi(admin, config, log, holds, health) {
          */
         async health(payload) {
             return sessionHealth(payload?.sessionId, health, holds);
+        },
+        /**
+         * 在系统文件管理器里打开一条会话的日志目录（会话面板「会话日志」的按钮）。
+         *
+         * 只按 sessionId 打开本机已知的会话目录，不接受任意路径；非法 id 走 400。
+         */
+        async openDir(payload) {
+            return openSessionDir(payload?.sessionId, health, holds);
         },
         /**
          * 只要个数的轻量查询，供电标这类高频调用方使用。

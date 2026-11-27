@@ -530,6 +530,7 @@ test('会话面板 section：注册「会话日志」（name/id/order/label）�
   const injected = section.options.inject()
   assert.equal(typeof injected.health.load, 'function')
   assert.equal(typeof injected.health.refresh, 'function')
+  assert.equal(typeof injected.health.openDir, 'function', '按钮要能打开日志目录')
 
   // 加载中必须渲染占位：这个槽内容为空时连 section 标题都不画。
   const docked = textOf(section.component({ sessionId: 'session-x', presentation: 'docked', health: injected.health }))
@@ -637,4 +638,46 @@ test('会话日志 section 渲染：docked 显示大小/格式/压缩/路径/运
   assert.doesNotMatch(overlay, / zstd /, 'overlay 不再单列压缩格式徽章（路径里的 .zstd 不算）')
   assert.match(overlay, /运行中/)
   assert.ok(overlay.includes('/very/long/path/'), 'overlay 也要显示路径（单行省略）')
+})
+
+
+test('会话日志 section：显示目录，点「打开目录」只把 sessionId 交给 Host', async () => {
+  fetched = []
+  requests = []
+  const dir = '/very/long/path/--proj--/session-b'
+  apiReplies = {
+    health: {
+      id: 'session-b',
+      found: true,
+      path: `${dir}/session.v3.jsonl.zstd`,
+      dir,
+      sizeBytes: 1024,
+      compression: 'zstd',
+      formatStatus: 'current',
+      workspaceId: 'ws-1',
+      resident: true,
+      running: false,
+    },
+  }
+  configReply = { headerDeleteButton: false }
+  const { state } = await mount()
+  const section = sessionLogRegistration(state)
+  const health = section.options.inject().health
+  await health.load('session-b')
+
+  const tree = section.component({ sessionId: 'session-b', presentation: 'docked' })
+  const docked = textOf(tree)
+  assert.ok(docked.includes(dir), '界面显示的是目录，不是整条文件路径')
+  assert.doesNotMatch(docked, /session\.v3\.jsonl\.zstd/, '文件路径放进 title，不再占一行')
+  assert.match(docked, /打开目录/)
+  assert.doesNotMatch(docked, /刷新/, '只读面板不再有「刷新」按钮')
+
+  // 点按钮：走 Host 的 openDir，载荷只有 sessionId（路径由 Host 推导）。
+  const button = flatten(tree).find((node) => node.type === 'button' && textOf(node.children) === '打开目录')
+  assert.ok(button, '缺少「打开目录」按钮')
+  button.props.onClick()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  const opens = requests.filter((entry) => entry.method === 'openDir')
+  assert.equal(opens.length, 1)
+  assert.deepEqual(JSON.parse(opens[0].body), { sessionId: 'session-b' })
 })

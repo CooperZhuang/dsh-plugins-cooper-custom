@@ -16,7 +16,7 @@ between workspaces while keeping the registry consistent.
 
 Registers one read-only section in the conversation header's Session panel: slot `conversation.session.panel.section`, id `dsh-session-ops:session`, order 350 (after environment 0 / change-requests 100 / subagents 200 / shared-tasks 250 / background-jobs 300).
 
-  - Data plane: `/session-admin/api/health` — one `ctx.sessionPersistence.stat(sessionId)` call returns `path` / `sizeBytes` / `compression` / `formatStatus` / `workspaceId` / `resident` / `running`.
+  - Data plane: `/session-admin/api/health` — one `ctx.sessionPersistence.stat(sessionId)` call returns `path` / `dir` / `sizeBytes` / `compression` / `formatStatus` / `workspaceId` / `resident` / `running`; the panel shows the directory and carries an **open directory** button (`/session-admin/api/openDir`), which takes only the session id and lets the Host derive the path.
   - No list, no scan, no full log read (`readStoredLog` decompresses the whole frame chain); the section offers a manual refresh, and deeper checks are left for later.
   - A missing Session, a host without `stat`, or a throwing `stat` all come back as 200 + `{found:false, reason}`; an invalid id (empty string, path separators, …) is a structured 400.
   - A 0.2.1 host does not declare the slot: the registration stays pending without an error, and every other entry keeps working.

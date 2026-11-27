@@ -31,9 +31,10 @@
  * @module dsh-session-ops/admin
  */
 
+import { spawn } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve, sep } from 'node:path'
+import { dirname, join, resolve, sep } from 'node:path'
 import type { SessionHeader } from './store/frames.js'
 import { readSessionHeader } from './store/frames.js'
 import { dshHome } from './store/host.js'
@@ -774,6 +775,8 @@ export interface SessionHealth {
   found: boolean
   /** 会话日志的物理路径；后端没有实体文件（未落盘）时为 null。 */
   path: string | null
+  /** 会话日志所在目录（`dirname(path)`）；后端没有实体文件时为 null。 */
+  dir: string | null
   /** 物理文件字节数；后端给不出时为 null。 */
   sizeBytes: number | null
   /** 压缩格式（`'zstd'` / `''` 未压缩）；后端不暴露时为 null。 */
@@ -877,6 +880,7 @@ export async function sessionHealth(
     id,
     found: false,
     path: null,
+    dir: null,
     sizeBytes: null,
     compression: compressionOf(source),
     formatStatus: null,
@@ -900,16 +904,100 @@ export async function sessionHealth(
     return { ...base, reason: 'read-failed', message: messageOf(error) }
   }
   if (snapshot === undefined || snapshot === null) return { ...base, reason: 'not-found' }
+  const path = typeof snapshot.location?.path === 'string' ? snapshot.location.path : null
   return {
     ...base,
     found: true,
-    path: typeof snapshot.location?.path === 'string' ? snapshot.location.path : null,
+    path,
+    dir: path === null ? null : dirname(path),
     sizeBytes:
       typeof snapshot.sizeBytes === 'number' && Number.isFinite(snapshot.sizeBytes)
         ? snapshot.sizeBytes
         : null,
     formatStatus: typeof snapshot.formatStatus === 'string' ? snapshot.formatStatus : null,
   }
+}
+
+/** 打开一个目录的宿主动作（默认调用系统文件管理器；测试可替换）。 */
+export type DirOpener = (dir: string) => Promise<void>
+
+/**
+ * 用系统文件管理器打开目录：macOS `open`、Windows `explorer`、其余 `xdg-open`。
+ *
+ * `detached + unref` 让子进程脱离 Host 的生命周期——面板点一下不该在 Host 里留下
+ * 一个常驻子进程；只等 `spawn` 事件确认命令确实起来，不等它退出。
+ * @returns 打开动作。
+ */
+export function systemDirOpener(): DirOpener {
+  const command = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'explorer' : 'xdg-open'
+  return (dir: string) =>
+    new Promise<void>((resolveOpen, rejectOpen) => {
+      let child: ReturnType<typeof spawn>
+      try {
+        child = spawn(command, [dir], { detached: true, stdio: 'ignore' })
+      } catch (error) {
+        rejectOpen(error)
+        return
+      }
+      child.once('error', (error) => rejectOpen(error))
+      child.once('spawn', () => {
+        child.unref()
+        resolveOpen()
+      })
+    })
+}
+
+/** 当前生效的打开动作；测试通过 {@link __setDirOpenerForTests} 替换。 */
+let dirOpener: DirOpener = systemDirOpener()
+
+/**
+ * 仅供测试：替换/还原 {@link openSessionDir} 使用的系统打开动作。
+ * @param opener - 假的打开动作；传 undefined 还原为真实实现。
+ */
+export function __setDirOpenerForTests(opener: DirOpener | undefined): void {
+  dirOpener = opener ?? systemDirOpener()
+}
+
+/** `openDir` 的载荷（浏览器半边 POST `{sessionId}`）。 */
+interface OpenDirPayload {
+  sessionId?: unknown
+}
+
+/** `/session-admin/api/openDir` 的结果。 */
+export interface OpenDirResult {
+  ok: boolean
+  /** 打开（或失败时想打开）的目录。 */
+  dir?: string | null
+  /** `ok:false` 的机器可读原因。 */
+  reason?: 'not-found' | 'persistence-unavailable' | 'read-failed' | 'no-directory' | 'open-failed'
+  /** `open-failed` 时的错误正文。 */
+  message?: string
+}
+
+/**
+ * 在系统文件管理器里打开一条会话的日志目录。
+ *
+ * 目录由 Host 从 `sessionPersistence.stat()` 的结果推导，**浏览器不能传任意路径**——
+ * 这个动作只可能打开本机会话日志所在目录，不构成通用的「打开任意文件夹」接口。
+ * @param sessionId - 请求里的会话 id（会先校验，非法时抛给路由层转 400）。
+ * @param source - 持久化后端与归属查询。
+ * @param holds - `{resident, running}`。
+ * @returns 结构化结果（`ok` + `dir` / 失败原因）。
+ */
+export async function openSessionDir(
+  sessionId: unknown,
+  source: HealthSource,
+  holds: Holds,
+): Promise<OpenDirResult> {
+  const health = await sessionHealth(sessionId, source, holds)
+  if (health.found !== true) return { ok: false, reason: health.reason ?? 'not-found' }
+  if (health.dir === null) return { ok: false, reason: 'no-directory' }
+  try {
+    await dirOpener(health.dir)
+  } catch (error) {
+    return { ok: false, reason: 'open-failed', message: messageOf(error), dir: health.dir }
+  }
+  return { ok: true, dir: health.dir }
 }
 
 /** `GET` 与 `POST` 共用的方法表。 */
@@ -946,6 +1034,14 @@ function buildApi(
      */
     async health(payload: HealthPayload) {
       return sessionHealth(payload?.sessionId, health, holds)
+    },
+    /**
+     * 在系统文件管理器里打开一条会话的日志目录（会话面板「会话日志」的按钮）。
+     *
+     * 只按 sessionId 打开本机已知的会话目录，不接受任意路径；非法 id 走 400。
+     */
+    async openDir(payload: OpenDirPayload) {
+      return openSessionDir(payload?.sessionId, health, holds)
     },
     /**
      * 只要个数的轻量查询，供电标这类高频调用方使用。
